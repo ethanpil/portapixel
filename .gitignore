@@ -1,0 +1,23 @@
+# Build output
+/dist/
+/build/
+*.img
+*.img.gz
+*.exe
+/portapixeld
+/portapixel-server
+
+# Test and tool output
+*.test
+*.out
+coverage.*
+
+# Editor and OS files
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Local secrets. The minisign secret key must never enter the repository.
+*.key
+minisign.key
