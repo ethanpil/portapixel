@@ -114,6 +114,7 @@ send_user "\n==> poll http://127.0.0.1:$port/api/status\n"
 set deadline [expr {[clock seconds] + $t_api}]
 set ok 0
 set playing 0
+set heartbeat 0
 while {[clock seconds] < $deadline} {
 	if {[catch {exec curl -sS -m 5 "http://127.0.0.1:$port/api/status"} out] == 0} {
 		if {[string match {*device_id*} $out] || [string match "*\{*" $out]} {
@@ -123,16 +124,27 @@ while {[clock seconds] < $deadline} {
 			# daemon says that the cage session runs, because "the API answers"
 			# alone passed on a device with a black screen.
 			if {[string match {*"browser_state":"running"*} $out]} {
-				send_user "==> browser_state is running\n"
+				if {$playing == 0} { send_user "==> browser_state is running\n" }
 				set playing 1
-				break
 			}
+			# The player sends its codec report with its FIRST heartbeat (D12),
+			# so "codecs" in the status proves that a heartbeat arrived. A
+			# browser process that loads no player is a black screen with a
+			# green status (plan section 17 item 4).
+			if {[string match {*"codecs":*} $out]} {
+				if {$heartbeat == 0} { send_user "==> one heartbeat is recorded\n" }
+				set heartbeat 1
+			}
+			if {$playing == 1 && $heartbeat == 1} { break }
 		}
 	}
 	after 3000
 }
 if {$ok == 1 && $playing == 0} {
 	send_user "\n==> the browser never reached the running state:\n    $out\n"
+}
+if {$ok == 1 && $heartbeat == 0} {
+	send_user "\n==> no heartbeat of the player reached the daemon:\n    $out\n"
 }
 
 # ---------------------------------------------------------- 5. the browser check
@@ -177,5 +189,11 @@ if {$playing == 0} {
  A browser process alone is not a picture: cage can start and then stop, or
  Chromium can hold a black window. Read the ops log on the guest."
 }
-send_user "\nPASS: the image boots, /api/status answers, the browser runs\n"
+if {$heartbeat == 0} {
+	die "the player sent no heartbeat in ${t_api}s.
+ The browser runs and the player does not report, so the page did not load or
+ its JavaScript stopped. One syntax error in player.js gave a black screen with
+ a green status before (CONTEXT.md section 4)."
+}
+send_user "\nPASS: the image boots, /api/status answers, the browser runs, the player reports\n"
 exit 0
