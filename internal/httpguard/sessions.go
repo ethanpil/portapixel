@@ -1,11 +1,11 @@
 package httpguard
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/rnd"
 )
 
 // CookieName is the name of the session cookie.
@@ -185,9 +185,9 @@ func (s *Sessions) cookieIsOld(token string) bool {
 	return true
 }
 
-// randomToken makes a 32-byte token as hex. rand.Read cannot fail.
-func randomToken() string {
-	var b [32]byte
-	rand.Read(b[:])
-	return hex.EncodeToString(b[:])
-}
+// TokenBytes is the length of a session token before it becomes hexadecimal.
+const TokenBytes = 32
+
+// randomToken makes a session token. rnd.Hex owns the failure rule for every
+// secret of this repository.
+func randomToken() string { return rnd.Hex(TokenBytes) }
