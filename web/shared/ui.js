@@ -262,7 +262,9 @@ let modalOpen = null;
     actions: [{label, value, kind, autofocus}] — kind maps to a button class.
     onOpen(dialog, buttons): runs once the dialog is in the page. */
 export function modal({ title, body, actions, wide, onOpen } = {}) {
-  if (modalOpen) modalOpen();           // one dialog at a time
+  // One dialog at a time. The dialog that goes away answers null, or the caller
+  // that opened it would wait for an answer that never comes.
+  if (modalOpen) modalOpen(null);
   const acts = actions && actions.length ? actions : [{ label: 'Close', value: null }];
   const lastFocus = document.activeElement;
 
@@ -300,16 +302,13 @@ export function modal({ title, body, actions, wide, onOpen } = {}) {
     }
 
     function done(value) {
-      if (modalOpen !== close) return;
-      close();
-      resolve(value);
-    }
-    function close() {
+      if (modalOpen !== done) return;   // this dialog is not the live one any more
       modalOpen = null;
       overlay.remove();
       if (lastFocus && lastFocus.focus) lastFocus.focus();
+      resolve(value);
     }
-    modalOpen = close;
+    modalOpen = done;
 
     document.body.append(overlay);
     if (onOpen) onOpen(dialog, btns);

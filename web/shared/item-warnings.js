@@ -36,9 +36,12 @@ const CODECS = {
 
 const SIZES = { 1080: [1920, 1080], 2160: [3840, 2160] };
 
+/* The extensions that the player knows. Keep this set the same as imageExt and
+   videoExt in internal/playlist/kind.go: a file that Go calls unknown is a file
+   that the player skips, and this module must say so. */
 const KNOWN_EXT = new Set([
   'jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp', 'svg',
-  'mp4', 'm4v', 'mov', 'webm', 'mkv',
+  'mp4', 'm4v', 'mov', 'webm', 'mkv', 'ogv',
 ]);
 
 /** Find out what a machine decodes.
@@ -117,9 +120,11 @@ function nameOf(item) {
   return String(item.name || item.file || item.url || '');
 }
 
+/* The extension, with no length limit. Go takes everything after the last full
+   stop, so a bound here would call a file good that the player skips. */
 function extOf(item) {
   const n = nameOf(item).split(/[?#]/)[0];
-  const m = /\.([A-Za-z0-9]{1,5})$/.exec(n);
+  const m = /\.([A-Za-z0-9]+)$/.exec(n);
   return m ? m[1].toLowerCase() : '';
 }
 
@@ -175,9 +180,11 @@ export function warningsFor(item, caps, tier, opts = {}) {
     }
   }
 
-  if (kind !== 'url') {
+  if (kind !== 'url' && nameOf(item)) {
     const ext = extOf(item);
-    if (ext && !KNOWN_EXT.has(ext)) {
+    if (!ext) {
+      out.push('This file has no extension, so PortaPixel cannot tell what it holds and skips it.');
+    } else if (!KNOWN_EXT.has(ext)) {
       out.push(`PortaPixel does not know the .${ext} format, so this item gets skipped.`);
     }
   }

@@ -10,7 +10,7 @@
                refresh_seconds, thumb}]}
 */
 
-import { h, fill, icon, toast, modal, confirmDialog, fmtDuration, fmtBytes, banner } from './ui.js';
+import { h, fill, icon, toast, modal, confirmDialog, fmtDuration, fmtBytes, banner, progress } from './ui.js';
 import { warningsFor } from './item-warnings.js';
 
 const TRANSITIONS = [
@@ -311,9 +311,13 @@ export function mountPlaylistEditor(el, opts = {}) {
     pl.items.splice(to, 0, it);
     touch();
     render();
-    // Keep the keyboard on the button the user just pressed.
+    // Keep the keyboard on the item that moved. At the first row and at the last
+    // row the button that made the move is now disabled, so take the other one
+    // of the pair; without this the focus falls to the body.
     const rows = itemsSlot.querySelectorAll('.pp-pe__item');
-    const btn = rows[to] && rows[to].querySelector(`.pp-pe__move .pp-btn--icon:nth-child(${to > from ? 2 : 1})`);
+    const moves = rows[to] ? rows[to].querySelectorAll('.pp-pe__move .pp-btn--icon') : [];
+    const wanted = to > from ? 1 : 0;
+    const btn = moves[wanted] && !moves[wanted].disabled ? moves[wanted] : moves[wanted ? 0 : 1];
     if (btn && !btn.disabled) btn.focus();
   }
 
@@ -385,13 +389,16 @@ export function mountPlaylistEditor(el, opts = {}) {
   async function uploadFiles(files) {
     if (!uploader || files.length === 0) return;
     for (const file of files) {
-      const bar = h('div', { class: 'pp-progress__bar' });
+      // progress() starts the bar at zero and carries the aria values. A bar
+      // built by hand here has no width, which the stylesheet shows as full.
+      const bar = progress(0);
+      bar.style.setProperty('margin-top', '6px');
       const line = h('div', { class: 'pp-pe__sub' },
         h('div', { class: 'pp-pe__note', text: `Uploading ${file.name} — ${fmtBytes(file.size)}` }),
-        h('div', { class: 'pp-progress', style: { 'margin-top': '6px' } }, bar));
+        bar);
       itemsSlot.append(line);
       try {
-        const added = await uploader(file, (frac) => { bar.style.width = `${Math.round(frac * 100)}%`; });
+        const added = await uploader(file, (frac) => bar.set(frac));
         line.remove();
         // An uploader that gives nothing back has put the file in the playlist
         // folder under its own name.
@@ -460,6 +467,12 @@ export function mountPlaylistEditor(el, opts = {}) {
     if (!ok) return;
     const addr = urlIn.value.trim();
     if (!addr) { toast('That needs an address', 'danger'); return; }
+    // The same rule as internal/playlist. Without it one typed address makes
+    // every later save of this playlist fail.
+    if (!/^https?:\/\//.test(addr)) {
+      toast('The address must start with http:// or https://', 'danger');
+      return;
+    }
     addItems([{
       url: addr, kind: 'url', name: addr.replace(/^https?:\/\//, ''),
       duration: parseInt(dwellIn.value, 10) || null,
@@ -580,8 +593,11 @@ function normalizeItem(raw) {
   return it;
 }
 
+/* Keep this list the same as videoExt in internal/playlist/kind.go. A file that
+   Go calls a video and this function calls an image loses its mute flag at the
+   next save. */
 function guessKind(name) {
-  return /\.(mp4|m4v|mov|webm|mkv)$/i.test(name) ? 'video' : 'image';
+  return /\.(mp4|m4v|mov|webm|mkv|ogv)$/i.test(name) ? 'video' : 'image';
 }
 
 function label(item) { return item.name || item.file || item.url || 'item'; }
