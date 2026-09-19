@@ -1,0 +1,98 @@
+# lint.yml -- the cheap gate. It runs on every push and every pull request, and
+# build.yml calls it as the first job of a release.
+#
+# Third-party actions are pinned to a full commit SHA with the tag in a comment.
+# A tag can move to other code; a commit SHA cannot. Change the SHA and the
+# comment together.
+name: lint
+
+on:
+  push:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  # What this job proves: every shipped shell script passes shellcheck AND parses
+  # with the shell of the device. The Alpine container gives the real busybox ash
+  # and the real Alpine Go, so a script that only works in bash fails here and not
+  # on a device.
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: scripts/ci-lint.sh in an Alpine 3.23 container
+        run: |
+          docker run --rm -v "$PWD:/repo" -w /repo alpine:3.23 sh -c '
+            set -eu
+            apk add --no-cache shellcheck go >/dev/null
+            sh scripts/ci-lint.sh'
+
+  # What this job proves: the Go module is formatted, vet is quiet, the module
+  # files hold no drift, the tests pass WITH the race detector, and both commands
+  # cross-compile for both architectures with no C compiler.
+  #
+  # The race detector never ran before this workflow: the development machine is
+  # Windows and has no C compiler (CONTEXT.md section 5).
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "FAIL: gofmt wants to change these files:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go mod tidy makes no change
+        run: |
+          cp go.mod go.mod.orig
+          cp go.sum go.sum.orig
+          go mod tidy
+          diff -u go.mod.orig go.mod || { echo "FAIL: run go mod tidy"; exit 1; }
+          diff -u go.sum.orig go.sum || { echo "FAIL: run go mod tidy"; exit 1; }
+          rm -f go.mod.orig go.sum.orig
+
+      - name: go test -race
+        run: go test -race ./...
+
+      - name: cross-compile both commands for both architectures
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+        run: |
+          for arch in amd64 arm64; do
+            for cmd in portapixeld portapixel-server; do
+              echo "==> $cmd linux/$arch"
+              GOARCH="$arch" go build -trimpath -o /dev/null "./cmd/$cmd"
+            done
+          done
+
+  # What this job proves: every web module parses as a module, and no web file
+  # asks another host for a file.
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: tests/ci/js-check.sh
+        run: sh tests/ci/js-check.sh
