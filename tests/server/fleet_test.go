@@ -8,7 +8,6 @@ import (
 	"image/png"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
@@ -217,7 +216,7 @@ func TestHeartbeatAndCommandAck(t *testing.T) {
 
 	// The heartbeat acknowledges it.
 	hb := manifest.Heartbeat{
-		DeviceID: "px-hb000001", HardwareID: "hw-px-hb000001", Version: "1.4.2",
+		DeviceID: "px-hb000001", HardwareID: hardwareOf("px-hb000001"), Version: "1.4.2",
 		Acks: []int64{queued.ID},
 		Status: manifest.Status{
 			DeviceID: "px-hb000001", Version: "1.4.2", TempC: 42.5,
@@ -298,20 +297,31 @@ func TestBulkCommandForAGroup(t *testing.T) {
 	}
 }
 
+// TestHeartbeatHardwareChangeAndConflict covers the clone of D21. Two machines that
+// answer in turn on one token is the case, and nothing else is.
 func TestHeartbeatHardwareChangeAndConflict(t *testing.T) {
 	f := newFleet(t)
 	f.login()
 	token := f.pairDevice("px-hw000001")
 
-	// Two hardware IDs a moment apart: a clone (D21).
-	hb := manifest.Heartbeat{DeviceID: "px-hw000001", HardwareID: "hw-another-box", Version: "1.4.2"}
-	f.mustOK(f.device(http.MethodPost, "/api/v1/heartbeat", token, hb), "heartbeat")
+	// Box B answers first, which makes the row ask for a confirmation.
+	boxB := manifest.Heartbeat{DeviceID: "px-hw000001",
+		HardwareID: hardwareOf("another-box"), Version: "1.4.2"}
+	f.mustOK(f.device(http.MethodPost, "/api/v1/heartbeat", token, boxB), "the heartbeat of box B")
+	if view := f.deviceView(t, "px-hw000001"); view.Conflict {
+		t.Fatalf("one machine that changed was read as a clone: %+v", view)
+	}
+
+	// Box A answers next. Now the two take turns, so one card runs in two boxes.
+	boxA := manifest.Heartbeat{DeviceID: "px-hw000001",
+		HardwareID: hardwareOf("px-hw000001"), Version: "1.4.2"}
+	f.mustOK(f.device(http.MethodPost, "/api/v1/heartbeat", token, boxA), "the heartbeat of box A")
 
 	view := f.deviceView(t, "px-hw000001")
 	if !view.Conflict || view.State != "conflict" {
 		t.Fatalf("the device is %+v, want a conflict", view)
 	}
-	if view.ConflictHardwareID != "hw-another-box" {
+	if view.ConflictHardwareID != hardwareOf("another-box") {
 		t.Fatalf("the conflict names %q", view.ConflictHardwareID)
 	}
 
@@ -324,21 +334,28 @@ func TestHeartbeatHardwareChangeAndConflict(t *testing.T) {
 	}
 }
 
+// TestHeartbeatHardwareRepair covers the repair of D21 with the call order of a real
+// device: the manifest poll first, the heartbeat after it.
+//
+// The old rule compared the hardware ID against last_seen, which the poll had just
+// moved, so every repair read as a clone and this branch was unreachable. The test
+// needs no jump of the clock either.
 func TestHeartbeatHardwareRepair(t *testing.T) {
 	f := newFleet(t)
 	f.login()
 	token := f.pairDevice("px-hw000002")
 
-	// The device was away for a day and came back on other hardware: a repair.
-	f.db.SetClock(func() time.Time { return time.Now().Add(26 * time.Hour) })
-	hb := manifest.Heartbeat{DeviceID: "px-hw000002", HardwareID: "hw-repaired", Version: "1.4.2"}
+	// The card is in another box now. The device polls, then it reports.
+	f.mustOK(f.device(http.MethodGet, "/api/v1/manifest", token, nil), "the poll")
+	hb := manifest.Heartbeat{DeviceID: "px-hw000002",
+		HardwareID: hardwareOf("repaired"), Version: "1.4.2"}
 	f.mustOK(f.device(http.MethodPost, "/api/v1/heartbeat", token, hb), "heartbeat")
 
 	view := f.deviceView(t, "px-hw000002")
 	if !view.NeedsConfirm || view.Conflict {
 		t.Fatalf("the device is %+v, want a hardware change and no conflict", view)
 	}
-	if view.HardwareID != "hw-repaired" || view.PrevHardwareID != "hw-px-hw000002" {
+	if view.HardwareID != hardwareOf("repaired") || view.PrevHardwareID != hardwareOf("px-hw000002") {
 		t.Fatalf("the hardware IDs are %q and %q", view.HardwareID, view.PrevHardwareID)
 	}
 
@@ -362,6 +379,9 @@ type deviceRow struct {
 	NeedsConfirm       bool   `json:"needs_confirm"`
 	GroupName          string `json:"group_name"`
 	Name               string `json:"name"`
+	Pending            bool   `json:"pending"`
+	PendingCode        string `json:"pending_code"`
+	CollidesWith       string `json:"collides_with"`
 }
 
 func (f *fleet) deviceView(t *testing.T, id string) deviceRow {
@@ -397,10 +417,21 @@ func TestDeviceTokenIsScopedToItsOwnRow(t *testing.T) {
 		t.Fatalf("the second device saw the command of the first: %+v", m.Commands)
 	}
 	// It must not be able to acknowledge it either.
-	hb := manifest.Heartbeat{DeviceID: "px-scope002", HardwareID: "hw-px-scope002", Acks: []int64{queued.ID}}
+	hb := manifest.Heartbeat{DeviceID: "px-scope002", HardwareID: hardwareOf("px-scope002"), Acks: []int64{queued.ID}}
 	f.mustOK(f.device(http.MethodPost, "/api/v1/heartbeat", second, hb), "heartbeat")
 	if state := f.commandState(t, "px-scope001", queued.ID); state == "acked" {
 		t.Fatal("one device acknowledged the command of another device")
+	}
+
+	// A heartbeat with a list of acknowledgements that has no end is refused.
+	acks := make([]int64, 200)
+	for i := range acks {
+		acks[i] = int64(i + 1)
+	}
+	flood := manifest.Heartbeat{DeviceID: "px-scope002",
+		HardwareID: hardwareOf("px-scope002"), Acks: acks}
+	if res := f.device(http.MethodPost, "/api/v1/heartbeat", second, flood); res.status != http.StatusUnprocessableEntity {
+		t.Fatalf("a heartbeat with 200 acknowledgements answered %d: %s", res.status, res.body)
 	}
 
 	// A device that was deleted has no token any more.

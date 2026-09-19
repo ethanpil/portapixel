@@ -4,10 +4,16 @@
 // SQLite database in a temporary directory. Nothing here is a stub except the
 // GitHub API and the release signing key: everything else is the code that
 // ships (plan section 17 item 7).
+//
+// The route stack comes from internal/server.New, which is the constructor that
+// cmd/portapixel-server calls. There is no second copy of the wiring here. The
+// guards that the hardening tests check are therefore the guards that the binary
+// serves: remove the Host allowlist from that constructor and these tests fail.
 package server_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -21,9 +27,11 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/opslog"
+	"github.com/ethanpil/portapixel/internal/server"
 	"github.com/ethanpil/portapixel/internal/server/admin"
 	"github.com/ethanpil/portapixel/internal/server/api"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/server/media"
 	"github.com/ethanpil/portapixel/internal/server/releases"
 )
@@ -32,6 +40,9 @@ import (
 const testPassword = "a good test password"
 
 // fleet is one server under test.
+//
+// The values that the routes read and write live in state, which fleet holds by
+// pointer. So a copy of fleet for a subtest shares that state and copies no lock.
 type fleet struct {
 	t      *testing.T
 	dir    string
@@ -41,22 +52,28 @@ type fleet struct {
 	srv    *httptest.Server
 	// client carries the session cookie.
 	client *http.Client
+	st     *state
+}
 
+// state is what the routes of the server read and write through the functions of
+// the harness.
+type state struct {
 	mu    sync.Mutex
 	hosts []string
 	// settings are what the settings routes read and write.
 	settings admin.Settings
-	// passwordHash stands for the hash in server.toml. The test compares in
-	// plain form, because bcrypt is tested in the command package.
+	// password stands for the hash in server.toml. The test compares in plain
+	// form, because bcrypt is tested in the command package.
 	password string
+	// release is the approved release that the manifest path reads. The command
+	// keeps it in memory for the same reason, so the harness does too.
+	release *db.Release
+	// proxies decides the address of a caller. A test that needs a trusted proxy
+	// replaces it before it makes its first call.
+	proxies *httpjson.Proxies
 }
 
 // newFleet starts a server.
-//
-// The route stack is the stack of cmd/portapixel-server: the device API with no
-// browser guards, and the admin API behind the Host allowlist and the CSRF
-// header. The command wires the same thing; see the report for why the wiring is
-// in two places.
 func newFleet(t *testing.T) *fleet {
 	t.Helper()
 	dir := t.TempDir()
@@ -72,57 +89,58 @@ func newFleet(t *testing.T) *fleet {
 		t.Fatal(err)
 	}
 
+	// No proxy is in front of a test server, so the caller address is the peer
+	// address. A test that needs one replaces the list before its first call.
+	proxies, _ := httpjson.NewProxies(nil)
 	f := &fleet{
 		t: t, dir: dir, db: database, store: store,
-		password: testPassword,
-		settings: admin.Settings{ServerName: "Test fleet", PollSeconds: 60},
+		st: &state{
+			password: testPassword,
+			settings: admin.Settings{ServerName: "Test fleet", PollSeconds: 60},
+			proxies:  proxies,
+		},
 	}
 	f.mirror = releases.NewMirror(dir, "owner/name")
 	f.mirror.Report = func(v, state, errText string) {
 		database.SetMirrorState(v, state, errText)
+		f.fleetChanged()
 	}
 
 	log := opslog.New(dir + "/ops.log")
 
-	deviceMux := http.NewServeMux()
-	api.Deps{
-		DB: database, Media: store, Mirror: f.mirror, Log: log,
-		Limiter:     httpguard.NewLimiter(),
-		ServerName:  func() string { return f.readSettings().ServerName },
-		DefaultPoll: func() int { return f.readSettings().PollSeconds },
-	}.Routes(deviceMux)
-
-	uiMux := http.NewServeMux()
-	admin.Deps{
-		DB: database, Media: store, Mirror: f.mirror, Log: log,
-		Sessions:      httpguard.NewSessions(),
-		Limiter:       httpguard.NewLimiter(),
-		DataDir:       dir,
-		StartedAt:     time.Now(),
-		Hosts:         f.allowedHosts,
-		CheckPassword: f.checkPassword,
-		SetPassword:   f.setPassword,
-		Settings:      f.readSettings,
-		SaveSettings:  f.saveSettings,
-	}.Routes(uiMux)
-
-	var ui http.Handler = uiMux
-	ui = httpguard.RequireHeader(ui)
-	ui = httpguard.HostAllowlist(f.allowedHosts)(ui)
-
-	root := http.NewServeMux()
-	root.Handle("/api/v1/", deviceMux)
-	root.Handle("/", ui)
-
-	f.srv = httptest.NewServer(root)
+	f.srv = httptest.NewServer(server.New(server.Deps{
+		Device: api.Deps{
+			DB: database, Media: store, Mirror: f.mirror, Log: log,
+			Limiter:        httpguard.NewLimiter(),
+			PendingLimiter: httpguard.NewPendingLimiter(),
+			ClientIP:       f.clientIP,
+			Fleet:          f.readFleet,
+		},
+		Admin: admin.Deps{
+			DB: database, Media: store, Mirror: f.mirror, Log: log,
+			Sessions:      f.sessions(),
+			Limiter:       httpguard.NewLimiter(),
+			ClientIP:      f.clientIP,
+			DataDir:       dir,
+			StartedAt:     time.Now(),
+			Background:    context.Background,
+			CheckPassword: f.checkPassword,
+			SetPassword:   f.setPassword,
+			Settings:      f.readSettings,
+			SaveSettings:  f.saveSettings,
+			FleetChanged:  f.fleetChanged,
+		},
+		Hosts: f.allowedHosts,
+	}))
 	t.Cleanup(f.srv.Close)
 
 	// The allowlist holds the address that the test server answers on, the same
 	// way the real allowlist holds the public URL.
 	host := strings.TrimPrefix(f.srv.URL, "http://")
-	f.mu.Lock()
-	f.hosts = []string{host, "localhost", "127.0.0.1"}
-	f.mu.Unlock()
+	f.st.mu.Lock()
+	f.st.hosts = []string{host, "localhost", "127.0.0.1"}
+	f.st.mu.Unlock()
+	f.fleetChanged()
 
 	jar, err := cookiejar.New(nil)
 	if err != nil {
@@ -132,36 +150,104 @@ func newFleet(t *testing.T) *fleet {
 	return f
 }
 
+// with gives a view of the fleet that reports to the *testing.T of a subtest.
+//
+// A helper of the harness calls Fatalf, and Fatalf of the parent T from the
+// goroutine of a subtest is not permitted. Every t.Run that uses a helper takes a
+// view from here. The state is shared, because it lives behind a pointer.
+func (f *fleet) with(t *testing.T) *fleet {
+	view := *f
+	view.t = t
+	return &view
+}
+
 func (f *fleet) allowedHosts() []string {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]string(nil), f.hosts...)
+	f.st.mu.Lock()
+	defer f.st.mu.Unlock()
+	return append([]string(nil), f.st.hosts...)
 }
 
 func (f *fleet) readSettings() admin.Settings {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.settings
+	f.st.mu.Lock()
+	defer f.st.mu.Unlock()
+	return f.st.settings
 }
 
 func (f *fleet) saveSettings(s admin.Settings) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.settings = s
+	f.st.mu.Lock()
+	f.st.settings = s
+	f.st.mu.Unlock()
+	f.fleetChanged()
 	return nil
+}
+
+// readFleet gives the values that the manifest needs.
+func (f *fleet) readFleet() api.Fleet {
+	s := f.readSettings()
+	f.st.mu.Lock()
+	release := f.st.release
+	f.st.mu.Unlock()
+	return api.Fleet{ServerName: s.ServerName, DefaultPoll: s.PollSeconds, Release: release}
+}
+
+// fleetChanged reads the approved release again. The command does the same, so a
+// poll of a device costs no query for it.
+func (f *fleet) fleetChanged() {
+	var release *db.Release
+	if rel, err := f.db.ApprovedRelease(); err == nil {
+		release = &rel
+	}
+	f.st.mu.Lock()
+	f.st.release = release
+	f.st.mu.Unlock()
 }
 
 func (f *fleet) checkPassword(p string) bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return p != "" && p == f.password
+	f.st.mu.Lock()
+	defer f.st.mu.Unlock()
+	return p != "" && p == f.st.password
 }
 
 func (f *fleet) setPassword(p string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.password = p
+	f.st.mu.Lock()
+	defer f.st.mu.Unlock()
+	f.st.password = p
 	return nil
+}
+
+// password gives the password that the server takes now.
+func (f *fleet) password() string {
+	f.st.mu.Lock()
+	defer f.st.mu.Unlock()
+	return f.st.password
+}
+
+// clientIP gives the address of a caller, through the proxy list of the harness.
+func (f *fleet) clientIP(r *http.Request) string {
+	f.st.mu.Lock()
+	proxies := f.st.proxies
+	f.st.mu.Unlock()
+	return proxies.ClientIP(r)
+}
+
+// clientIsHTTPS answers the Secure question of the session cookie.
+func (f *fleet) clientIsHTTPS(r *http.Request) bool {
+	f.st.mu.Lock()
+	proxies := f.st.proxies
+	f.st.mu.Unlock()
+	return proxies.ClientIsHTTPS(r) ||
+		strings.HasPrefix(f.readSettings().PublicURL, "https://")
+}
+
+// trustProxies replaces the proxy list of the harness.
+func (f *fleet) trustProxies(entries []string) {
+	proxies, warnings := httpjson.NewProxies(entries)
+	if len(warnings) != 0 {
+		f.t.Fatalf("the proxy list gave warnings: %v", warnings)
+	}
+	f.st.mu.Lock()
+	f.st.proxies = proxies
+	f.st.mu.Unlock()
 }
 
 // reply is one answer of the API.
@@ -242,7 +328,7 @@ func (f *fleet) call(method, path string, body any, edit func(*http.Request)) re
 	return reply{status: resp.StatusCode, body: data, header: resp.Header}
 }
 
-// admin calls the admin API. Every route needs a session, so login runs first.
+// adminCall calls the admin API. Every route needs a session, so login runs first.
 func (f *fleet) adminCall(method, path string, body any) reply {
 	f.t.Helper()
 	return f.call(method, path, body, nil)
@@ -252,7 +338,7 @@ func (f *fleet) adminCall(method, path string, body any) reply {
 func (f *fleet) login() {
 	f.t.Helper()
 	res := f.call(http.MethodPost, "/api/admin/login",
-		map[string]string{"password": f.password}, nil)
+		map[string]string{"password": f.password()}, nil)
 	if res.status != http.StatusOK {
 		f.t.Fatalf("the login answered %d: %s", res.status, res.body)
 	}
@@ -286,6 +372,13 @@ func (f *fleet) upload(path, name string, body []byte) reply {
 	defer resp.Body.Close()
 	data, _ := io.ReadAll(resp.Body)
 	return reply{status: resp.StatusCode, body: data, header: resp.Header}
+}
+
+// sessions makes the session store of the admin UI, the way the command does.
+func (f *fleet) sessions() *httpguard.Sessions {
+	sessions := httpguard.NewSessions()
+	sessions.Secure = f.clientIsHTTPS
+	return sessions
 }
 
 // mustOK fails the test when the answer is not 200.

@@ -12,15 +12,22 @@ import (
 	"github.com/ethanpil/portapixel/internal/store"
 )
 
-// TestEndToEnd is the whole job of the server in one test, in the order that a
-// person does it:
+// TestEndToEnd is the whole job of the server in one test. The steps are in the
+// order that a person does them:
 //
-//	make a group, upload a picture, make a playlist, give it to the group,
-//	enroll a screen, poll the manifest, download the picture, send a heartbeat,
-//	queue a command, see it delivered and acknowledged.
+//  1. Make a group.
+//  2. Upload a picture.
+//  3. Make a playlist.
+//  4. Give the playlist to the group.
+//  5. Enroll a screen.
+//  6. Poll the manifest.
+//  7. Download the picture.
+//  8. Send a heartbeat.
+//  9. Queue a command.
+//  10. See the command delivered and acknowledged.
 //
-// The client of the download is internal/store.Download, the code that the device
-// runs, so this test also proves that the two ends of the protocol agree.
+// The client of the download is internal/store.Download. That is the code that the
+// device runs, so this test also proves that the two ends of the protocol agree.
 func TestEndToEnd(t *testing.T) {
 	f := newFleet(t)
 	f.login()
@@ -116,7 +123,7 @@ func TestEndToEnd(t *testing.T) {
 
 	// 8. The screen reports in.
 	hb := manifest.Heartbeat{
-		DeviceID: "px-e2e00001", HardwareID: "hw-px-e2e00001", Name: "Lobby North", Version: "1.4.2",
+		DeviceID: "px-e2e00001", HardwareID: hardwareOf("px-e2e00001"), Name: "Lobby North", Version: "1.4.2",
 		Status: manifest.Status{
 			DeviceID: "px-e2e00001", Name: "Lobby North", Version: "1.4.2",
 			TempC: 47.5, MediaFreeBytes: 3 << 30, MediaTotalBytes: 8 << 30,

@@ -214,7 +214,9 @@ func TestPlaylistValidationOverTheAPI(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			res := f.adminCall(http.MethodPost, "/api/admin/playlists", c.body)
+			// The helpers of the harness call Fatalf, so a subtest needs its own
+			// view of the fleet: Fatalf of the parent T from here is not permitted.
+			res := f.with(t).adminCall(http.MethodPost, "/api/admin/playlists", c.body)
 			if res.status != http.StatusUnprocessableEntity {
 				t.Fatalf("the save answered %d: %s", res.status, res.body)
 			}

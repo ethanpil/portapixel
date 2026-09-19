@@ -2,10 +2,12 @@ package server_test
 
 import (
 	"net/http"
+	"net/http/cookiejar"
 	"strings"
 	"testing"
 
 	"github.com/ethanpil/portapixel/internal/httpguard"
+	"github.com/ethanpil/portapixel/internal/server/db"
 )
 
 func TestAdminNeedsASession(t *testing.T) {
@@ -166,7 +168,7 @@ func TestDeviceAPITakesAnyHostAndNoCSRFHeader(t *testing.T) {
 
 func TestSessionCookieIsHardened(t *testing.T) {
 	f := newFleet(t)
-	res := f.call(http.MethodPost, "/api/admin/login", map[string]string{"password": f.password}, nil)
+	res := f.call(http.MethodPost, "/api/admin/login", map[string]string{"password": f.password()}, nil)
 	f.mustOK(res, "login")
 
 	cookie := res.header.Get("Set-Cookie")
@@ -178,6 +180,158 @@ func TestSessionCookieIsHardened(t *testing.T) {
 			t.Errorf("the cookie %q does not hold %q", cookie, want)
 		}
 	}
+	// This server answers plain HTTP on the loopback, so the cookie must not take
+	// Secure: a Secure cookie would never come back.
+	if strings.Contains(cookie, "Secure") {
+		t.Errorf("the cookie of a plain HTTP server holds Secure: %q", cookie)
+	}
+}
+
+// TestSessionCookieIsSecureOverHTTPS covers the two ways that a server answers TLS:
+// its own certificate, and a proxy in front of it that terminates the connection.
+func TestSessionCookieIsSecureOverHTTPS(t *testing.T) {
+	f := newFleet(t)
+	// The public URL says https, which is the case of a TLS-terminating proxy that
+	// the admin configured.
+	f.login()
+	f.mustOK(f.adminCall(http.MethodPut, "/api/admin/settings", map[string]any{
+		"server_name": "Test fleet", "default_poll_seconds": 60,
+		"public_url": "https://signage.example.com",
+	}), "save the settings")
+
+	res := f.mustOK(f.call(http.MethodPost, "/api/admin/login",
+		map[string]string{"password": f.password()}, nil), "login")
+	if cookie := res.header.Get("Set-Cookie"); !strings.Contains(cookie, "Secure") {
+		t.Errorf("the cookie of an https server does not hold Secure: %q", cookie)
+	}
+
+	// A proxy that we trust says https in a header. One that we do not trust says
+	// the same thing and is ignored.
+	plain := newFleet(t)
+	plain.trustProxies([]string{"127.0.0.1", "::1"})
+	res = plain.mustOK(plain.call(http.MethodPost, "/api/admin/login",
+		map[string]string{"password": plain.password()}, func(r *http.Request) {
+			r.Header.Set("X-Forwarded-Proto", "https")
+		}), "login behind a proxy")
+	if cookie := res.header.Get("Set-Cookie"); !strings.Contains(cookie, "Secure") {
+		t.Errorf("the cookie behind a trusted proxy does not hold Secure: %q", cookie)
+	}
+
+	untrusted := newFleet(t)
+	res = untrusted.mustOK(untrusted.call(http.MethodPost, "/api/admin/login",
+		map[string]string{"password": untrusted.password()}, func(r *http.Request) {
+			r.Header.Set("X-Forwarded-Proto", "https")
+		}), "login with a header that nobody may set")
+	if cookie := res.header.Get("Set-Cookie"); strings.Contains(cookie, "Secure") {
+		t.Errorf("a header of an untrusted peer made the cookie Secure: %q", cookie)
+	}
+}
+
+// TestPasswordChangeNeedsTheCurrentPassword covers the one credential of the
+// server. A session cookie alone must not be enough to change it.
+func TestPasswordChangeNeedsTheCurrentPassword(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+
+	// A wrong current password answers 403 and names the field. It is not a 401:
+	// web/shared/api.js signs the admin out at a 401, and a wrong value in one field
+	// of a form is not a session that ended.
+	bad := f.adminCall(http.MethodPost, "/api/admin/password", map[string]string{
+		"current": "not the password", "password": "a new good password",
+	})
+	if bad.status != http.StatusForbidden {
+		t.Fatalf("a wrong current password answered %d: %s", bad.status, bad.body)
+	}
+	fields := bad.fields(t)
+	if len(fields) != 1 || fields[0].Field != "current" {
+		t.Fatalf("the fields are %+v", fields)
+	}
+	if f.password() != testPassword {
+		t.Fatal("a request with the wrong current password changed the password")
+	}
+
+	// A body with no current password at all is refused as well.
+	if res := f.adminCall(http.MethodPost, "/api/admin/password",
+		map[string]string{"password": "a new good password"}); res.status != http.StatusForbidden {
+		t.Fatalf("a request with no current password answered %d", res.status)
+	}
+}
+
+// TestPasswordChangeDropsTheOtherSessions covers the reason that somebody changes a
+// password: a laptop that went missing. A session that stayed open would make the
+// change worth nothing.
+func TestPasswordChangeDropsTheOtherSessions(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+
+	// A second browser with its own cookie jar.
+	other := newBrowser(t, f)
+	other.login()
+	other.mustOK(other.adminCall(http.MethodGet, "/api/admin/devices", nil), "the second browser")
+
+	f.mustOK(f.adminCall(http.MethodPost, "/api/admin/password", map[string]string{
+		"current": testPassword, "password": "a new good password",
+	}), "set the password")
+
+	// The browser that made the change still works.
+	f.mustOK(f.adminCall(http.MethodGet, "/api/admin/devices", nil), "the first browser")
+	// The other one is out.
+	if res := other.adminCall(http.MethodGet, "/api/admin/devices", nil); res.status != http.StatusUnauthorized {
+		t.Fatalf("the other session answered %d after the password change", res.status)
+	}
+}
+
+// TestClientAddressBehindAProxy covers the rate limiters and the last_ip column
+// behind a reverse proxy, which deploy/README recommends.
+func TestClientAddressBehindAProxy(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+
+	// An untrusted peer cannot choose the address that the server counts.
+	spoofed := f.call(http.MethodPost, "/api/v1/enroll", map[string]any{
+		"device_id": "px-spoof001", "hardware_id": "hw-spoof",
+	}, func(r *http.Request) {
+		r.Header.Set("X-Forwarded-For", "203.0.113.9")
+	})
+	f.mustOK(spoofed, "an enroll with a header that nobody may set")
+	waiting := f.pendingByDevice(t, "px-spoof001")
+	if waiting.IP == "203.0.113.9" {
+		t.Fatal("the server believed X-Forwarded-For from a peer that it does not trust")
+	}
+
+	// With the peer in the list, the right-most entry that is not a proxy wins.
+	f.trustProxies([]string{"127.0.0.1", "::1", "10.0.0.0/8"})
+	chained := f.call(http.MethodPost, "/api/v1/enroll", map[string]any{
+		"device_id": "px-chain001", "hardware_id": "hw-chain",
+	}, func(r *http.Request) {
+		r.Header.Set("X-Forwarded-For", "203.0.113.9, 10.0.0.7")
+	})
+	f.mustOK(chained, "an enroll behind a chain of proxies")
+	if waiting = f.pendingByDevice(t, "px-chain001"); waiting.IP != "203.0.113.9" {
+		t.Fatalf("the address of the screen is %q, want the client of the chain", waiting.IP)
+	}
+}
+
+// newBrowser gives a second client of the same server, with its own cookie jar.
+func newBrowser(t *testing.T, f *fleet) *fleet {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := *f
+	other.client = &http.Client{Jar: jar}
+	return &other
+}
+
+// pendingByDevice gives the waiting request of one device ID.
+func (f *fleet) pendingByDevice(t *testing.T, id string) db.PendingEnrollment {
+	t.Helper()
+	p, err := f.db.PendingByDevice(id)
+	if err != nil {
+		t.Fatalf("no request of %s waits: %v", id, err)
+	}
+	return p
 }
 
 func TestErrorShapesAreTheSameOnBothAPIs(t *testing.T) {
@@ -205,16 +359,70 @@ func TestErrorShapesAreTheSameOnBothAPIs(t *testing.T) {
 		t.Fatalf("the admin 422 has no fields: %s", adminFields.body)
 	}
 
-	// A 404 of each API.
-	deviceNotFound := f.device(http.MethodGet, "/api/v1/manifest", "no such token", nil)
+	// Every other failure of the two APIs. A path that no route holds is the one
+	// that used to answer the text page of http.ServeMux, which api.js cannot parse.
+	deviceUnauthorized := f.device(http.MethodGet, "/api/v1/manifest", "no such token", nil)
 	adminNotFound := f.adminCall(http.MethodGet, "/api/admin/devices/px-nothing", nil)
-	if deviceNotFound.errorText(t) == "" || adminNotFound.errorText(t) == "" {
-		t.Fatalf("an answer holds no error text: %s / %s", deviceNotFound.body, adminNotFound.body)
+	adminNoRoute := f.adminCall(http.MethodGet, "/api/admin/nope", nil)
+	deviceNoRoute := f.device(http.MethodGet, "/api/v1/nope", "", nil)
+	badMethod := f.adminCall(http.MethodDelete, "/api/admin/settings", nil)
+
+	if deviceUnauthorized.status != http.StatusUnauthorized {
+		t.Fatalf("the manifest with no good token answered %d", deviceUnauthorized.status)
 	}
-	for _, res := range []reply{deviceNotFound, adminNotFound} {
-		if kind := res.header.Get("Content-Type"); kind != "application/json" {
-			t.Errorf("the content type of an error is %q", kind)
+	if adminNoRoute.status != http.StatusNotFound || deviceNoRoute.status != http.StatusNotFound {
+		t.Fatalf("a path that no route holds answered %d and %d",
+			adminNoRoute.status, deviceNoRoute.status)
+	}
+	for name, res := range map[string]reply{
+		"the device 401":      deviceUnauthorized,
+		"the admin 404":       adminNotFound,
+		"the admin no-route":  adminNoRoute,
+		"the device no-route": deviceNoRoute,
+		"the wrong method":    badMethod,
+	} {
+		if res.errorText(t) == "" {
+			t.Errorf("%s holds no error text: %s", name, res.body)
 		}
+		if kind := res.header.Get("Content-Type"); kind != "application/json" {
+			t.Errorf("the content type of %s is %q", name, kind)
+		}
+	}
+}
+
+// TestJSONRoutesNeedTheJSONContentType covers the cross-site request that needs no
+// preflight. A form on another site can send text/plain, multipart/form-data or
+// application/x-www-form-urlencoded, and none of them is application/json.
+func TestJSONRoutesNeedTheJSONContentType(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+
+	for _, c := range []struct{ method, path string }{
+		{http.MethodPost, "/api/v1/enroll"},
+		{http.MethodPost, "/api/admin/login"},
+		{http.MethodPost, "/api/admin/groups"},
+	} {
+		res := f.call(c.method, c.path, map[string]any{"device_id": "px-ct000001", "name": "x"},
+			func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") })
+		if res.status != http.StatusUnsupportedMediaType {
+			t.Errorf("%s %s with text/plain answered %d: %s", c.method, c.path, res.status, res.body)
+		}
+		if res.errorText(t) == "" {
+			t.Errorf("%s %s holds no error text", c.method, c.path)
+		}
+	}
+}
+
+// TestLicences serves the third-party licence list (D33). The device serves the
+// same file, so the two ends never show two different lists.
+func TestLicences(t *testing.T) {
+	f := newFleet(t)
+	res := f.mustOK(f.call(http.MethodGet, "/licenses", nil, nil), "the licence list")
+	if len(res.body) == 0 {
+		t.Fatal("the licence list has no bytes")
+	}
+	if kind := res.header.Get("Content-Type"); !strings.HasPrefix(kind, "text/plain") {
+		t.Fatalf("the licence list is %q", kind)
 	}
 }
 
@@ -238,8 +446,10 @@ func TestSettingsAndPassword(t *testing.T) {
 	if out.Settings.ServerName != "Ridgeline Signage" || out.Settings.PollSeconds != 120 {
 		t.Fatalf("the settings are %+v", out.Settings)
 	}
-	if !out.RestartNeeded {
-		t.Fatal("a change of the public URL did not ask for a restart")
+	// Nothing needs a restart. The Host allowlist comes from a function that runs
+	// on each request, so a new public URL is live on the next one.
+	if out.RestartNeeded {
+		t.Fatal("a change of the public URL asked for a restart that it does not need")
 	}
 
 	// The device sees the new name and the new interval.
@@ -260,10 +470,11 @@ func TestSettingsAndPassword(t *testing.T) {
 		t.Fatalf("the fields are %+v", bad.fields(t))
 	}
 
-	// The password route changes the password.
-	f.mustOK(f.adminCall(http.MethodPost, "/api/admin/password",
-		map[string]string{"password": "another good password"}), "set the password")
-	if f.password != "another good password" {
+	// The password route needs the password that is in use.
+	f.mustOK(f.adminCall(http.MethodPost, "/api/admin/password", map[string]string{
+		"current": testPassword, "password": "another good password",
+	}), "set the password")
+	if f.password() != "another good password" {
 		t.Fatal("the password did not change")
 	}
 }

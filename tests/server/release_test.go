@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -90,9 +91,13 @@ func fakeGitHubFor(t *testing.T, rel testRelease) string {
 }
 
 // useRelease points the mirror of a test server at a fake GitHub.
+//
+// The stub answers on the loopback. The mirror serves a release file only from
+// GitHub, so the allowlist takes that address for the test.
 func (f *fleet) useRelease(rel testRelease) {
 	f.mirror.Lister.BaseURL = fakeGitHubFor(f.t, rel)
 	f.mirror.PublicKey = rel.public
+	f.mirror.DownloadHosts = []string{"127.0.0.1", "localhost", "::1"}
 }
 
 // waitForMirror waits until the mirror of one version stops working.
@@ -321,14 +326,65 @@ func TestReleaseBundleRefusesAnIncompleteArchive(t *testing.T) {
 	}
 }
 
+// TestReleaseVersionInThePathIsChecked proves that the version guard answers and not
+// the path cleaning of http.ServeMux.
+//
+// ".." never reaches the handler: the mux cleans the path and answers 404 for it. So
+// the cases here are values that a path holds and that the guard must refuse: a
+// value with a separator in its escaped form, a value with a semicolon, and a name
+// that starts with a full stop.
 func TestReleaseVersionInThePathIsChecked(t *testing.T) {
 	f := newFleet(t)
 	f.login()
-	for _, bad := range []string{"..", "a%2Fb"} {
+	for _, bad := range []string{"a%2Fb", "a;b", ".hidden", ".staging-1.5.0"} {
 		res := f.adminCall(http.MethodPost, "/api/admin/releases/"+bad+"/approve", nil)
-		if res.status != http.StatusBadRequest && res.status != http.StatusNotFound {
-			t.Errorf("the version %q answered %d: %s", bad, res.status, res.body)
+		if res.status != http.StatusBadRequest {
+			t.Errorf("the version %q answered %d, want 400: %s", bad, res.status, res.body)
+			continue
 		}
+		if res.errorText(t) == "" {
+			t.Errorf("the answer for %q holds no error text: %s", bad, res.body)
+		}
+		if kind := res.header.Get("Content-Type"); kind != "application/json" {
+			t.Errorf("the answer for %q is %q", bad, kind)
+		}
+	}
+	// ".." is the case that the mux answers. It must still be JSON.
+	res := f.adminCall(http.MethodPost, "/api/admin/releases/../approve", nil)
+	if res.status != http.StatusNotFound && res.status != http.StatusBadRequest {
+		t.Errorf("the version \"..\" answered %d", res.status)
+	}
+	if res.errorText(t) == "" {
+		t.Errorf("the answer for \"..\" holds no error text: %s", res.body)
+	}
+}
+
+// TestBundleWhileAMirrorRunsGives409 covers the upload and the download of one
+// version at the same time. Two writers in one directory make a set of files that is
+// a mixture of the two.
+func TestBundleWhileAMirrorRunsGives409(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	rel := signRelease(t, "1.5.0")
+	f.mirror.PublicKey = rel.public
+	// A mirror that holds the lock and never finishes, because the address answers
+	// nothing.
+	f.mirror.Lister.BaseURL = "http://127.0.0.1:1"
+	f.mirror.DownloadHosts = []string{"127.0.0.1"}
+	if err := f.mirror.Start(context.Background(), "1.5.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	members := map[string][]byte{}
+	for name, body := range rel.files {
+		members[name] = body
+	}
+	res := f.upload("/api/admin/releases/1.5.0/bundle", "b.tar.gz", tarGzOf(t, members))
+	if res.status != http.StatusConflict && res.status != http.StatusOK {
+		t.Fatalf("the bundle upload answered %d: %s", res.status, res.body)
+	}
+	if res.status == http.StatusConflict && res.errorText(t) == "" {
+		t.Fatalf("the 409 holds no error text: %s", res.body)
 	}
 }
 
@@ -373,3 +429,53 @@ func tarGzOf(t *testing.T, members map[string][]byte) []byte {
 	gz.Close()
 	return buf.Bytes()
 }
+
+// TestReleaseDownloadNeedsATokenAndServesRange covers the route that the device
+// updater calls. The route is authenticated, which is correct: a release binary is
+// content of this fleet and not a public file.
+func TestReleaseDownloadNeedsATokenAndServesRange(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	rel := signRelease(t, "1.5.0")
+	f.useRelease(rel)
+
+	f.mustOK(f.adminCall(http.MethodGet, "/api/admin/releases", nil), "the release list")
+	f.mustOK(f.adminCall(http.MethodPost, "/api/admin/releases/1.5.0/approve", nil), "approve")
+	if state, errText := f.waitForMirror("1.5.0"); state != "done" {
+		t.Fatalf("the mirror is %q: %s", state, errText)
+	}
+
+	path := "/api/v1/releases/1.5.0/" + SumsFileName
+	// No token, and a token that nobody gave out.
+	for _, token := range []string{"", "a token that nobody gave out"} {
+		if res := f.device(http.MethodGet, path, token, nil); res.status != http.StatusUnauthorized {
+			t.Fatalf("the download with the token %q answered %d", token, res.status)
+		}
+	}
+
+	token := f.pairDevice("px-reldl001")
+	whole := f.mustOK(f.device(http.MethodGet, path, token, nil), "the whole file")
+	want := rel.files[SumsFileName]
+	if !bytes.Equal(whole.body, want) {
+		t.Fatal("the file from the mirror is not the file of the release")
+	}
+	if whole.header.Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("the route does not announce Range support: %q", whole.header.Get("Accept-Ranges"))
+	}
+
+	// A Range request, which is what a resumed download of a large binary sends.
+	ranged := f.call(http.MethodGet, path, nil, func(r *http.Request) {
+		r.Header.Set("Authorization", "Bearer "+token)
+		r.Header.Set("Range", "bytes=5-14")
+	})
+	if ranged.status != http.StatusPartialContent {
+		t.Fatalf("the range request answered %d: %s", ranged.status, ranged.body)
+	}
+	if !bytes.Equal(ranged.body, want[5:15]) {
+		t.Fatal("the range holds the wrong bytes")
+	}
+}
+
+// SumsFileName is the checksum file of a release. The tests name it here, so that
+// they do not import internal/server/releases for one constant.
+const SumsFileName = "SHA256SUMS"
