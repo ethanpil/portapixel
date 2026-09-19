@@ -2,12 +2,11 @@
 // be on.
 //
 // Why this package exists: two schedules read the same clock and the same day
-// names, and both must hold still until the clock is true. A Raspberry Pi has no
-// battery clock. It can wake up in 1970 or, with swclock, at the time of the
-// last shutdown. A rule that says "the sale loop plays from 08:00 to 18:00"
-// against a wrong clock shows the wrong content with full confidence, so the
-// rules stay inert and the default playlist plays until chrony reports a
-// synchronised clock (D17, D40).
+// names. Both must hold still until the clock is true. A Raspberry Pi has no
+// battery clock. It can wake up in 1970 or, with swclock, at the time of the last
+// shutdown. A rule that plays the sale loop from 08:00 to 18:00 then shows the
+// wrong content. So the rules stay inert and the default playlist plays until the
+// kernel reports a clock with a source (D17, D40).
 //
 // The rules of the two schedules:
 //
@@ -21,6 +20,6 @@
 // While the device is paired, the rules and the default playlist come from the
 // fleet server (D48). SetFleetRules gives them to the scheduler.
 //
-// The clock, the sync probe and the configuration are all parameters, so the
-// tests need no real clock, no chrony and no configuration file.
+// The clock, the sync probe and the configuration are all parameters. The tests
+// then need no real clock, no chrony and no configuration file.
 package scheduler

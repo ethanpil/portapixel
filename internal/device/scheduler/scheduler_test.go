@@ -285,35 +285,44 @@ func TestFleetScreenRuleWins(t *testing.T) {
 }
 
 func TestClockSyncedFallsBackToTheYear(t *testing.T) {
-	// A test machine may or may not have chronyc. The year test is the part that
-	// we can check: a clock in 1970 is never true.
+	// On Linux the kernel answers and the year does not come into it. Away from
+	// Linux the year is the whole test, and a clock in 1970 is never true.
+	if _, ok := kernelSynced(); ok {
+		t.Skip("the kernel of this machine answers the clock question itself")
+	}
 	if ClockSynced(func() time.Time { return time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC) }) {
-		// chronyc answered "Normal" on this machine, which is a true answer.
-		t.Skip("this machine runs chrony and reports a synchronised clock")
+		t.Error("a clock that says 1970 was called synchronised")
+	}
+	if !ClockSynced(func() time.Time { return time.Date(2026, 9, 18, 0, 0, 0, 0, time.UTC) }) {
+		t.Error("a clock that says 2026 was not called synchronised")
 	}
 }
 
-func TestParseHM(t *testing.T) {
+// The scheduler had a clock parser of its own, and it took values that the
+// configuration validator refused: "8:30" went in a schedule rule but never in a
+// rendered file, and the nightly restart read the same value with a third parser
+// and said no. config.ParseClock is the one format now.
+func TestScheduleTimesUseTheOneClockFormat(t *testing.T) {
+	now := time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC) // a Friday
 	tests := []struct {
-		in   string
-		want int
-		ok   bool
+		name  string
+		start string
+		end   string
+		want  bool
 	}{
-		{"00:00", 0, true},
-		{"08:30", 510, true},
-		{"23:59", 1439, true},
-		{"8:30", 510, true},
-		{"24:00", 0, false},
-		{"08:60", 0, false},
-		{"0830", 0, false},
-		{"", 0, false},
-		{"08:30:00", 0, false},
-		{"ab:cd", 0, false},
+		{"a rendered time matches", "08:30", "18:00", true},
+		{"a time outside the window does not", "10:00", "18:00", false},
+		{"a short hour is not a time", "8:30", "18:00", false},
+		{"a short minute is not a time", "08:30", "18:0", false},
+		{"a time with spaces is not a time", " 08:30", "18:00", false},
+		{"seconds are not a time", "08:30:00", "18:00", false},
+		{"an empty value is not a time", "", "18:00", false},
 	}
 	for _, tt := range tests {
-		got, ok := parseHM(tt.in)
-		if ok != tt.ok || (ok && got != tt.want) {
-			t.Errorf("parseHM(%q) = %d, %v; want %d, %v", tt.in, got, ok, tt.want, tt.ok)
-		}
+		t.Run(tt.name, func(t *testing.T) {
+			if got := inWindow(tt.start, tt.end, now, nil); got != tt.want {
+				t.Errorf("inWindow(%q, %q) = %v, want %v", tt.start, tt.end, got, tt.want)
+			}
+		})
 	}
 }

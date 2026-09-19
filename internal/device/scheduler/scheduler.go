@@ -2,7 +2,6 @@ package scheduler
 
 import (
 	"slices"
-	"strings"
 	"sync"
 	"time"
 
@@ -50,9 +49,31 @@ type Scheduler struct {
 
 	subs   map[int]chan string
 	nextID int
+}
 
-	// locations caches the time zone objects. LoadLocation reads files.
-	locations map[string]*time.Location
+// locations caches the time zone objects. time.LoadLocation reads files, and the
+// daemon asks for the local time once a second for months.
+var locations sync.Map // string -> *time.Location
+
+// Location gives the time zone of a name. An unknown name gives UTC: the
+// configuration check already reports a bad name, and a schedule in UTC is better
+// than no schedule.
+//
+// It is here and it is exported. The daemon needs the same cache for the local
+// time that it gives to the scheduler and to the browser supervisor.
+func Location(name string) *time.Location {
+	if name == "" {
+		return time.UTC
+	}
+	if loc, ok := locations.Load(name); ok {
+		return loc.(*time.Location)
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		loc = time.UTC
+	}
+	locations.Store(name, loc)
+	return loc
 }
 
 // New makes a Scheduler. It does not evaluate: the caller calls Evaluate after
@@ -65,9 +86,8 @@ func New(opt Options) *Scheduler {
 		opt.Synced = func() bool { return true }
 	}
 	return &Scheduler{
-		opt:       opt,
-		subs:      make(map[int]chan string),
-		locations: make(map[string]*time.Location),
+		opt:  opt,
+		subs: make(map[int]chan string),
 	}
 }
 
@@ -113,9 +133,17 @@ func (s *Scheduler) Run(done <-chan struct{}) {
 
 // Evaluate finds the playlist for this minute and gives its name. It tells the
 // subscribers when the name is different from the name before.
+//
+// The new name and the message go out under the same lock. The ticker, the fleet
+// client and an HTTP handler all call this. A send outside the lock let an older
+// evaluation land last. The device then played the playlist that /api/status did
+// not name, until the next change.
+//
+// The ops log lines go out after the lock. A write to the log goes to a file, and
+// Active() is on the loop of the browser supervisor.
 func (s *Scheduler) Evaluate() string {
 	cfg := s.config()
-	now := s.opt.Now().In(s.location(cfg.Device.Timezone))
+	now := s.opt.Now().In(Location(cfg.Device.Timezone))
 	synced := s.opt.Synced()
 
 	name := s.defaultPlaylist(cfg)
@@ -125,30 +153,22 @@ func (s *Scheduler) Evaluate() string {
 		}
 	}
 
+	var lines [][2]string
 	s.mu.Lock()
 	// The clock gate: say it once when it starts and once when it ends.
 	switch {
 	case !synced && !s.gated:
 		s.gated = true
-		s.log("scheduler.clock.wait", "the clock is not synchronised yet; "+name+" plays")
+		lines = append(lines, [2]string{"scheduler.clock.wait", "the clock is not synchronised yet; " + name + " plays"})
 	case synced && s.gated:
 		s.gated = false
-		s.log("scheduler.clock.ok", "the clock is synchronised; the schedule rules are live")
+		lines = append(lines, [2]string{"scheduler.clock.ok", "the clock is synchronised; the schedule rules are live"})
 	}
 	changed := name != s.active
 	s.active = name
-	var subs []chan string
 	if changed {
-		subs = make([]chan string, 0, len(s.subs))
+		lines = append(lines, [2]string{"scheduler.playlist", name})
 		for _, ch := range s.subs {
-			subs = append(subs, ch)
-		}
-	}
-	s.mu.Unlock()
-
-	if changed {
-		s.log("scheduler.playlist", name)
-		for _, ch := range subs {
 			// Never block: a subscriber that is busy reads the newest name.
 			select {
 			case ch <- name:
@@ -163,6 +183,11 @@ func (s *Scheduler) Evaluate() string {
 				}
 			}
 		}
+	}
+	s.mu.Unlock()
+
+	for _, l := range lines {
+		s.log(l[0], l[1])
 	}
 	return name
 }
@@ -200,7 +225,7 @@ func (s *Scheduler) ScreenShouldBeOn(t time.Time) bool {
 		return true
 	}
 	cfg := s.config()
-	return inWindow(on, off, t.In(s.location(cfg.Device.Timezone)), days)
+	return inWindow(on, off, t.In(Location(cfg.Device.Timezone)), days)
 }
 
 // ScreenOffCovers reports if the screen schedule has the screen off at t. The
@@ -280,27 +305,6 @@ func (s *Scheduler) config() config.Config {
 	return s.opt.Config()
 }
 
-// location gives the time zone of the device. An unknown name gives UTC: the
-// configuration check already reports a bad name, and a schedule in UTC is
-// better than no schedule.
-func (s *Scheduler) location(name string) *time.Location {
-	if name == "" {
-		return time.UTC
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if loc, ok := s.locations[name]; ok {
-		return loc
-	}
-	loc, err := time.LoadLocation(name)
-	if err != nil {
-		loc = time.UTC
-	}
-	s.locations[name] = loc
-	return loc
-}
-
 // log writes an ops log line. The caller may hold the lock, so this must not
 // call back into the scheduler.
 func (s *Scheduler) log(event, details string) {
@@ -316,11 +320,13 @@ func (s *Scheduler) log(event, details string) {
 // which the window starts: a Friday night rule that ends at 02:00 still plays at
 // 01:00 on Saturday morning.
 func inWindow(start, end string, now time.Time, days []string) bool {
-	s, ok := parseHM(start)
+	// config.ParseClock is the one clock format of the product. The scheduler had
+	// a parser of its own, and it took values that the validator refused.
+	s, ok := config.ParseClock(start)
 	if !ok {
 		return false
 	}
-	e, ok := parseHM(end)
+	e, ok := config.ParseClock(end)
 	if !ok {
 		return false
 	}
@@ -351,36 +357,4 @@ func dayPermitted(days []string, day time.Weekday) bool {
 
 func previousDay(day time.Weekday) time.Weekday {
 	return time.Weekday((int(day) + 6) % 7)
-}
-
-// parseHM reads "HH:MM" into minutes after midnight.
-func parseHM(value string) (int, bool) {
-	parts := strings.Split(strings.TrimSpace(value), ":")
-	if len(parts) != 2 {
-		return 0, false
-	}
-	h, ok := number(parts[0])
-	if !ok || h > 23 {
-		return 0, false
-	}
-	m, ok := number(parts[1])
-	if !ok || m > 59 {
-		return 0, false
-	}
-	return h*60 + m, true
-}
-
-// number reads one or two digits.
-func number(s string) (int, bool) {
-	if len(s) == 0 || len(s) > 2 {
-		return 0, false
-	}
-	out := 0
-	for _, r := range s {
-		if r < '0' || r > '9' {
-			return 0, false
-		}
-		out = out*10 + int(r-'0')
-	}
-	return out, true
 }

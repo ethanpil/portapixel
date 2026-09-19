@@ -1,16 +1,6 @@
 package scheduler
 
-import (
-	"context"
-	"os/exec"
-	"strings"
-	"time"
-)
-
-// probeTimeout is the time that the clock probe may take. chronyc talks to a
-// local socket and answers in milliseconds. A probe that hangs must never hold
-// the scheduler, so it gives up and reports "not synchronised".
-const probeTimeout = 3 * time.Second
+import "time"
 
 // firstTrueYear is the year from which we believe an unchecked clock. The
 // project started in 2026, so a clock that says 2025 or later was either set by
@@ -20,31 +10,21 @@ const firstTrueYear = 2025
 
 // ClockSynced reports if the clock is true.
 //
-// With chrony on the device, the answer is chrony's own answer: "Leap status" is
-// "Normal" only after a real synchronisation. Without chrony, the answer is the
-// year. This is the documented weaker test, and it exists because the on-box
-// install path (D51) does not have to install chrony.
+// On Linux the answer comes from the kernel. chrony clears the STA_UNSYNC flag
+// when it takes the clock, and adjtimex reads the flag with one system call.
+//
+// The probe used to run chronyc and read its words, and /api/status called it on
+// every request: nothing in the path of a request may start a process. The
+// daemon now samples this on its own loop and hands the answer to the report.
+//
+// Away from Linux the answer is the year. This is the documented weaker test, and
+// it is also what the on-box install path (D51) gets when it has no chrony.
 func ClockSynced(now func() time.Time) bool {
 	if now == nil {
 		now = time.Now
 	}
-	path, err := exec.LookPath("chronyc")
-	if err != nil {
-		return now().Year() >= firstTrueYear
+	if synced, ok := kernelSynced(); ok {
+		return synced
 	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
-	defer cancel()
-	// -n keeps chronyc from a DNS lookup of the server names, which would make
-	// the probe as slow as the network.
-	out, err := exec.CommandContext(ctx, path, "-n", "tracking").Output()
-	if err != nil {
-		return false
-	}
-	for _, line := range strings.Split(string(out), "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "Leap status") {
-			return strings.Contains(line, "Normal")
-		}
-	}
-	return false
+	return now().Year() >= firstTrueYear
 }
