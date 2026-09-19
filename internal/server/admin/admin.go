@@ -1,8 +1,9 @@
 package admin
 
 import (
-	"encoding/json"
+	"context"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -10,6 +11,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/opslog"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/server/media"
 	"github.com/ethanpil/portapixel/internal/server/releases"
 )
@@ -35,24 +37,31 @@ type Deps struct {
 	Log      *opslog.Log
 	Sessions *httpguard.Sessions
 	Limiter  *httpguard.Limiter
+	// ClientIP gives the address of a caller. See api.Deps.
+	ClientIP func(*http.Request) string
 
 	// DataDir is the directory that holds the database and the media. The health
 	// page reports its free space.
 	DataDir string
 	// StartedAt is when the server came up. The health page shows the uptime.
 	StartedAt time.Time
+	// Background is the life of the server. The release routes give it to the
+	// mirror and to the GitHub lister, so that a page that the admin leaves does
+	// not cancel work that the fleet needs.
+	Background func() context.Context
 
-	// Hosts gives the Host header allowlist.
-	Hosts func() []string
 	// CheckPassword compares a password with the stored hash.
 	CheckPassword func(password string) bool
 	// SetPassword writes a new admin password into server.toml.
 	SetPassword func(password string) error
 	// Settings gives the current settings.
 	Settings func() Settings
-	// SaveSettings writes the settings. The values that live in server.toml need
-	// a restart, and the answer says so.
+	// SaveSettings writes the settings.
 	SaveSettings func(s Settings) error
+	// FleetChanged says that a value of the manifest changed. The caller keeps
+	// those values in memory, so that a poll of a device costs no query for them,
+	// and this is how a write of the admin reaches that cache at once.
+	FleetChanged func()
 }
 
 // Routes gives the handler of /api/admin with its guards.
@@ -125,63 +134,30 @@ func (d Deps) Routes(mux *http.ServeMux) {
 	auth("POST /api/admin/password", d.postPassword)
 }
 
-// The helpers below mirror the ones in internal/server/api. The shapes
-// {"error": "..."} and {"error": "...", "fields": [...]} are the contract with
-// web/shared/api.js, and both route packages answer with the same shapes.
-
-// maxJSONBody is the largest JSON body that these routes read. A playlist of a
-// thousand items is under 100 kB.
-const maxJSONBody = 1 << 20
-
-func writeJSON(w http.ResponseWriter, code int, body any) {
-	data, err := json.Marshal(body)
-	if err != nil {
-		data = []byte(`{"error":"the server could not build the answer"}`)
-		code = http.StatusInternalServerError
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
-	w.Write(data)
-}
-
-func writeError(w http.ResponseWriter, code int, message string) {
-	writeJSON(w, code, map[string]string{"error": message})
-}
-
-func writeFields(w http.ResponseWriter, message string, fields db.Errors) {
-	writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
-		"error":  message,
-		"fields": fields,
-	})
-}
-
-func readJSON(w http.ResponseWriter, r *http.Request, into any) bool {
-	defer r.Body.Close()
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
-	if err := dec.Decode(into); err != nil {
-		writeError(w, http.StatusBadRequest, "the request body is not the JSON that this route needs: "+err.Error())
-		return false
-	}
-	return true
-}
-
-// ok is the answer of a call that only has to work.
-var ok = map[string]bool{"ok": true}
-
 // fail writes the answer of an error from the db package. One function holds the
 // mapping, so every route answers 404, 409 and 422 for the same reasons.
+//
+// An error that this function does not know answers 500 with a message of our own
+// and writes the detail to the log. A raw error of the database in the browser
+// tells a reader the names of our tables and the path of the file, and it gives an
+// admin nothing that they can act on.
 func fail(w http.ResponseWriter, err error) {
 	var fieldErrs db.Errors
 	switch {
 	case errors.As(err, &fieldErrs):
-		writeFields(w, "the request has a field that this server cannot use", fieldErrs)
+		httpjson.Fields(w, "the request has a field that this server cannot use", fieldErrs)
 	case errors.Is(err, db.ErrNotFound):
-		writeError(w, http.StatusNotFound, "there is no record with this name")
+		httpjson.Error(w, http.StatusNotFound, "there is no record with this name")
 	case errors.Is(err, db.ErrInUse):
-		writeError(w, http.StatusConflict, "something still uses this record")
+		httpjson.Error(w, http.StatusConflict, "something still uses this record")
+	case errors.Is(err, db.ErrDuplicate):
+		httpjson.Error(w, http.StatusConflict, "another record already has this name")
+	case errors.Is(err, db.ErrNotPending):
+		httpjson.Error(w, http.StatusConflict, "this screen does not wait for approval")
 	default:
-		writeError(w, http.StatusInternalServerError, err.Error())
+		slog.Error("an admin route failed", "error", err)
+		httpjson.Error(w, http.StatusInternalServerError,
+			"the server could not finish this request; the log holds the reason")
 	}
 }
 
@@ -190,7 +166,7 @@ func fail(w http.ResponseWriter, err error) {
 func pathID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
 	v, err := strconv.ParseInt(r.PathValue(name), 10, 64)
 	if err != nil || v <= 0 {
-		writeError(w, http.StatusBadRequest, "the "+name+" in the path is not a record number")
+		httpjson.Error(w, http.StatusBadRequest, "the "+name+" in the path is not a record number")
 		return 0, false
 	}
 	return v, true
@@ -198,3 +174,6 @@ func pathID(w http.ResponseWriter, r *http.Request, name string) (int64, bool) {
 
 // defaultPoll gives the poll interval of a device with no value of its own.
 func (d Deps) defaultPoll() int { return d.Settings().PollSeconds }
+
+// clientIP gives the address of the caller.
+func (d Deps) clientIP(r *http.Request) string { return d.ClientIP(r) }

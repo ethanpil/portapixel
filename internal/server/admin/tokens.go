@@ -5,7 +5,9 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 )
 
 // NewTokenView is the answer of POST /api/admin/tokens. It is the one time that
@@ -26,7 +28,7 @@ func (d Deps) getTokens(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"tokens": list})
+	httpjson.Write(w, http.StatusOK, map[string]any{"tokens": list})
 }
 
 // createToken makes an enrollment token and shows it one time.
@@ -40,14 +42,14 @@ func (d Deps) createToken(w http.ResponseWriter, r *http.Request) {
 		ExpiresAt string `json:"expires_at"`
 		MaxUses   int    `json:"max_uses"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	var expires time.Time
 	if body.ExpiresAt != "" {
 		t, err := time.Parse(time.RFC3339, body.ExpiresAt)
 		if err != nil {
-			writeFields(w, "the request has a field that this server cannot use",
+			httpjson.Fields(w, "the request has a field that this server cannot use",
 				db.Errors{{Field: "expires_at", Message: "must be a time such as 2026-12-31T23:59:59Z"}})
 			return
 		}
@@ -66,7 +68,7 @@ func (d Deps) createToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Log("token-create", "an enrollment token in "+body.Mode+" mode")
-	writeJSON(w, http.StatusOK, NewTokenView{
+	httpjson.Write(w, http.StatusOK, NewTokenView{
 		ID:    id,
 		Token: token,
 		TOML:  tomlBlock(d.Settings().PublicURL, token, d.defaultPoll()),
@@ -75,33 +77,18 @@ func (d Deps) createToken(w http.ResponseWriter, r *http.Request) {
 
 // tomlBlock makes the [server] block of portapixel.toml. The admin pastes it on
 // a card before the first boot, and the device pairs itself (D25).
+//
+// config.Quote writes the strings. It is the one TOML string writer of the
+// repository, so a value that the server writes and a value that the device
+// writes are escaped the same way.
 func tomlBlock(publicURL, token string, poll int) string {
 	if publicURL == "" {
 		publicURL = "https://signage.example.com"
 	}
 	return "[server]\n" +
-		"url = " + quote(publicURL) + "\n" +
-		"token = " + quote(token) + "\n" +
+		"url = " + config.Quote(publicURL) + "\n" +
+		"token = " + config.Quote(token) + "\n" +
 		"poll_seconds = " + strconv.Itoa(poll) + "\n"
-}
-
-// quote puts a string in the TOML basic form. A URL and a hex token hold no
-// character that needs an escape, but the value goes into a file that a parser
-// reads, so the quotation is not left to chance.
-func quote(s string) string {
-	out := make([]rune, 0, len(s)+2)
-	out = append(out, '"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			out = append(out, '\\', r)
-		case '\n', '\r', '\t':
-			out = append(out, ' ')
-		default:
-			out = append(out, r)
-		}
-	}
-	return string(append(out, '"'))
 }
 
 // revokeToken stops a token. A card that already paired keeps working.
@@ -115,7 +102,7 @@ func (d Deps) revokeToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Log("token-revoke", strconv.FormatInt(id, 10))
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // deleteToken removes the row of a token.
@@ -128,5 +115,5 @@ func (d Deps) deleteToken(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }

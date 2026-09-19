@@ -1,9 +1,11 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 )
 
 // getPlaylists lists the playlists with their items.
@@ -16,7 +18,7 @@ func (d Deps) getPlaylists(w http.ResponseWriter, r *http.Request) {
 	if list == nil {
 		list = []db.Playlist{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"playlists": list})
+	httpjson.Write(w, http.StatusOK, map[string]any{"playlists": list})
 }
 
 // getPlaylist gives one playlist in the shape of the shared editor.
@@ -30,7 +32,7 @@ func (d Deps) getPlaylist(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, p)
+	httpjson.Write(w, http.StatusOK, p)
 }
 
 // createPlaylist makes a playlist.
@@ -58,7 +60,7 @@ func (d Deps) savePlaylist(w http.ResponseWriter, r *http.Request, id int64) {
 		Shuffle    *bool             `json:"shuffle"`
 		Items      []db.PlaylistItem `json:"items"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	newID, err := d.DB.SavePlaylist(db.Playlist{
@@ -75,7 +77,7 @@ func (d Deps) savePlaylist(w http.ResponseWriter, r *http.Request, id int64) {
 		return
 	}
 	d.Log.Log("playlist-save", saved.Name)
-	writeJSON(w, http.StatusOK, saved)
+	httpjson.Write(w, http.StatusOK, saved)
 }
 
 // deletePlaylist removes a playlist. A playlist that a rule or a default names
@@ -86,15 +88,15 @@ func (d Deps) deletePlaylist(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.DB.DeletePlaylist(id); err != nil {
-		if err == db.ErrInUse {
-			writeError(w, http.StatusConflict,
+		if errors.Is(err, db.ErrInUse) {
+			httpjson.Error(w, http.StatusConflict,
 				"a group, a screen or a time rule still uses this playlist")
 			return
 		}
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // getPlaylistDevices answers "which devices get this playlist". The editor asks
@@ -113,5 +115,5 @@ func (d Deps) getPlaylistDevices(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"devices": n})
+	httpjson.Write(w, http.StatusOK, map[string]any{"devices": n})
 }

@@ -9,7 +9,9 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/server/media"
+	"github.com/ethanpil/portapixel/internal/store"
 )
 
 // FilenameHeader carries the name of an upload. The body is the file itself, so
@@ -21,11 +23,10 @@ type MediaListView struct {
 	Media []db.Media `json:"media"`
 	Files int        `json:"files"`
 	Bytes int64      `json:"bytes"`
-	// MaxBytes is the largest file that this server takes. Zero means "only the
-	// free space decides".
-	MaxBytes int64 `json:"max_bytes"`
-	// FreeBytes is the free space where the media live.
-	FreeBytes uint64 `json:"free_bytes"`
+	// FreeBytes is the free space where the media live. The store keeps
+	// ReserveBytes of it back, so the two numbers give the limit of an upload.
+	FreeBytes    uint64 `json:"free_bytes"`
+	ReserveBytes int64  `json:"reserve_bytes"`
 }
 
 // getMediaList lists the library.
@@ -41,9 +42,9 @@ func (d Deps) getMediaList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	free, _ := fsutil.FreeBytes(d.Media.Root())
-	writeJSON(w, http.StatusOK, MediaListView{
+	httpjson.Write(w, http.StatusOK, MediaListView{
 		Media: list, Files: files, Bytes: bytes,
-		MaxBytes: d.Media.MaxBytes, FreeBytes: free,
+		FreeBytes: free, ReserveBytes: media.Reserve,
 	})
 }
 
@@ -53,25 +54,26 @@ func (d Deps) getMediaList(w http.ResponseWriter, r *http.Request) {
 // The store streams the body to the disk and names the object by its hash, so an
 // upload of any size costs the same memory and a second upload of one file is one
 // object (D27).
+//
+// The body goes through the idle guard of httpjson. There is no read timeout on
+// the server, because one would cut a 1 GB upload; the guard instead ends a
+// connection that sends nothing for a minute.
 func (d Deps) postMedia(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	name := uploadName(r)
 	if name == "" {
-		writeFields(w, "the request has a field that this server cannot use",
+		httpjson.Fields(w, "the request has a field that this server cannot use",
 			db.Errors{{Field: "name", Message: "the upload needs the " + FilenameHeader + " header"}})
 		return
 	}
 
-	res, err := d.Media.Put(r.Body, name, r.ContentLength)
+	res, err := d.Media.Put(httpjson.StreamBody(w, r), name, r.ContentLength)
 	switch {
 	case errors.Is(err, media.ErrNoSpace):
-		writeError(w, http.StatusInsufficientStorage, err.Error())
-		return
-	case errors.Is(err, media.ErrTooLarge):
-		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
+		httpjson.Error(w, http.StatusInsufficientStorage, err.Error())
 		return
 	case err != nil:
-		writeError(w, http.StatusBadRequest, err.Error())
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -80,6 +82,16 @@ func (d Deps) postMedia(w http.ResponseWriter, r *http.Request) {
 		Width: res.Width, Height: res.Height, HasThumb: res.HasThumb,
 	}
 	if err := d.DB.AddMedia(row); err != nil {
+		// The blob is in the store and the row is not. Take the blob away again,
+		// unless the store held it before this upload: then it belongs to another
+		// row. A blob that stays behind is invisible to every page and counts
+		// against nothing, and the sweep of the store is the second net under it.
+		if !res.Duplicate {
+			if delErr := d.Media.Delete(res.SHA256); delErr != nil {
+				d.Log.Log("media-orphan", res.SHA256[:8]+
+					" is on the disk with no row; the sweep will take it")
+			}
+		}
 		fail(w, err)
 		return
 	}
@@ -93,7 +105,7 @@ func (d Deps) postMedia(w http.ResponseWriter, r *http.Request) {
 	} else {
 		d.Log.Log("media-upload", name)
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"media": saved, "duplicate": res.Duplicate})
+	httpjson.Write(w, http.StatusOK, map[string]any{"media": saved, "duplicate": res.Duplicate})
 }
 
 // uploadName reads the file name of an upload. web/shared/api.js sends it
@@ -114,15 +126,22 @@ func uploadName(r *http.Request) string {
 
 // deleteMedia removes an object. An object that a playlist holds stays, and the
 // answer names the playlists so the UI can say which ones (plan section 12).
+//
+// The row goes first and the file after it. The other order would leave a row that
+// names a file that is gone, which a device would try to download for ever. A file
+// that stays behind is an orphan that the sweep of the store takes; on Windows a
+// Range download that is in flight makes the delete fail, so that happens on a
+// normal day and not only after a crash.
 func (d Deps) deleteMedia(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha256")
-	if !db.ValidSHA256(sha) {
-		writeError(w, http.StatusBadRequest, "that is not a SHA-256 value of 64 lower case hex characters")
+	if !store.IsSHA256(sha) {
+		httpjson.Error(w, http.StatusBadRequest,
+			"that is not a SHA-256 value of 64 lower case hex characters")
 		return
 	}
 	users, err := d.DB.DeleteMedia(sha)
 	if errors.Is(err, db.ErrInUse) {
-		writeJSON(w, http.StatusConflict, map[string]any{
+		httpjson.Write(w, http.StatusConflict, map[string]any{
 			"error":     "this file is still in a playlist",
 			"playlists": users,
 		})
@@ -133,11 +152,10 @@ func (d Deps) deleteMedia(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.Media.Delete(sha); err != nil {
-		writeError(w, http.StatusInternalServerError, "the row is gone but the file is not: "+err.Error())
-		return
+		d.Log.Log("media-orphan", sha[:8]+" is still on the disk; the sweep will take it: "+err.Error())
 	}
 	d.Log.Log("media-delete", sha[:8])
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // getThumb serves the thumbnail of an object.
@@ -146,20 +164,26 @@ func (d Deps) deleteMedia(w http.ResponseWriter, r *http.Request) {
 // answer 404 here and the UI shows the icon of its own kind (D27).
 func (d Deps) getThumb(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha256")
-	if !db.ValidSHA256(sha) {
-		writeError(w, http.StatusBadRequest, "that is not a SHA-256 value of 64 lower case hex characters")
+	if !store.IsSHA256(sha) {
+		httpjson.Error(w, http.StatusBadRequest,
+			"that is not a SHA-256 value of 64 lower case hex characters")
 		return
 	}
-	f, err := os.Open(d.Media.ThumbPath(sha))
+	path, err := d.Media.ThumbPath(sha)
 	if err != nil {
-		writeError(w, http.StatusNotFound, "this file has no thumbnail")
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		httpjson.Error(w, http.StatusNotFound, "this file has no thumbnail")
 		return
 	}
 	defer f.Close()
 
 	info, err := f.Stat()
 	if err != nil || info.IsDir() {
-		writeError(w, http.StatusNotFound, "this file has no thumbnail")
+		httpjson.Error(w, http.StatusNotFound, "this file has no thumbnail")
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")

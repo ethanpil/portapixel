@@ -1,14 +1,13 @@
 package api
 
 import (
-	"encoding/json"
-	"net"
 	"net/http"
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/opslog"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/server/media"
 	"github.com/ethanpil/portapixel/internal/server/releases"
 )
@@ -26,11 +25,28 @@ type Deps struct {
 	Media  *media.Store
 	Mirror *releases.Mirror
 	Log    *opslog.Log
-	// Limiter counts the failed enroll attempts of each address.
+	// Limiter counts the enroll attempts of each address.
 	Limiter *httpguard.Limiter
-	// ServerName and DefaultPoll come from the settings.
-	ServerName  func() string
-	DefaultPoll func() int
+	// PendingLimiter counts the enroll requests that make a pending row. A
+	// waiting device polls with a good claim secret and does not count.
+	PendingLimiter *httpguard.Limiter
+	// ClientIP gives the address of a caller. The caller of this package decides
+	// the rule, because a reverse proxy changes the answer and the configuration
+	// names the proxies that the server believes.
+	ClientIP func(*http.Request) string
+	// Fleet gives the values that every manifest needs. The caller caches them,
+	// so a poll costs no query for them.
+	Fleet func() Fleet
+}
+
+// Fleet holds the values that the manifest needs and that no device row has.
+type Fleet struct {
+	// ServerName is the name that a device shows for this server.
+	ServerName string
+	// DefaultPoll is the poll interval of a device with no value of its own.
+	DefaultPoll int
+	// Release is the approved release, or nil when none goes out.
+	Release *db.Release
 }
 
 // Routes adds the device routes to a mux.
@@ -52,14 +68,15 @@ func (d Deps) Routes(mux *http.ServeMux) {
 func (d Deps) device(w http.ResponseWriter, r *http.Request) (db.Device, bool) {
 	token := bearer(r)
 	if token == "" {
-		WriteError(w, http.StatusUnauthorized, "this route needs the device token in an Authorization header")
+		httpjson.Error(w, http.StatusUnauthorized,
+			"this route needs the device token in an Authorization header")
 		return db.Device{}, false
 	}
 	dev, err := d.DB.DeviceByToken(token)
 	if err != nil {
 		// One answer for "no such token" and for "the token was revoked". A
 		// device that guesses tokens must learn nothing from the difference.
-		WriteError(w, http.StatusUnauthorized, "this device token is not valid")
+		httpjson.Error(w, http.StatusUnauthorized, "this device token is not valid")
 		return db.Device{}, false
 	}
 	return dev, true
@@ -74,59 +91,7 @@ func bearer(r *http.Request) string {
 	return strings.TrimSpace(v[7:])
 }
 
-// peerIP gives the address of the caller with no port. The enroll limiter and
-// the device row use it.
-func peerIP(r *http.Request) string {
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
-	}
-	return strings.Trim(r.RemoteAddr, "[]")
-}
-
-// maxJSONBody is the largest JSON body that these routes read. A heartbeat with
-// a long list of warnings is a few kilobytes.
-const maxJSONBody = 1 << 20
-
-// WriteJSON writes one JSON answer.
-//
-// This helper and the two below also exist in internal/server/admin. The shapes
-// {"error": "..."} and {"error": "...", "fields": [...]} are the contract with
-// web/shared/api.js, and the two route packages answer with the same shapes. A
-// change to one must go to the other; tests/server checks that they agree.
-func WriteJSON(w http.ResponseWriter, code int, body any) {
-	data, err := json.Marshal(body)
-	if err != nil {
-		// A value that cannot be JSON is a fault in our own code.
-		data = []byte(`{"error":"the server could not build the answer"}`)
-		code = http.StatusInternalServerError
-	}
-	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(code)
-	w.Write(data)
-}
-
-// WriteError writes {"error": "..."}.
-func WriteError(w http.ResponseWriter, code int, message string) {
-	WriteJSON(w, code, map[string]string{"error": message})
-}
-
-// WriteFields writes the 422 answer: {"error": "...", "fields": [...]}.
-func WriteFields(w http.ResponseWriter, message string, fields db.Errors) {
-	WriteJSON(w, http.StatusUnprocessableEntity, map[string]any{
-		"error":  message,
-		"fields": fields,
-	})
-}
-
-// ReadJSON reads a JSON body and writes the error answer when it is not the
-// shape that the route needs.
-func ReadJSON(w http.ResponseWriter, r *http.Request, into any) bool {
-	defer r.Body.Close()
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody))
-	if err := dec.Decode(into); err != nil {
-		WriteError(w, http.StatusBadRequest, "the request body is not the JSON that this route needs: "+err.Error())
-		return false
-	}
-	return true
-}
+// clientIP gives the address of the caller. One rule decides it for the enroll
+// limiter, the login limiter and the last_ip column, so a reverse proxy cannot make
+// the three disagree.
+func (d Deps) clientIP(r *http.Request) string { return d.ClientIP(r) }

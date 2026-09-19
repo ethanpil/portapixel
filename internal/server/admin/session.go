@@ -1,10 +1,10 @@
 package admin
 
 import (
-	"net"
 	"net/http"
-	"strings"
 
+	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/version"
 )
 
@@ -20,41 +20,41 @@ type SessionView struct {
 
 // postLogin checks the password and makes a session.
 func (d Deps) postLogin(w http.ResponseWriter, r *http.Request) {
-	ip := clientIP(r)
+	ip := d.clientIP(r)
 	if !d.Limiter.Allow(ip) {
-		writeError(w, http.StatusTooManyRequests, "too many attempts from this address; wait a minute")
+		httpjson.Error(w, http.StatusTooManyRequests, "too many attempts from this address; wait a minute")
 		return
 	}
 
 	var body struct {
 		Password string `json:"password"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		d.Limiter.Fail(ip)
 		return
 	}
 	if !d.CheckPassword(body.Password) {
 		d.Limiter.Fail(ip)
 		d.Log.Log("login-failed", "from "+ip)
-		writeError(w, http.StatusUnauthorized, "that password is not right")
+		httpjson.Error(w, http.StatusUnauthorized, "that password is not right")
 		return
 	}
 	d.Limiter.Reset(ip)
-	d.Sessions.Login(w)
+	d.Sessions.Login(w, r)
 	d.Log.Log("login", "from "+ip)
-	writeJSON(w, http.StatusOK, d.session(true))
+	httpjson.Write(w, http.StatusOK, d.session(true))
 }
 
 // postLogout ends the session.
 func (d Deps) postLogout(w http.ResponseWriter, r *http.Request) {
 	d.Sessions.Logout(w, r)
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // getSession says if the browser holds a session. It needs no session itself:
 // the answer to "am I logged in" must work when the answer is no.
 func (d Deps) getSession(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.session(d.Sessions.Valid(r)))
+	httpjson.Write(w, http.StatusOK, d.session(d.Sessions.Valid(r)))
 }
 
 func (d Deps) session(loggedIn bool) SessionView {
@@ -69,27 +69,52 @@ func (d Deps) session(loggedIn bool) SessionView {
 }
 
 // postPassword sets a new admin password.
+//
+// The route needs the password that is in use. A session cookie alone is not
+// enough: a browser that somebody left open, or one cross-site request that got
+// through, would otherwise change the one credential of the server. bcrypt does
+// the comparison, so a wrong answer costs the same time as a right one, and the
+// login limiter counts the wrong answers of this route as well.
+//
+// A password change drops every other session. "Change the password" is what
+// somebody does after a laptop went missing, and a session that stayed open would
+// make the change worth nothing.
 func (d Deps) postPassword(w http.ResponseWriter, r *http.Request) {
+	ip := d.clientIP(r)
+	if !d.Limiter.Allow(ip) {
+		httpjson.Error(w, http.StatusTooManyRequests, "too many attempts from this address; wait a minute")
+		return
+	}
+
 	var body struct {
+		Current  string `json:"current"`
 		Password string `json:"password"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
+		d.Limiter.Fail(ip)
 		return
 	}
-	if err := d.SetPassword(body.Password); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err.Error())
+	if !d.CheckPassword(body.Current) {
+		d.Limiter.Fail(ip)
+		d.Log.Log("password-failed", "a password change from "+ip+" gave the wrong current password")
+		// 403 and not 401. web/shared/api.js signs the admin out at a 401, and a
+		// wrong value in one field of a form is not a session that ended.
+		httpjson.Write(w, http.StatusForbidden, map[string]any{
+			"error": "the request has a field that this server cannot use",
+			"fields": db.Errors{{Field: "current",
+				Message: "that is not the password that this server uses now"}},
+		})
 		return
 	}
-	d.Log.Log("password", "the admin password changed")
-	writeJSON(w, http.StatusOK, ok)
-}
+	d.Limiter.Reset(ip)
 
-// clientIP gives the address of the caller with no port. httpguard cuts an
-// address the same way for its own limiter, but it keeps that helper to itself.
-// See the report: the helper belongs in the exported part of httpguard.
-func clientIP(r *http.Request) string {
-	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
-		return host
+	if err := d.SetPassword(body.Password); err != nil {
+		httpjson.Error(w, http.StatusUnprocessableEntity, err.Error())
+		return
 	}
-	return strings.Trim(r.RemoteAddr, "[]")
+	// The browser that made the change keeps its session. Every other one goes.
+	keep := d.Sessions.Login(w, r)
+	d.Sessions.DropAllExcept(keep)
+	d.Log.Log("password", "the admin password changed and the other sessions ended")
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }

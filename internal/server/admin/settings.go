@@ -1,30 +1,32 @@
 package admin
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 )
 
 // getSettings gives the settings of the server.
 func (d Deps) getSettings(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.Settings())
+	httpjson.Write(w, http.StatusOK, d.Settings())
 }
 
 // putSettings writes the settings.
 //
-// The server name and the poll interval go into the settings table and take
-// effect at once. The public URL goes into server.toml, because the Host
-// allowlist and the pairing block are built from it. The answer says which
-// values need a restart, so the UI can say it too.
+// Every value here takes effect at once. The Host allowlist comes from a function
+// that runs on each request, so a new public URL is live on the next one. Only the
+// listen address and the two TLS paths need a restart, and the admin UI cannot
+// change those.
 func (d Deps) putSettings(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		ServerName  string `json:"server_name"`
 		PollSeconds int    `json:"default_poll_seconds"`
 		PublicURL   string `json:"public_url"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 
@@ -33,30 +35,30 @@ func (d Deps) putSettings(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		errs = append(errs, db.FieldError{Field: "server_name", Message: "the server needs a name"})
 	}
-	if body.PollSeconds < 5 || body.PollSeconds > 86400 {
+	if body.PollSeconds < db.MinPollSeconds || body.PollSeconds > db.MaxPollSeconds {
 		errs = append(errs, db.FieldError{Field: "default_poll_seconds",
-			Message: "must be between 5 and 86400 seconds"})
+			Message: fmt.Sprintf("must be between %d and %d seconds",
+				db.MinPollSeconds, db.MaxPollSeconds)})
 	}
 	url := strings.TrimSpace(body.PublicURL)
 	if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		errs = append(errs, db.FieldError{Field: "public_url", Message: "must start with http:// or https://"})
 	}
 	if len(errs) > 0 {
-		writeFields(w, "the request has a field that this server cannot use", errs)
+		httpjson.Fields(w, "the request has a field that this server cannot use", errs)
 		return
 	}
 
-	old := d.Settings()
 	if err := d.SaveSettings(Settings{ServerName: name, PollSeconds: body.PollSeconds, PublicURL: url}); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		fail(w, err)
 		return
 	}
 	d.Log.Log("settings", "the server settings changed")
-	writeJSON(w, http.StatusOK, map[string]any{
+	httpjson.Write(w, http.StatusOK, map[string]any{
 		"ok": true,
-		// A change of the public URL changes the Host allowlist, which is built
-		// when the server starts.
-		"restart_needed": url != old.PublicURL,
+		// Nothing here needs a restart. The field stays in the answer, because
+		// web/shared reads it.
+		"restart_needed": false,
 		"settings":       d.Settings(),
 	})
 }

@@ -1,11 +1,13 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 )
 
 // getGroups lists the groups with the number of devices in each one.
@@ -18,7 +20,7 @@ func (d Deps) getGroups(w http.ResponseWriter, r *http.Request) {
 	if groups == nil {
 		groups = []db.Group{}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"groups": groups})
+	httpjson.Write(w, http.StatusOK, map[string]any{"groups": groups})
 }
 
 // createGroup makes a group.
@@ -26,22 +28,35 @@ func (d Deps) createGroup(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	id, err := d.DB.CreateGroup(body.Name)
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
-			writeFields(w, "the request has a field that this server cannot use",
+		// The name is unique in the schema, and the sentinel comes from the result
+		// code of SQLite. A check on the text of the message would turn a busy
+		// database into "another group has this name" the day that the wording
+		// moves.
+		if errors.Is(err, db.ErrDuplicate) {
+			httpjson.Fields(w, "the request has a field that this server cannot use",
 				db.Errors{{Field: "name", Message: "another group already has this name"}})
 			return
 		}
-		writeFields(w, "the request has a field that this server cannot use",
-			db.Errors{{Field: "name", Message: err.Error()}})
+		var fieldErrs db.Errors
+		if errors.As(err, &fieldErrs) {
+			httpjson.Fields(w, "the request has a field that this server cannot use", fieldErrs)
+			return
+		}
+		if err.Error() == "a group needs a name" {
+			httpjson.Fields(w, "the request has a field that this server cannot use",
+				db.Errors{{Field: "name", Message: err.Error()}})
+			return
+		}
+		fail(w, err)
 		return
 	}
 	d.Log.Log("group-create", body.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+	httpjson.Write(w, http.StatusOK, map[string]any{"id": id})
 }
 
 // updateGroup sets the name, the default playlist and the screen rule of a group.
@@ -57,17 +72,17 @@ func (d Deps) updateGroup(w http.ResponseWriter, r *http.Request) {
 		ScreenOff         string   `json:"screen_off"`
 		ScreenDays        []string `json:"screen_days"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	days := strings.Join(db.CleanDays(body.ScreenDays), ",")
 	if err := db.ValidScreenRule(body.ScreenOn, body.ScreenOff, days); err != nil {
-		writeFields(w, "the request has a field that this server cannot use",
+		httpjson.Fields(w, "the request has a field that this server cannot use",
 			db.Errors{{Field: "screen_on", Message: err.Error()}})
 		return
 	}
 	if body.DefaultPlaylistID != 0 {
-		if _, err := d.DB.Playlist(body.DefaultPlaylistID); err != nil {
+		if _, err := d.DB.PlaylistNoCount(body.DefaultPlaylistID); err != nil {
 			fail(w, err)
 			return
 		}
@@ -77,15 +92,20 @@ func (d Deps) updateGroup(w http.ResponseWriter, r *http.Request) {
 		ScreenOn: body.ScreenOn, ScreenOff: body.ScreenOff, ScreenDays: days,
 	})
 	if err != nil {
-		if strings.Contains(err.Error(), "UNIQUE") {
-			writeFields(w, "the request has a field that this server cannot use",
+		if errors.Is(err, db.ErrDuplicate) {
+			httpjson.Fields(w, "the request has a field that this server cannot use",
 				db.Errors{{Field: "name", Message: "another group already has this name"}})
+			return
+		}
+		if err.Error() == "a group needs a name" {
+			httpjson.Fields(w, "the request has a field that this server cannot use",
+				db.Errors{{Field: "name", Message: err.Error()}})
 			return
 		}
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // deleteGroup removes an empty group. A group that holds devices stays: the
@@ -96,15 +116,15 @@ func (d Deps) deleteGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := d.DB.DeleteGroup(id); err != nil {
-		if err == db.ErrInUse {
-			writeError(w, http.StatusConflict, "this group still holds screens; move them first")
+		if errors.Is(err, db.ErrInUse) {
+			httpjson.Error(w, http.StatusConflict, "this group still holds screens; move them first")
 			return
 		}
 		fail(w, err)
 		return
 	}
 	d.Log.Log("group-delete", strconv.FormatInt(id, 10))
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // getAssignments lists the rules of one group or of one device, or all of them.
@@ -113,7 +133,7 @@ func (d Deps) getAssignments(w http.ResponseWriter, r *http.Request) {
 	if v := r.URL.Query().Get("group_id"); v != "" {
 		n, err := strconv.ParseInt(v, 10, 64)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, "group_id is not a record number")
+			httpjson.Error(w, http.StatusBadRequest, "group_id is not a record number")
 			return
 		}
 		groupID = n
@@ -123,7 +143,7 @@ func (d Deps) getAssignments(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"assignments": list})
+	httpjson.Write(w, http.StatusOK, map[string]any{"assignments": list})
 }
 
 // createAssignment makes one schedule rule.
@@ -137,7 +157,7 @@ func (d Deps) createAssignment(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"id": id})
+	httpjson.Write(w, http.StatusOK, map[string]any{"id": id})
 }
 
 // updateAssignment replaces one schedule rule.
@@ -154,7 +174,7 @@ func (d Deps) updateAssignment(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // deleteAssignment removes one schedule rule.
@@ -167,7 +187,7 @@ func (d Deps) deleteAssignment(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // readAssignment reads the body of a rule and checks that its playlist and its
@@ -182,11 +202,11 @@ func (d Deps) readAssignment(w http.ResponseWriter, r *http.Request, id int64) (
 		End        string   `json:"end"`
 		Priority   int      `json:"priority"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return db.Assignment{}, false
 	}
 	if body.PlaylistID != 0 {
-		if _, err := d.DB.Playlist(body.PlaylistID); err != nil {
+		if _, err := d.DB.PlaylistNoCount(body.PlaylistID); err != nil {
 			fail(w, err)
 			return db.Assignment{}, false
 		}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/server/media"
 	"github.com/ethanpil/portapixel/internal/version"
 )
@@ -93,6 +94,7 @@ func (d Deps) getHealth(w http.ResponseWriter, r *http.Request) {
 	} else {
 		view.MirrorState = db.MirrorIdle
 	}
+	// The pending list is not a device row, so Stats counts it on its own.
 	if working := d.Mirror.Working(); working != "" {
 		view.MirrorState = db.MirrorWorking
 	}
@@ -101,7 +103,7 @@ func (d Deps) getHealth(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	httpjson.Write(w, http.StatusOK, view)
 }
 
 // postIntegrity runs PRAGMA integrity_check and keeps the answer.
@@ -115,7 +117,7 @@ func (d Deps) postIntegrity(w http.ResponseWriter, r *http.Request) {
 	d.DB.SetSetting(settingIntegrityAt, now.Format(time.RFC3339))
 
 	d.Log.Log("integrity-check", result)
-	writeJSON(w, http.StatusOK, map[string]any{"integrity": result, "integrity_at": now})
+	httpjson.Write(w, http.StatusOK, map[string]any{"integrity": result, "integrity_at": now})
 }
 
 // parseStamp reads a time that a setting holds. A missing or bad value gives the

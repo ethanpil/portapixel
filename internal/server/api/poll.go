@@ -1,10 +1,12 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 )
 
 // getManifest answers GET /api/v1/manifest. db.Manifest holds the resolution
@@ -14,21 +16,23 @@ func (d Deps) getManifest(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	fleet := d.Fleet()
 	m, err := d.DB.Manifest(dev, db.ManifestOptions{
-		ServerName:  d.ServerName(),
-		DefaultPoll: d.DefaultPoll(),
+		ServerName:  fleet.ServerName,
+		DefaultPoll: fleet.DefaultPoll,
 		MediaBase:   MediaBase,
 		ReleaseBase: ReleaseBase,
+		Release:     fleet.Release,
 	})
 	if err != nil {
 		d.Log.Log("manifest-error", dev.ID+": "+err.Error())
-		WriteError(w, http.StatusInternalServerError, "the server could not build the manifest")
+		httpjson.Error(w, http.StatusInternalServerError, "the server could not build the manifest")
 		return
 	}
 	// A poll counts as contact. Without this a device that polls but sends no
 	// heartbeat would look offline on the dashboard.
-	d.DB.TouchSeen(dev.ID, peerIP(r))
-	WriteJSON(w, http.StatusOK, m)
+	d.DB.TouchSeen(dev.ID, d.clientIP(r))
+	httpjson.Write(w, http.StatusOK, m)
 }
 
 // postHeartbeat answers POST /api/v1/heartbeat. db.Heartbeat holds the identity
@@ -39,13 +43,19 @@ func (d Deps) postHeartbeat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var hb manifest.Heartbeat
-	if !ReadJSON(w, r, &hb) {
+	if !httpjson.Read(w, r, &hb) {
 		return
 	}
-	if err := d.DB.Heartbeat(dev.ID, hb, peerIP(r)); err != nil {
+	err := d.DB.Heartbeat(dev.ID, hb, d.clientIP(r))
+	var fieldErrs db.Errors
+	switch {
+	case errors.As(err, &fieldErrs):
+		httpjson.Fields(w, "the request has a field that this server cannot use", fieldErrs)
+		return
+	case err != nil:
 		d.Log.Log("heartbeat-error", dev.ID+": "+err.Error())
-		WriteError(w, http.StatusInternalServerError, "the server could not write this heartbeat")
+		httpjson.Error(w, http.StatusInternalServerError, "the server could not write this heartbeat")
 		return
 	}
-	WriteJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }

@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 )
 
 // DeviceListView is the answer of GET /api/admin/devices. It carries the totals
@@ -29,17 +30,32 @@ type DeviceView struct {
 }
 
 // getDevices lists the fleet.
+//
+// A request that waits for approval has no devices row: it lives in its own table,
+// so that an enroll request can never change a screen that works. Such a request
+// goes into the same list with Pending set, and the pending rows come first. The UI
+// keeps one shape for "every screen that I must look at".
 func (d Deps) getDevices(w http.ResponseWriter, r *http.Request) {
 	devices, err := d.DB.Devices()
 	if err != nil {
 		fail(w, err)
 		return
 	}
+	pending, err := d.DB.PendingEnrollments()
+	if err != nil {
+		fail(w, err)
+		return
+	}
 	poll, now := d.defaultPoll(), time.Now()
 	view := DeviceListView{Devices: []db.Device{}}
+	for _, p := range pending {
+		view.Devices = append(view.Devices, pendingAsDevice(p))
+	}
 	for _, dev := range devices {
 		dev.State = db.State(dev, poll, now)
 		view.Devices = append(view.Devices, dev)
+	}
+	for _, dev := range view.Devices {
 		view.Totals.Screens++
 		switch dev.State {
 		case db.StateOnline:
@@ -50,13 +66,42 @@ func (d Deps) getDevices(w http.ResponseWriter, r *http.Request) {
 			view.Totals.NeedsALook++
 		}
 	}
-	writeJSON(w, http.StatusOK, view)
+	httpjson.Write(w, http.StatusOK, view)
+}
+
+// pendingAsDevice shows one waiting request in the shape of a device row.
+func pendingAsDevice(p db.PendingEnrollment) db.Device {
+	return db.Device{
+		ID:           p.DeviceID,
+		Name:         p.Name,
+		HardwareID:   p.HardwareID,
+		Version:      p.Version,
+		LastIP:       p.IP,
+		CreatedAt:    p.CreatedAt,
+		Pending:      true,
+		PendingCode:  p.PairingCode,
+		PendingID:    p.ID,
+		CollidesWith: p.CollidesWith,
+		State:        db.StatePending,
+	}
 }
 
 // getDevice gives one device with its rules and its recent commands.
 func (d Deps) getDevice(w http.ResponseWriter, r *http.Request) {
-	dev, err := d.DB.Device(r.PathValue("id"))
+	id := r.PathValue("id")
+	dev, err := d.DB.Device(id)
 	if err != nil {
+		// A request that waits has no devices row yet. The detail page of the
+		// pending card asks for it by the same path, so it answers here.
+		if p, pendErr := d.DB.PendingByDevice(id); pendErr == nil {
+			httpjson.Write(w, http.StatusOK, DeviceView{
+				Device:           pendingAsDevice(p),
+				Assignments:      []db.Assignment{},
+				GroupAssignments: []db.Assignment{},
+				Commands:         []db.Command{},
+			})
+			return
+		}
 		fail(w, err)
 		return
 	}
@@ -67,6 +112,7 @@ func (d Deps) getDevice(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
+	view.GroupAssignments = []db.Assignment{}
 	if dev.GroupID != 0 {
 		if g, err := d.DB.Group(dev.GroupID); err == nil {
 			view.Group = &g
@@ -80,7 +126,7 @@ func (d Deps) getDevice(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, view)
+	httpjson.Write(w, http.StatusOK, view)
 }
 
 // renameDevice sets the display name.
@@ -88,12 +134,12 @@ func (d Deps) renameDevice(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	name := strings.TrimSpace(body.Name)
 	if name == "" {
-		writeFields(w, "the request has a field that this server cannot use",
+		httpjson.Fields(w, "the request has a field that this server cannot use",
 			db.Errors{{Field: "name", Message: "a screen needs a name"}})
 		return
 	}
@@ -102,7 +148,7 @@ func (d Deps) renameDevice(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Log("device-rename", r.PathValue("id")+" is now "+name)
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // moveDevice puts the device in a group. A group_id of 0 takes it out of every
@@ -111,7 +157,7 @@ func (d Deps) moveDevice(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		GroupID int64 `json:"group_id"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	if body.GroupID != 0 {
@@ -124,7 +170,7 @@ func (d Deps) moveDevice(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // setOverrides sets the per-device default playlist and screen rule. They win
@@ -136,17 +182,17 @@ func (d Deps) setOverrides(w http.ResponseWriter, r *http.Request) {
 		ScreenOff         string   `json:"screen_off"`
 		ScreenDays        []string `json:"screen_days"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	days := strings.Join(db.CleanDays(body.ScreenDays), ",")
 	if err := db.ValidScreenRule(body.ScreenOn, body.ScreenOff, days); err != nil {
-		writeFields(w, "the request has a field that this server cannot use",
+		httpjson.Fields(w, "the request has a field that this server cannot use",
 			db.Errors{{Field: "screen_on", Message: err.Error()}})
 		return
 	}
 	if body.DefaultPlaylistID != 0 {
-		if _, err := d.DB.Playlist(body.DefaultPlaylistID); err != nil {
+		if _, err := d.DB.PlaylistNoCount(body.DefaultPlaylistID); err != nil {
 			fail(w, err)
 			return
 		}
@@ -156,42 +202,60 @@ func (d Deps) setOverrides(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // deleteDevice removes the screen. The token goes with the row, so the device
-// must enroll again before this server answers it.
+// must enroll again before this server answers it. A request that only waits for
+// approval goes away with its row in the pending list.
 func (d Deps) deleteDevice(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if err := d.DB.DeleteDevice(id); err != nil {
+	err := d.DB.DeleteDevice(id)
+	if err != nil {
+		if p, pendErr := d.DB.PendingByDevice(id); pendErr == nil {
+			if rejectErr := d.DB.RejectPending(p.ID); rejectErr != nil {
+				fail(w, rejectErr)
+				return
+			}
+			d.Log.Log("device-delete", id+" waited for approval and is gone")
+			httpjson.Write(w, http.StatusOK, httpjson.OK)
+			return
+		}
 		fail(w, err)
 		return
 	}
 	d.Log.Log("device-delete", id+" is gone; its token is revoked")
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
-// approveDevice lets a pending device in by its ID.
+// approveDevice lets a waiting request in by the device ID that it asks for.
 func (d Deps) approveDevice(w http.ResponseWriter, r *http.Request) {
-	d.approve(w, r, r.PathValue("id"))
-}
-
-// approveByCode lets a pending device in by the code on its screen. That is what
-// a person reads, so the UI approves by code (D25).
-func (d Deps) approveByCode(w http.ResponseWriter, r *http.Request) {
-	dev, err := d.DB.DeviceByCode(r.PathValue("code"))
+	p, err := d.DB.PendingByDevice(r.PathValue("id"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	d.approve(w, r, dev.ID)
+	d.approve(w, r, p)
 }
 
-func (d Deps) approve(w http.ResponseWriter, r *http.Request, id string) {
+// approveByCode lets a waiting request in by the code on its screen. That is what
+// a person reads, so the UI approves by code (D25).
+func (d Deps) approveByCode(w http.ResponseWriter, r *http.Request) {
+	p, err := d.DB.PendingByCode(r.PathValue("code"))
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	d.approve(w, r, p)
+}
+
+func (d Deps) approve(w http.ResponseWriter, r *http.Request, p db.PendingEnrollment) {
 	var body struct {
 		GroupID int64 `json:"group_id"`
 	}
-	if !readJSON(w, r, &body) {
+	// Every field is optional, so an empty body is an empty object. The UI sends
+	// no body from the "approve" button of the pending card.
+	if !httpjson.ReadOptional(w, r, &body) {
 		return
 	}
 	if body.GroupID != 0 {
@@ -200,42 +264,49 @@ func (d Deps) approve(w http.ResponseWriter, r *http.Request, id string) {
 			return
 		}
 	}
-	if err := d.DB.Approve(id, body.GroupID); err != nil {
+	if err := d.DB.ApprovePending(p.ID, body.GroupID); err != nil {
 		fail(w, err)
 		return
 	}
-	d.Log.Log("device-approve", id+" may join; it gets its token on its next call")
-	writeJSON(w, http.StatusOK, ok)
+	detail := p.DeviceID + " may join; it gets its token on its next call"
+	if p.CollidesWith != "" {
+		detail = p.DeviceID + " may join; the token of the machine that held this ID is revoked"
+	}
+	d.Log.Log("device-approve", detail)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
-// rejectDevice turns a pending device away by its ID.
+// rejectDevice turns a waiting request away by the device ID that it asks for.
 func (d Deps) rejectDevice(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if err := d.DB.Reject(id); err != nil {
-		fail(w, err)
-		return
-	}
-	d.Log.Log("device-reject", id+" was turned away")
-	writeJSON(w, http.StatusOK, ok)
-}
-
-// rejectByCode turns a pending device away by its code.
-func (d Deps) rejectByCode(w http.ResponseWriter, r *http.Request) {
-	dev, err := d.DB.DeviceByCode(r.PathValue("code"))
+	p, err := d.DB.PendingByDevice(r.PathValue("id"))
 	if err != nil {
 		fail(w, err)
 		return
 	}
-	if err := d.DB.Reject(dev.ID); err != nil {
+	d.reject(w, p)
+}
+
+// rejectByCode turns a waiting request away by its code.
+func (d Deps) rejectByCode(w http.ResponseWriter, r *http.Request) {
+	p, err := d.DB.PendingByCode(r.PathValue("code"))
+	if err != nil {
 		fail(w, err)
 		return
 	}
-	d.Log.Log("device-reject", dev.ID+" was turned away")
-	writeJSON(w, http.StatusOK, ok)
+	d.reject(w, p)
+}
+
+func (d Deps) reject(w http.ResponseWriter, p db.PendingEnrollment) {
+	if err := d.DB.RejectPending(p.ID); err != nil {
+		fail(w, err)
+		return
+	}
+	d.Log.Log("device-reject", p.DeviceID+" was turned away")
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // confirmHardware is the one click of D21: the admin agrees that the card moved
-// into another box.
+// into another box. The server stores the new hardware ID now and not before.
 func (d Deps) confirmHardware(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := d.DB.ConfirmHardware(id); err != nil {
@@ -243,7 +314,7 @@ func (d Deps) confirmHardware(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Log("hardware-confirm", id+": the new hardware is confirmed")
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // resolveConflict clears a clone conflict. It revokes the token, so both boxes
@@ -255,7 +326,7 @@ func (d Deps) resolveConflict(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Log("conflict-resolve", id+": the token is revoked; the device must pair again")
-	writeJSON(w, http.StatusOK, ok)
+	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
 // queueCommand puts one command in the queue of one device. The device runs it
@@ -265,7 +336,7 @@ func (d Deps) queueCommand(w http.ResponseWriter, r *http.Request) {
 		Type string            `json:"type"`
 		Args map[string]string `json:"args"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	id := r.PathValue("id")
@@ -279,7 +350,7 @@ func (d Deps) queueCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Log("command", body.Type+" for "+id)
-	writeJSON(w, http.StatusOK, map[string]any{"id": cmdID})
+	httpjson.Write(w, http.StatusOK, map[string]any{"id": cmdID})
 }
 
 // queueGroupCommand puts one command in the queue of every device of a group.
@@ -292,7 +363,7 @@ func (d Deps) queueGroupCommand(w http.ResponseWriter, r *http.Request) {
 		Type string            `json:"type"`
 		Args map[string]string `json:"args"`
 	}
-	if !readJSON(w, r, &body) {
+	if !httpjson.Read(w, r, &body) {
 		return
 	}
 	g, err := d.DB.Group(id)
@@ -306,7 +377,7 @@ func (d Deps) queueGroupCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Log.Log("command", body.Type+" for the group "+g.Name)
-	writeJSON(w, http.StatusOK, map[string]any{"queued": n})
+	httpjson.Write(w, http.StatusOK, map[string]any{"queued": n})
 }
 
 // getCommands gives the recent commands of one device with their state.
@@ -316,5 +387,5 @@ func (d Deps) getCommands(w http.ResponseWriter, r *http.Request) {
 		fail(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"commands": commands})
+	httpjson.Write(w, http.StatusOK, map[string]any{"commands": commands})
 }
