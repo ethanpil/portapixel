@@ -6,7 +6,7 @@
    pages/ and gets the same small context object.
 */
 
-import { h, fill, renderShell, route, confirmDialog } from '/shared/ui.js';
+import { h, fill, renderShell, route, confirmDialog, closeModal } from '/shared/ui.js';
 import { api, UNAUTHORIZED } from '/shared/api.js';
 import { createStore } from './store.js';
 import * as dashboard from './pages/dashboard.js';
@@ -52,12 +52,19 @@ boot();
 
 async function boot() {
   let authenticated = false;
+  let note = '';
   try {
     authenticated = !!(await api('GET', '/api/session')).authenticated;
-  } catch {
+  } catch (err) {
+    // A 421 or a network fault is not "your session ended". Say which one it was.
     authenticated = false;
+    if (err.status !== 401) {
+      note = err.status === 421
+        ? 'This device does not answer to this address. Use its name or its IP address on the network.'
+        : `The device did not answer: ${err.message}`;
+    }
   }
-  if (authenticated) start(); else showLogin();
+  if (authenticated) start(); else showLogin(note);
 }
 
 /* ------------------------------------------------------------------- login */
@@ -66,6 +73,7 @@ async function showLogin(note) {
   signedIn = false;
   guard = null;
   store.stop();
+  closeModal();
   // Take the page down before the form goes up. A page that stayed mounted
   // would keep its own timers running and every one of them would ask again
   // and be refused again.
@@ -193,6 +201,7 @@ function enter(name) {
     if (goingBack) { goingBack = false; return; }
     if (guard && guard() && name !== at) { askToLeave(); return; }
 
+    closeModal();
     if (page && page.destroy) page.destroy();
     page = null;
     guard = null;

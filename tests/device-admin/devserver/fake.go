@@ -35,6 +35,8 @@ type fake struct {
 	pair      string
 	serverURL string
 	code      string
+	// syncError stands in for a sync that did not fit, so the banner can be seen.
+	syncError string
 	// install is the phase list that the event stream walks through.
 	installing bool
 }
@@ -49,11 +51,9 @@ func (f *fake) handle(w http.ResponseWriter, r *http.Request, daemon string) boo
 		f.status(w, r, daemon)
 	case r.URL.Path == "/api/pair" && r.Method == http.MethodGet:
 		f.mu.Lock()
-		defer f.mu.Unlock()
-		writeJSON(w, map[string]any{
-			"status": f.pair, "server_url": f.serverURL,
-			"server_name": "Ridgeline Signage", "pairing_code": f.code,
-		})
+		out := f.pairState()
+		f.mu.Unlock()
+		writeJSON(w, out)
 	case r.URL.Path == "/api/pair" && r.Method == http.MethodPost:
 		f.startPairing(w, r)
 	case r.URL.Path == "/api/pair" && r.Method == http.MethodDelete:
@@ -136,6 +136,66 @@ func (f *fake) status(w http.ResponseWriter, r *http.Request, daemon string) {
 	writeJSON(w, out)
 }
 
+// pairState builds the whole PairState, the way the daemon does. GET and POST
+// answer the same object, so the two must come from one place: a POST that
+// answered only {status, pairing_code} hid the insecure-address warning and the
+// sync error from the UI, and the UI then looked right against the fake and wrong
+// against the daemon. Call it with the lock held.
+func (f *fake) pairState() map[string]any {
+	out := map[string]any{
+		"status":     f.pair,
+		"server_url": f.serverURL,
+	}
+	if f.pair != "unpaired" {
+		out["server_name"] = "Ridgeline Signage"
+	}
+	if f.code != "" {
+		out["pairing_code"] = f.code
+	}
+	if f.pair == "paired" {
+		out["last_sync"] = time.Now().Add(-40 * time.Second).Format(time.RFC3339)
+	}
+	if f.syncError != "" {
+		out["sync_error"] = f.syncError
+	}
+	// The daemon raises this for an http:// address that is not loopback and not
+	// on a private network (ARCHITECTURE 6b). The fake answers the same rule, so
+	// that the warning banner can be driven with no server at all.
+	if insecureURL(f.serverURL) {
+		out["insecure"] = true
+	}
+	return out
+}
+
+// insecureURL is the rule of syncer.InsecureURL, in the words that a fake needs:
+// http:// on a host that is not loopback and not a private address.
+func insecureURL(raw string) bool {
+	if !strings.HasPrefix(strings.ToLower(raw), "http://") {
+		return false
+	}
+	host := strings.TrimPrefix(strings.TrimPrefix(raw, "http://"), "HTTP://")
+	if i := strings.IndexAny(host, "/:?#"); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.ToLower(host)
+	switch {
+	case host == "localhost" || strings.HasSuffix(host, ".local"):
+		return false
+	case strings.HasPrefix(host, "127.") || strings.HasPrefix(host, "10."):
+		return false
+	case strings.HasPrefix(host, "192.168.") || strings.HasPrefix(host, "169.254."):
+		return false
+	case host == "[::1]" || host == "::1":
+		return false
+	}
+	for n := 16; n <= 31; n++ {
+		if strings.HasPrefix(host, fmt.Sprintf("172.%d.", n)) {
+			return false
+		}
+	}
+	return true
+}
+
 func (f *fake) startPairing(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		URL   string `json:"url"`
@@ -146,9 +206,17 @@ func (f *fake) startPairing(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.serverURL = body.URL
+	f.syncError = ""
+	// The daemon refuses the mask: it is what GET /api/config shows for a saved
+	// secret, and it is never a token. The UI must not send it, so the fake says
+	// so loudly if it ever does.
+	if body.Token == "********" {
+		writeError(w, http.StatusBadRequest, "the token is the mask of a saved secret, not a token")
+		return
+	}
 	if body.Token != "" {
 		f.pair, f.code = "paired", ""
-		writeJSON(w, map[string]any{"status": "paired"})
+		writeJSON(w, f.pairState())
 		return
 	}
 	f.pair, f.code = "pending", "K7M2QP"
@@ -162,7 +230,7 @@ func (f *fake) startPairing(w http.ResponseWriter, r *http.Request) {
 		}
 		f.mu.Unlock()
 	}()
-	writeJSON(w, map[string]any{"status": "pending", "pairing_code": f.code})
+	writeJSON(w, f.pairState())
 }
 
 // startInstall checks the confirmation the same way that the daemon does: the
@@ -240,6 +308,15 @@ func writeJSON(w http.ResponseWriter, body any) {
 	data, _ := json.Marshal(body)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
+	w.Write(data)
+}
+
+// writeError answers the {error} shape of the daemon.
+func writeError(w http.ResponseWriter, code int, message string) {
+	data, _ := json.Marshal(map[string]string{"error": message})
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
 	w.Write(data)
 }
 

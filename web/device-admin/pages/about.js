@@ -8,9 +8,10 @@
 import {
   h, fill, toast, banner, badge, factList, progress, spinner,
   confirmDialog, typedConfirm, fmtBytes, fmtDuration,
+  card, pageHead, setText, setShown, errorText,
 } from '/shared/ui.js';
 import { api, sse } from '/shared/api.js';
-import { card, pageHead, setText, setShown, errorText, notInThisBuild } from '../util.js';
+import { notInThisBuild } from '../util.js';
 
 export function mount(main, ctx) {
   let gone = false;
@@ -289,6 +290,9 @@ export function mount(main, ctx) {
       fill(jobDone, notInThisBuild(err) ? notYet('Installing onto a disk') : banner({ kind: 'danger', title: 'The install did not start', body: errorText(err) }));
       return;
     }
+    /* The typed confirmation and the POST are two waits. A person who left this
+       page in that time must not get a stream that nothing ever closes. */
+    if (gone) return;
     watchInstall(d);
   }
 

@@ -5,12 +5,12 @@
    buttons, and the week grid under them shows what the order adds up to.
 */
 
-import { h, fill, toast, banner, icon } from '/shared/ui.js';
-import { api } from '/shared/api.js';
 import {
-  card, pageHead, setText, errorText, dayChips, daysInWords,
-  deviceClock, inWindow,
-} from '../util.js';
+  h, fill, toast, banner, icon,
+  card, pageHead, setText, errorText, dayChips, daysInWords, inWindow,
+} from '/shared/ui.js';
+import { api } from '/shared/api.js';
+import { deviceClock } from '../util.js';
 
 export function mount(main, ctx) {
   let cfg = null;              // the whole configuration, so a save keeps everything
@@ -220,16 +220,16 @@ export function mount(main, ctx) {
       renderRows();
     };
 
-    const row = h('div', { class: 'dv-rule' },
-      h('div', { class: 'dv-rule__n', text: `${i + 1}` }),
-      h('label', { class: 'pp-label dv-rule__pl' }, 'Play this', playlistSelect),
-      h('div', { class: 'dv-rule__when' }, h('div', { class: 'pp-label', text: 'On these days' }),
+    const row = h('div', { class: 'pp-rule' },
+      h('div', { class: 'pp-rule__n', text: `${i + 1}` }),
+      h('label', { class: 'pp-label pp-rule__pl' }, 'Play this', playlistSelect),
+      h('div', { class: 'pp-rule__when' }, h('div', { class: 'pp-label', text: 'On these days' }),
         h('div', { style: { 'margin-top': '5px' } }, chips)),
       h('div', null, h('div', { class: 'pp-label', text: 'Between' }),
-        h('div', { class: 'dv-rule__times', style: { 'margin-top': '5px' } },
+        h('div', { class: 'pp-rule__times', style: { 'margin-top': '5px' } },
           startIn, endIn,
           h('label', { class: 'pp-status pp-small', style: { gap: '5px' } }, allDay, 'All day'))),
-      h('div', { class: 'dv-rule__acts' },
+      h('div', { class: 'pp-rule__acts' },
         h('button', {
           type: 'button', class: 'pp-btn pp-btn--icon', 'aria-label': `Move rule ${i + 1} up`,
           disabled: paired || i === 0, onClick: () => move(i - 1),
@@ -285,27 +285,27 @@ export function mount(main, ctx) {
      middle of that hour, which is the reading a person wants from a picture. */
   function renderWeek() {
     const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const grid = h('div', { class: 'dv-week' });
+    const grid = h('div', { class: 'pp-week' });
     for (let d = 0; d < 7; d++) {
-      const hours = h('div', { class: 'dv-week__hours' });
+      const hours = h('div', { class: 'pp-week__hours' });
       for (let hour = 0; hour < 24; hour++) {
         const minute = hour * 60 + 30;
         const hit = rules.findIndex((r) => inWindow(r.start, r.end, minute, d, r.days));
         hours.append(h('span', {
-          class: `dv-week__cell${hit >= 0 ? ' dv-week__cell--on' : ''}`,
+          class: `pp-week__cell${hit >= 0 ? ' pp-week__cell--on' : ''}`,
           title: hit >= 0
             ? `${labels[d]} ${String(hour).padStart(2, '0')}:00 — rule ${hit + 1}, ${titleOf(rules[hit].playlist)}`
             : `${labels[d]} ${String(hour).padStart(2, '0')}:00 — ${titleOf(defaultPlaylist) || 'nothing'}`,
         }));
       }
-      grid.append(h('div', { class: 'dv-week__day', text: labels[d] }), hours);
+      grid.append(h('div', { class: 'pp-week__day', text: labels[d] }), hours);
     }
 
-    const axis = h('div', { class: 'dv-week__axis' });
+    const axis = h('div', { class: 'pp-week__axis' });
     for (let hour = 0; hour < 24; hour++) axis.append(h('span', { text: String(hour).padStart(2, '0') }));
 
     fill(weekSlot, grid,
-      h('div', { class: 'dv-week', style: { 'margin-top': '2px' } }, h('span'), axis),
+      h('div', { class: 'pp-week', style: { 'margin-top': '2px' } }, h('span'), axis),
       h('div', { class: 'pp-row', style: { 'margin-top': '10px' } },
         h('span', { class: 'pp-status', style: { gap: '6px' } }, h('span', { class: 'pp-swatch pp-swatch--ok' }), h('span', { class: 'pp-small pp-muted', text: 'A rule' })),
         h('span', { class: 'pp-status', style: { gap: '6px' } }, h('span', { class: 'pp-swatch' }), h('span', { class: 'pp-small pp-muted', text: titleOf(defaultPlaylist) || 'default' }))));
@@ -314,7 +314,7 @@ export function mount(main, ctx) {
   /* ------------------------------------------------------------------- save */
 
   function clearErrors() {
-    for (const row of rowsSlot.querySelectorAll('.dv-rule')) {
+    for (const row of rowsSlot.querySelectorAll('.pp-rule')) {
       if (row.errorSlot) { row.errorSlot.hidden = true; row.errorSlot.textContent = ''; }
       row.classList.remove('pp-field--invalid');
     }
@@ -322,7 +322,7 @@ export function mount(main, ctx) {
 
   function showErrors(fields) {
     clearErrors();
-    const rows = [...rowsSlot.querySelectorAll('.dv-rule')];
+    const rows = [...rowsSlot.querySelectorAll('.pp-rule')];
     const rest = [];
     for (const f of fields) {
       const m = /^schedule\[(\d+)\]/.exec(f.field);

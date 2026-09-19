@@ -9,11 +9,12 @@
 
 import {
   h, fill, toast, banner, badge, modal, confirmDialog, fmtDuration,
+  card, pageHead, errorText, guessKind,
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
 import { mountPlaylistEditor } from '/shared/playlist-editor.js';
 import { probeCapabilities } from '/shared/item-warnings.js';
-import { card, pageHead, errorText, guessKind, mediaURL } from '../util.js';
+import { mediaURL } from '../util.js';
 
 export function mount(main, ctx) {
   let snap = { playlists: [], problems: [], active: '', hashing: false };
@@ -24,8 +25,8 @@ export function mount(main, ctx) {
   let gone = false;
 
   const banners = h('div');
-  const side = h('div', { class: 'dv-split__side' });
-  const panel = h('div', { class: 'dv-split__main' });
+  const side = h('div', { class: 'pp-split__side' });
+  const panel = h('div', { class: 'pp-split__main' });
   const newBtn = h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'New playlist', onClick: createPlaylist });
 
   fill(main,
@@ -35,7 +36,7 @@ export function mount(main, ctx) {
         h('button', { type: 'button', class: 'pp-btn', text: 'Look for new files', onClick: rescan }),
         newBtn)),
     banners,
-    h('div', { class: 'dv-split' }, side, panel));
+    h('div', { class: 'pp-split' }, side, panel));
 
   ctx.setGuard(() => !!editor && editor.isDirty());
 
@@ -59,9 +60,11 @@ export function mount(main, ctx) {
      status.codecs, which the player measured on the screen itself, so that answer
      always wins. The probe of this browser is the fallback for a screen that has
      not checked in yet, and the warnings then say "this browser". */
+  /* The browser probe is the slow one, so it must never take the place of a
+     device report that came in while it ran. */
   probeCapabilities(ctx.store.status).catch(() => null).then((c) => {
     if (gone) return;
-    caps = c;
+    if (!caps || caps.source !== 'device' || (c && c.source === 'device')) caps = c;
     load({ reopen: true });
   });
 
@@ -113,12 +116,12 @@ export function mount(main, ctx) {
 
   function renderList() {
     const rows = snap.playlists.map((p) => h('button', {
-      type: 'button', class: 'dv-pick', 'aria-current': String(p.name === picked),
+      type: 'button', class: 'pp-pick', 'aria-current': String(p.name === picked),
       onClick: () => pick(p.name),
     },
-      h('div', { class: 'dv-pick__name' }, h('span', { text: p.title })),
-      h('div', { class: 'dv-pick__meta', text: summary(p) }),
-      h('div', { class: 'dv-pick__tags' },
+      h('div', { class: 'pp-pick__name' }, h('span', { text: p.title })),
+      h('div', { class: 'pp-pick__meta', text: summary(p) }),
+      h('div', { class: 'pp-pick__tags' },
         p.name === snap.active ? badge('playing now', 'brand') : null,
         p.kiosk ? badge('kiosk') : null,
         p.fleet ? badge('from the server', 'brand') : null)));

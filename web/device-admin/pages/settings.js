@@ -13,14 +13,20 @@
 */
 
 import {
-  h, fill, toast, banner, statusDot, spinner, modal, typedConfirm, fmtAgo,
+  h, fill, toast, banner, statusDot, spinner, modal, confirmDialog, typedConfirm,
+  fmtAgo, card, pageHead, setText, setShown, errorText, dayChips,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import {
-  card, pageHead, setText, setShown, errorText, notInThisBuild, dayChips,
-} from '../util.js';
+import { notInThisBuild } from '../util.js';
 
 const MASK = '********';
+
+/* The settings that the fleet server owns while the device is paired (D48).
+   This list is the copy of internal/device/syncer/managed.go: PUT /api/config
+   refuses the whole body with 403 when one of these changes, and it names no
+   field, so the page cannot learn the list from the answer. Change both at the
+   same time. */
+const MANAGED_HELP = 'The control server manages this while the device is paired. Unpair to take it back.';
 
 const TRANSITIONS = [
   ['crossfade', 'Crossfade'], ['cut', 'Hard cut'],
@@ -28,11 +34,13 @@ const TRANSITIONS = [
   ['push-up', 'Push up'], ['push-down', 'Push down'],
 ];
 
-/* The comment-loss warning is shown once for each visit to this page (D16).
-   A person who saves four times in a row does not need it four times. */
-let commentWarningShown = false;
-
 export function mount(main, ctx) {
+  /* The comment-loss warning is shown one time for each visit to this page (D16).
+     A person who saves four times in a row does not need it four times, and a
+     person who opens the page again tomorrow does need it again. It was a module
+     value before, which made "each visit" mean "each tab". */
+  let commentWarningShown = false;
+
   let cfg = null;
   let baseline = '';
   let playlists = [];
@@ -215,7 +223,7 @@ export function mount(main, ctx) {
   const managedNote = () => h('div', {
     class: 'pp-note', hidden: true,
     style: { 'border-radius': '8px', 'margin-bottom': '14px' },
-    text: 'The control server manages this while the device is paired. Unpair to take it back.',
+    text: MANAGED_HELP,
   });
   const playbackNote = managedNote();
   const screenTimesNote = managedNote();
@@ -332,7 +340,11 @@ export function mount(main, ctx) {
           h('div', { class: 'pp-help', text: 'The nightly restart clears anything a long-running browser has collected. Leave it on unless it lands in an hour that the screen is needed.' }),
         ],
       }),
-      card({ title: 'Control server', body: [pairSlot, field('server.poll_seconds', 'Check in every (seconds)', cPoll, 'How often the device asks the server for work. Ten seconds is the shortest it takes.')] }),
+      card({
+        title: 'Control server',
+        body: [pairSlot, field('server.poll_seconds', 'Check in every (seconds) — used when the server names none', cPoll,
+          'How often the device asks the server for work. The server usually names the interval, and its number wins; this one is the fallback. Ten seconds is the shortest it takes.')],
+      }),
       card({
         title: 'Who can get in',
         body: [
@@ -595,7 +607,16 @@ export function mount(main, ctx) {
       ctx.store.refresh();
     } catch (err) {
       if (err.fields) { showErrors(err.fields); toast('Some settings are not correct.', 'danger'); }
-      else toast(errorText(err), 'danger');
+      else if (err.status === 403) {
+        // PUT /api/config refuses the whole body when it changes a field that the
+        // fleet server owns, and it names no field. Say which cards those are.
+        fill(result, banner({
+          kind: 'warn',
+          title: 'The control server owns one of these settings',
+          body: `Nothing was saved. ${MANAGED_HELP} The cards with a green note are the ones it owns: the playlist that plays when nothing is scheduled, the item settings, the screen times and the updates.`,
+        }));
+        toast('Nothing was saved: the server owns one of these settings.', 'danger');
+      } else toast(errorText(err), 'danger');
     } finally {
       touch();
     }
@@ -657,7 +678,7 @@ export function mount(main, ctx) {
 
   /* --------------------------------------------------------------- pairing */
 
-  let pairState = null;    // {status, server_url, server_name, pairing_code}
+  let pairState = null;    // the PairState of GET /api/pair
   let pairAvailable = true;
   let pairTimer = 0;
 
@@ -672,15 +693,23 @@ export function mount(main, ctx) {
     }
   }
 
+  /* The pending state is the only one that polls. The timer must stop on EVERY
+     way out of it, not only on the way to "paired": a Cancel goes to "unpaired",
+     and a timer that kept running would rebuild the address and token fields
+     under the hands of the person who is typing in them. */
+  function stopPairPoll() {
+    clearInterval(pairTimer);
+    pairTimer = 0;
+  }
+
   readPair().catch(() => { pairAvailable = false; }).then(() => { if (!gone && cfg) renderPairing(); });
 
   function renderPairing() {
     const status = ctx.store.status || {};
     const state = pairState && pairState.status ? pairState.status : (paired ? 'paired' : 'unpaired');
+    if (state !== 'pending') stopPairPoll();
 
     if (state === 'paired' || paired) {
-      clearInterval(pairTimer);
-      pairTimer = 0;
       fill(pairSlot,
         h('div', { class: 'pp-status' }, statusDot(status.last_sync_result === 'error' ? 'alert' : 'ok'),
           h('span', null, 'Paired with ', h('span', { class: 'pp-mono', text: (pairState && pairState.server_url) || status.server_url || 'a server' }))),
@@ -718,17 +747,24 @@ export function mount(main, ctx) {
       return;
     }
 
+    /* A token that is already in portapixel.toml comes back from GET /api/config
+       as the mask. The mask is not a token: it must never leave this page for any
+       route but PUT /api/config, and the daemon would write the eight stars into
+       the file as the real value. So the field stays EMPTY and the help text says
+       that a token is saved. */
+    const saved = cfg.server.token === MASK;
     const url = h('input', {
       class: 'pp-input pp-input--mono', type: 'url', value: cfg.server.url || '',
       placeholder: 'https://signage.example.com', disabled: !pairAvailable,
     });
     const token = h('input', {
-      class: 'pp-input pp-input--mono', type: 'text', value: cfg.server.token || '',
-      placeholder: 'leave empty to pair by code', autocomplete: 'off', disabled: !pairAvailable,
+      class: 'pp-input pp-input--mono', type: 'text', value: '',
+      placeholder: saved ? 'a token is saved on this device' : 'leave empty to pair by code',
+      autocomplete: 'off', disabled: !pairAvailable,
     });
     const connect = h('button', {
       type: 'button', class: 'pp-btn pp-btn--primary', text: 'Connect', disabled: !pairAvailable,
-      onClick: () => connectTo(url.value.trim(), token.value.trim(), connect),
+      onClick: () => connectTo(url.value.trim(), token.value.trim(), connect, saved),
     });
 
     fill(pairSlot,
@@ -737,7 +773,9 @@ export function mount(main, ctx) {
       h('div', { class: 'pp-fields', style: { 'margin-top': '12px' } },
         h('label', { class: 'pp-label pp-field' }, 'Server address', url),
         h('label', { class: 'pp-label pp-field' }, 'Invite token', token,
-          h('div', { class: 'pp-help', text: 'With a token the pairing is instant. Without one the device shows a six-character code for the server admin to approve.' }))),
+          h('div', { class: 'pp-help', text: saved
+            ? 'A token is saved on this device already, and the device uses it on its own. Type one here only to put another token in its place.'
+            : 'With a token the pairing is instant. Without one the device shows a six-character code for the server admin to approve.' }))),
       h('div', { class: 'pp-btns', style: { 'margin-top': '12px' } }, connect),
       pairAvailable ? null : notAvailableNote());
   }
@@ -749,8 +787,22 @@ export function mount(main, ctx) {
         h('div', { class: 'pp-banner__body', text: 'The device answers this route with "not implemented yet". Standalone is the whole product; pairing arrives in a later version.' })));
   }
 
-  async function connectTo(url, token, button) {
+  async function connectTo(url, token, button, saved) {
     if (!url) { toast('That needs a server address.', 'danger'); return; }
+    // The mask is never a token. A person who pasted the eight stars back means
+    // "the one that is saved", which is an empty field here.
+    if (token === MASK) token = '';
+    /* The daemon writes the address and the token into portapixel.toml before it
+       enrolls, and an empty token writes an empty token. So a Connect with no
+       token replaces the saved one. Say so before it happens. */
+    if (!token && saved && !(await confirmDialog({
+      title: 'Pair by code and drop the saved token?',
+      body: 'This device holds an invite token already. Connecting with the token field empty takes that token out of the settings file and asks the server for a six-character code instead.',
+      confirm: 'Pair by code',
+      cancel: 'Go back',
+      kind: 'danger',
+    }))) return;
+
     button.disabled = true;
     try {
       const out = await api('POST', '/api/pair', token ? { url, token } : { url });
@@ -759,6 +811,7 @@ export function mount(main, ctx) {
       pairState = out && out.status ? out : { status: 'unpaired', server_url: url };
       pairAvailable = true;
       toast(out.status === 'paired' ? 'Paired.' : 'Waiting for the server to let this device in.');
+      await reloadConfig();
       renderPairing();
       ctx.store.refresh();
     } catch (err) {
@@ -767,6 +820,32 @@ export function mount(main, ctx) {
     } finally {
       button.disabled = false;
     }
+  }
+
+  /* Read the configuration again after a pairing change. The daemon wrote the
+     address and the token into portapixel.toml itself, and the copy that this
+     page holds is what the next Save sends. Without this the next Save would put
+     the old, empty [server] block back and the device could never enroll again. */
+  async function reloadConfig() {
+    let view;
+    try {
+      view = await api('GET', '/api/config');
+    } catch {
+      return;   // the pairing worked; the form keeps what it has
+    }
+    if (gone || !view.config) return;
+    const dirty = JSON.stringify(readForm()) !== baseline;
+    if (dirty) {
+      // The user is in the middle of an edit. Take only the block that the pairing
+      // changed, so nothing that was typed is lost.
+      cfg.server = view.config.server;
+      return;
+    }
+    cfg = view.config;
+    fillForm();
+    applyPaired();
+    baseline = JSON.stringify(readForm());
+    touch();
   }
 
   async function unpair() {
@@ -782,10 +861,9 @@ export function mount(main, ctx) {
     try {
       await api('DELETE', '/api/pair');
       pairState = { status: 'unpaired' };
-      /* The daemon takes the address and the token out of portapixel.toml, so the
-         form of this page must not offer them again. */
-      cfg.server.url = '';
-      cfg.server.token = '';
+      /* The daemon takes the address and the token out of portapixel.toml. Read
+         the file back instead of guessing what it now holds. */
+      await reloadConfig();
       toast('Unpaired. This page is in charge again.');
       renderPairing();
       ctx.store.refresh();

@@ -9,10 +9,11 @@
 
 import {
   h, fill, toast, banner, factList, progress, statusDot,
-  confirmDialog, fmtBytes, fmtDuration, fmtAgo,
+  confirmDialog, fmtBytes, fmtDuration, fmtAgo, fmtTemp,
+  card, pageHead, setText, setShown, errorText,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { card, pageHead, setText, setShown, errorText, fmtTemp, deviceTime } from '../util.js';
+import { deviceTime, notInThisBuild } from '../util.js';
 
 /* status.warnings is a list of {code, message}. The codes are the contract with
    the daemon (internal/manifest/status.go). This page matched the first words of
@@ -24,12 +25,28 @@ const CODE = {
   clock: 'clock-unsynced',
   shadow: 'config-shadow',
   playlist: 'playlist-problem',
+  hardware: 'hardware-changed',
 };
+
+/* The device keeps hardware_changed true until a fleet server confirms it, and a
+   screen that runs on its own has no server to do that. So the dismissal lives
+   in this browser, under the ID that the device reports now: a later change gives
+   a new ID and the notice comes back. */
+const DISMISSED = 'pp-hardware-notice-dismissed';
+
+function noticeDismissed(id) {
+  try { return localStorage.getItem(DISMISSED) === id; } catch { return false; }
+}
+
+function dismissNotice(id) {
+  try { localStorage.setItem(DISMISSED, id); } catch { /* a private window is fine */ }
+}
 
 /* The codes that a card of this page already says in its own words. They are
    dropped from the list of other warnings so that nothing is said twice. */
 const SAID_ELSEWHERE = new Set([
   CODE.web, CODE.root, CODE.timezone, CODE.clock, CODE.shadow, CODE.playlist,
+  CODE.hardware,
 ]);
 
 const BROWSER_STATE = {
@@ -51,6 +68,7 @@ export function mount(main, ctx) {
   let logKey = '';
   let playing = null;  // {since, seconds} of the item on the screen
   let tick = 0;
+  let gone = false;
 
   /* ---- the parts of the page ---- */
 
@@ -136,12 +154,16 @@ export function mount(main, ctx) {
   // the state changes and left alone the rest of the time.
   const pairSlot = h('div');
 
+  const rescanBtn = h('button', {
+    type: 'button', class: 'pp-btn', text: 'Look for new files', onClick: rescan,
+  });
+
   // Things you can do now.
   const actionsCard = card({
     title: 'Things you can do now',
     body: [
       h('div', { class: 'pp-btns' },
-        h('button', { type: 'button', class: 'pp-btn', text: 'Look for new files', onClick: rescan }),
+        rescanBtn,
         h('button', {
           type: 'button', class: 'pp-btn', text: 'Restart player',
           onClick: () => command('restart-browser', {
@@ -225,6 +247,7 @@ export function mount(main, ctx) {
       timezone: (status.timezone || 'UTC') === 'UTC',
       clock: status.clock_synced === false,
       problems: problems.length,
+      hardware: !!status.hardware_changed && !noticeDismissed(status.device_id || ''),
     };
     const others = warnings
       .filter((w) => w && !SAID_ELSEWHERE.has(w.code))
@@ -256,6 +279,26 @@ export function mount(main, ctx) {
         body: 'The clock is on UTC, so scheduled playlists stay off and the default playlist keeps looping. Pick where this screen lives and schedules start working.',
         actions: [h('a', { class: 'pp-btn pp-btn--warn-outline', href: '#/settings', text: 'Set time zone' })],
       }) : null,
+      /* The card moved into another box (D21). Nothing is wrong and nothing has
+         to be done, so this one is a plain card with one button. */
+      has.hardware ? banner({
+        kind: 'info',
+        title: 'This device has new hardware',
+        body: h('div', null,
+          h('div', null, 'It now reports the ID ',
+            h('span', { class: 'pp-mono', text: status.device_id || '' }),
+            '. The Activity page names the ID that it had before.'),
+          h('div', { style: { 'margin-top': '6px' } },
+            'If you moved this USB stick into a different box, there is nothing else to do: the name, the settings and the pairing all came across.')),
+        actions: [h('button', {
+          type: 'button', class: 'pp-btn', text: 'Got it',
+          onClick: () => {
+            dismissNotice(status.device_id || '');
+            nagKey = '';
+            if (ctx.store.status) renderNags(ctx.store.status);
+          },
+        })],
+      }) : null,
       has.clock ? banner({
         kind: 'warn',
         title: 'The clock is not set yet',
@@ -282,6 +325,7 @@ export function mount(main, ctx) {
   function rootPasswordNag() {
     const input = h('input', {
       class: 'pp-input', type: 'password', autocomplete: 'new-password',
+      'aria-label': 'A new password for root',
       placeholder: 'at least 8 characters', style: { 'max-width': '260px' },
     });
     const error = h('div', { class: 'pp-error', hidden: true });
@@ -303,7 +347,11 @@ export function mount(main, ctx) {
         nagKey = '';               // the nag goes at the next report
         ctx.store.refresh();
       } catch (err) {
-        error.textContent = errorText(err);
+        // A 501 means the route is not in this build, which is not a fault of the
+        // password that the person typed.
+        error.textContent = notInThisBuild(err)
+          ? 'This build cannot change the root password. The image does it at the first boot.'
+          : errorText(err);
         error.hidden = false;
       } finally {
         button.disabled = false;
@@ -315,7 +363,8 @@ export function mount(main, ctx) {
       title: 'Change the root password',
       body: h('div', null,
         h('div', { text: 'Remote terminal access is on and root still uses the password the image shipped with. Anyone on this network can log in as root.' }),
-        h('div', { class: 'pp-row', style: { 'margin-top': '10px' } }, input, button),
+        h('label', { class: 'pp-row', style: { 'margin-top': '10px' } },
+          h('span', { class: 'pp-sr-only', text: 'A new password for root' }), input, button),
         error),
     });
   }
@@ -377,14 +426,26 @@ export function mount(main, ctx) {
      file, so it gets its address on the striped placeholder. */
   function previewFor(item, np) {
     const kind = (item && item.kind) || np.kind;
-    if (kind === 'image' && item && item.src) {
-      return h('img', { src: item.src, alt: '', loading: 'lazy' });
+    // The address comes from the API, so it is checked before it goes in a src.
+    // Only a path under /media/ of this device is drawn; anything else takes the
+    // placeholder, so no off-site request goes out from this page.
+    const src = localMedia(item && item.src);
+    if (kind === 'image' && src) {
+      return h('img', { src, alt: '', loading: 'lazy' });
     }
-    if (kind === 'video' && item && item.src) {
-      return h('video', { src: item.src, muted: true, playsinline: true, preload: 'metadata' });
+    if (kind === 'video' && src) {
+      return h('video', { src, muted: true, playsinline: true, preload: 'metadata' });
     }
     return h('span', { class: 'pp-thumb__label' },
       h('span', { class: 'pp-kind pp-kind--chip', text: kind === 'url' ? 'Web page' : String(kind || 'item') }));
+  }
+
+  /* A media address of this device, or null. `/media/<playlist>/<file>` is the
+     only shape that the daemon serves, and a protocol-relative address would go
+     to another host. */
+  function localMedia(value) {
+    const v = String(value || '');
+    return /^\/media\/[^/]+\/[^/]+$/.test(v) ? v : null;
   }
 
   /* How long the item stays on the screen. An image with no time of its own
@@ -542,6 +603,9 @@ export function mount(main, ctx) {
   }
 
   async function rescan() {
+    // A scan of a full stick takes seconds. A second POST in that time would run
+    // the whole scan again.
+    rescanBtn.disabled = true;
     try {
       const out = await api('POST', '/api/rescan');
       const count = out.playlists || 0;
@@ -552,6 +616,8 @@ export function mount(main, ctx) {
       loadLog();
     } catch (err) {
       toast(errorText(err), 'danger');
+    } finally {
+      rescanBtn.disabled = false;
     }
   }
 
@@ -560,6 +626,7 @@ export function mount(main, ctx) {
   async function loadConfig() {
     try {
       cfg = (await api('GET', '/api/config')).config;
+      if (gone) return;
       if (ctx.store.status) { previewKey = ''; apply(ctx.store.status, ctx.store.error); }
     } catch { /* the page works without the image time */ }
   }
@@ -567,6 +634,7 @@ export function mount(main, ctx) {
   async function loadPlaylists() {
     try {
       snap = await api('GET', '/api/playlists');
+      if (gone) return;
       nagKey = '';
       previewKey = '';
       if (ctx.store.status) apply(ctx.store.status, ctx.store.error);
@@ -579,6 +647,7 @@ export function mount(main, ctx) {
     } catch {
       return;
     }
+    if (gone) return;
     renderLog();
   }
 
@@ -613,6 +682,7 @@ export function mount(main, ctx) {
 
   return {
     destroy() {
+      gone = true;
       unsubscribe();
       clearInterval(timer);
     },

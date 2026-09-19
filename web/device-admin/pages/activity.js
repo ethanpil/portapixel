@@ -5,9 +5,9 @@
    because that is the clock the person in the room reads.
 */
 
-import { h, fill, toast, table, banner } from '/shared/ui.js';
+import { h, fill, toast, table, banner, pageHead, errorText } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { pageHead, errorText, deviceTime } from '../util.js';
+import { deviceTime } from '../util.js';
 
 /* How many lines to ask for. The device keeps the last thousand and takes
    1200 as its largest count. */
@@ -79,11 +79,17 @@ export function mount(main, ctx) {
     draw();
   });
 
+  /* The chips are built one time and only their state changes. A row that was
+     built again at each click would take the keyboard away from the chip that the
+     person just pressed. */
+  const chipButtons = FILTERS.map(([value, label]) => h('button', {
+    type: 'button', class: 'pp-chip', text: label,
+    onClick: () => { filter = value; drawChips(); draw(); },
+  }));
+
   function drawChips() {
-    fill(chips, FILTERS.map(([value, label]) => h('button', {
-      type: 'button', class: 'pp-chip', text: label, 'aria-pressed': String(filter === value),
-      onClick: () => { filter = value; drawChips(); draw(); },
-    })));
+    if (!chips.firstChild) fill(chips, chipButtons);
+    chipButtons.forEach((b, i) => b.setAttribute('aria-pressed', String(filter === FILTERS[i][0])));
   }
 
   async function load() {
