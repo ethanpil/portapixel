@@ -33,6 +33,7 @@ const stage = new Stage(document.getElementById('stage'));
 const fallback = new Fallback(document.getElementById('fallback'), KEY);
 
 let frames = 0;                  // grows with each drawn frame (D45)
+let frameAsked = false;          // one animation frame is on its way
 let playlistName = '';
 let items = [];
 let tier = 'high';
@@ -52,13 +53,26 @@ let stopDwell = null;
 
 /* ------------------------------------------------------------- transport */
 
+/* Every error keeps what the daemon said. The API answers {"error": "..."} on
+   every route, and that sentence is what the ops log needs: "403 /api/..."
+   alone does not say which rule refused the call. */
+function failed(res, path, text) {
+  let why = (text || '').slice(0, 200);
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed && parsed.error) why = parsed.error;
+  } catch { /* the body is not JSON */ }
+  return new Error(res.status + ' ' + path + (why ? ': ' + why : ''));
+}
+
 async function getJSON(path) {
   const res = await fetch(path, {
     cache: 'no-store',
     headers: { Accept: 'application/json', 'X-PortaPixel-Player': KEY },
   });
-  if (!res.ok) throw new Error(res.status + ' ' + path);
-  return JSON.parse(await res.text());
+  const text = await res.text();
+  if (!res.ok) throw failed(res, path, text);
+  return JSON.parse(text);
 }
 
 async function postJSON(path, body) {
@@ -72,8 +86,8 @@ async function postJSON(path, body) {
     },
     body: JSON.stringify(body),
   });
-  if (!res.ok) throw new Error(res.status + ' ' + path);
   const text = await res.text();
+  if (!res.ok) throw failed(res, path, text);
   if (!text) return {};
   try { return JSON.parse(text); } catch { return {}; }
 }
@@ -81,10 +95,22 @@ async function postJSON(path, body) {
 /* ---------------------------------------------------------- frame counter */
 
 /* The daemon watches this number. A number that stops while the heartbeat
-   still arrives means the glass is frozen (D45). One chain of calls only. */
-function countFrames() {
-  const tick = () => { frames += 1; requestAnimationFrame(tick); };
-  requestAnimationFrame(tick);
+   still arrives means the glass is frozen (D45).
+
+   One frame per heartbeat, not sixty per second. A chain of animation frames
+   that never ends keeps the compositor awake for weeks to add 1 to a number,
+   and this device runs for months on a Raspberry Pi. A frozen compositor
+   delivers no frame at all, so the signal is the same: the counter stops.
+
+   The number only grows, and the daemon reads a lower number as a page that
+   loaded again (ARCHITECTURE 7a). */
+function countFrame() {
+  if (frameAsked) return;
+  frameAsked = true;
+  requestAnimationFrame(() => {
+    frameAsked = false;
+    frames += 1;
+  });
 }
 
 /* --------------------------------------------------------------- heartbeat */
@@ -115,6 +141,9 @@ function heartbeatBody() {
    player gets the manifest again when the calls work again. */
 async function beat() {
   const body = heartbeatBody();
+  // Ask for the next frame now, so that the counter of the next heartbeat is
+  // one higher when the glass is alive.
+  countFrame();
   try {
     await postJSON('/api/player/heartbeat', body);
     // Keep a note that came in while this call ran.
@@ -122,8 +151,11 @@ async function beat() {
     const gap = hbFailedAt ? Date.now() - hbFailedAt : 0;
     hbFailedAt = 0;
     if (gap >= HB_DEAD_MS) ask('playlist');
-  } catch {
+  } catch (e) {
     if (!hbFailedAt) hbFailedAt = Date.now();
+    // Keep what the daemon said. The next heartbeat that works carries it, so
+    // the fault is in the ops log and not only in a console that nobody reads.
+    if (!note) note = 'the heartbeat failed: ' + ((e && e.message) || e);
   }
 }
 
@@ -168,9 +200,15 @@ async function holdForRestart() {
 /* ----------------------------------------------------------- the playlist */
 
 /** Get the manifest and start to play. resume is the index from the URL, or
-    null. */
+    null.
+
+    Two "playlist" events that arrive together made two play loops: one apply of
+    the configuration sent one event for each field it changed, and each loop
+    thought it was the current one. The list then played at double speed with two
+    video decoders. The number that this call minted goes to the loop, and a
+    newer start stops this one at each await. */
 async function start(resume) {
-  generation += 1;
+  const mine = ++generation;
   dropPending();
   stopRetry();
 
@@ -178,11 +216,13 @@ async function start(resume) {
   try {
     m = await getJSON('/api/player/manifest');
   } catch (e) {
+    if (mine !== generation) return;
     note = 'the manifest did not load: ' + e.message;
     console.warn('[player]', note);
     showFallback(EMPTY_RETRY_MS);
     return;
   }
+  if (mine !== generation) return;
 
   tier = (m && m.tier) || 'high';
   const list = m && m.playlist;
@@ -208,7 +248,7 @@ async function start(resume) {
   // The fallback screen stays until the first item is really on the stage. A
   // playlist that needs time to load must not make the screen go black.
   const cutIn = stage.current === null;
-  loop(at, cutIn).catch(fatal);
+  loop(at, cutIn, mine).catch(fatal);
 }
 
 /** The last net. A screen that stops is worse than the fallback screen. */
@@ -218,9 +258,9 @@ function fatal(e) {
   showFallback(FAILED_RETRY_MS);
 }
 
-/** Show the items, one after the other, until something stops the loop. */
-async function loop(at, cutIn) {
-  const mine = generation;
+/** Show the items, one after the other, until something stops the loop.
+    mine is the number that start() minted for this loop. */
+async function loop(at, cutIn, mine) {
   index = at;
   let cut = cutIn;
 
@@ -305,7 +345,10 @@ function dwell(item, ready, single) {
       ac.abort();
       for (const t of timers) clearTimeout(t);
       if (watch) clearInterval(watch);
-      stopDwell = null;
+      // Only the dwell that owns the hook may clear it. A newer item has already
+      // put its own hook there, and clearing that one would make the next
+      // "playlist" event wait for an item that has no end.
+      if (stopDwell === end) stopDwell = null;
       resolve(why);
     };
     stopDwell = end;
@@ -441,7 +484,6 @@ function stopRetry() {
 
 /* -------------------------------------------------------------------- boot */
 
-countFrames();
 openEvents();
 hbTimer = setInterval(beat, HEARTBEAT_MS);
 void beat();

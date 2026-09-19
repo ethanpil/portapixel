@@ -39,50 +39,22 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/device/browser"
+	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
 /* ------------------------------------------------------------ wire format */
 
-// item is one item of the player manifest (section 7a). It is not the fleet
-// Item type: the player gets an index, a kind and a source path.
-type item struct {
-	Index          int    `json:"index"`
-	Kind           string `json:"kind"`
-	Name           string `json:"name"`
-	Src            string `json:"src,omitempty"`
-	URL            string `json:"url,omitempty"`
-	Duration       int    `json:"duration,omitempty"`
-	Mute           bool   `json:"mute,omitempty"`
-	MaxDuration    int    `json:"max_duration,omitempty"`
-	RefreshSeconds int    `json:"refresh_seconds,omitempty"`
-}
-
-type playlist struct {
-	Name         string `json:"name"`
-	Title        string `json:"title"`
-	Transition   string `json:"transition"`
-	TransitionMs int    `json:"transition_ms"`
-	Shuffle      bool   `json:"shuffle"`
-	Items        []item `json:"items"`
-}
-
-type playerManifest struct {
-	Fallback bool      `json:"fallback"`
-	Tier     string    `json:"tier"`
-	Playlist *playlist `json:"playlist"`
-}
-
-type heartbeat struct {
-	Playlist string  `json:"playlist"`
-	Index    int     `json:"index"`
-	Name     string  `json:"name"`
-	Kind     string  `json:"kind"`
-	State    string  `json:"state"`
-	Frames   int64   `json:"frames"`
-	Position float64 `json:"position"`
-	Note     string  `json:"note"`
-}
+// The mock answers the same types that the daemon answers. A copy of the structs
+// here drifted from the real ones. The tags of two fields were different, so the
+// mock told the player something that the device never says.
+type (
+	item           = library.ManifestItem
+	mockPlaylist   = library.ManifestPlaylist
+	playerManifest = library.PlayerManifest
+	heartbeat      = browser.Heartbeat
+)
 
 /* -------------------------------------------------------------- the server */
 
@@ -229,7 +201,9 @@ func (m *mock) gate(w http.ResponseWriter, r *http.Request) bool {
 		http.Error(w, "the player secret is wrong", http.StatusForbidden)
 		return false
 	}
-	if r.Method != http.MethodGet && r.Header.Get("X-PortaPixel") != "1" {
+	// The real guard lets GET and HEAD through: neither changes anything
+	// (httpguard.RequireHeader).
+	if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get("X-PortaPixel") != "1" {
 		log.Printf("REFUSED %s: the X-PortaPixel header is missing", r.URL.Path)
 		http.Error(w, "the X-PortaPixel header is missing", http.StatusForbidden)
 		return false
@@ -315,9 +289,9 @@ func (m *mock) build() playerManifest {
 	}
 	return playerManifest{
 		Tier: tier,
-		Playlist: &playlist{
+		Playlist: &mockPlaylist{
 			Name: sc, Title: "Mock " + sc,
-			Transition: tr, TransitionMs: ms,
+			Transition: tr, TransitionMS: ms,
 			Items: list,
 		},
 	}
