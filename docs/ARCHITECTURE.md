@@ -46,8 +46,9 @@ internal/sigverify        minisign verify of a file against the embedded key.
 internal/updater          A/B release swap, minisign verify, health gate, rollback, sideload.
                           Device and server use it. No device specifics in it.
 internal/httpguard        Host allowlist, CSRF header check, session store, login limiter.
+internal/slug             One safe-name rule. A playlist directory, a host name and a
+                          server playlist name share it.
 
-internal/device/slug      One safe-name rule. A playlist directory and a host name share it.
 internal/device/identity  Device ID derivation and repair semantics (D21).
 internal/device/library   Scan media root, parse playlists, hash cache, item warnings.
 internal/device/scheduler Rule evaluation each minute, clock-sync gate (D17, D40).
@@ -60,17 +61,24 @@ internal/device/netcfg    Render wpa_supplicant.conf and /etc/network/interfaces
 internal/device/installer install-to-disk: disk list, GPT clone, media copy, boot bits (D54).
 internal/device/httpd     Routes, handlers, SSE hub. No business logic.
 
+internal/server          New(deps) http.Handler: the one route stack of the server.
 internal/server/db        Schema, migrations, queries. Single writer.
+internal/server/httpjson  The JSON answer shapes and the client-address rule.
 internal/server/api       Device-facing /api/v1 routes.
 internal/server/admin     Admin-facing /api/admin routes, sessions.
-internal/server/media     Content-addressed media store, thumbnails.
+internal/server/media     Content-addressed media store, thumbnails, orphan sweep.
 internal/server/releases  GitHub release list, mirror, bundle upload.
 ```
 
 Rules:
 
-- `internal/device/*` and `internal/server/*` must not import each other.
+- `internal/device/*` and `internal/server/*` must not import each other. A rule
+  that the two ends share lives in a package of its own, for example
+  `internal/slug` or `internal/manifest`.
 - `httpd`, `api` and `admin` hold routes only. Logic lives in the other packages.
+- The route stack of the server is built in one place, `internal/server.New`. The
+  command and the route tests both call it, so a guard cannot be in one and not in
+  the other.
 - Each package has a `doc.go` with a rationale comment: why the package exists.
 - A bad input file must never cause a panic. It causes a skipped item and an ops log line.
 
@@ -92,7 +100,18 @@ Files in the state dir: `ops.log`, `portapixel.toml.lkg` (shadow config, D38),
 `hashcache.json`, `.provisioned`, `.root-default-hash`.
 
 `state.json` holds the per-device fleet token. The TOML holds only the token that the user
-typed. This keeps a flashed card clonable (D25).
+typed. This keeps a flashed card clonable (D25). The fleet fields of `state.json` are
+`device_token`, `claim_secret`, `pairing_code`, `pending_since`, `server_url`, `fleet` (the
+last applied manifest with no commands) and `commands` (the last 100 command IDs that ran).
+
+The fleet client keeps the whole last manifest and not only a hash of it, for two jobs in
+one field: the poll compares the new manifest with it, so an answer that did not change
+writes nothing at all; and the daemon hands the schedule to the scheduler at start, so a
+paired device uses the fleet rules before its first poll answers.
+
+The staging directories of a sync are `_fleet/.staging-<random>` and
+`_fleet/.trash-<random>`. A name that starts with a full stop is never a playlist, so a
+power cut in the middle of a swap leaves nothing that the library reads.
 
 ## 4. Device daemon command line
 
@@ -129,7 +148,23 @@ type EnrollResponse struct {
 ```
 
 A pending device calls `enroll` again with the same `ClaimSecret` in `token` until the
-status is `paired`.
+status is `paired`. The server keeps only the SHA-256 of that secret.
+
+Enrollment rules of the server (D25). A request that waits lives in its own table,
+so it can never change a screen that works:
+
+1. An enroll request never changes a `devices` row that was ever paired, except
+   through rule 2.
+2. A request with a valid auto-mode enrollment token, the device ID of a paired row
+   and the stored `hardware_id` of that row gets a new device token. That is the
+   reflashed card: the card lost its token and the box is the same box.
+3. Every other request that names a paired row waits for the admin, with
+   `collides_with` set. A request with no row and an auto token pairs at once.
+4. A request that waits longer than 24 hours goes away. At most 200 wait at a time.
+
+`POST /api/v1/enroll` and every other JSON route of `/api/v1` and `/api/admin` need
+`Content-Type: application/json`. A form on another site cannot send that type
+without a preflight, so the check keeps those routes off a cross-site request.
 
 ```go
 type Manifest struct {
@@ -198,11 +233,19 @@ type Heartbeat struct {
 `Status` is the same struct that the device serves at `/api/status` (plan section 8,
 `health`). It lives in `internal/manifest` so the two ends share it.
 
+`Acks` holds at most 100 command IDs. A command that the server delivered and that
+no heartbeat acknowledged goes out again after 10 minutes, three times in all, and
+then it is expired.
+
+A `Rule` has `Start` and `End` both set or both empty. Both empty means the whole
+day, and the device scheduler reads the pair the same way.
+
 `Status.Warnings` is `[]Warning{Code, Message}`. The code is the contract; the message
 is the sentence for a person. The codes are the constants of
 `internal/manifest/status.go`: `default-web-password`, `default-root-password`,
 `timezone-utc`, `clock-unsynced`, `config-shadow`, `config-repaired`,
-`config-bad-edit`, `playlist-problem`, `hardware-changed`, `update-rolled-back`.
+`config-bad-edit`, `playlist-problem`, `hardware-changed`, `update-rolled-back`,
+`server-insecure`.
 
 `Status.Codecs` is the codec report of the player (D12). The player probes
 MediaCapabilities one time and sends it as `codecs` with its FIRST heartbeat. The daemon
@@ -235,8 +278,31 @@ GET    /api/disks                  {disks:[{device,model,size_bytes,removable,to
 POST   /api/install-to-disk        {device, confirm} -> {ok:true}. confirm must equal device.
 GET    /api/install-to-disk/events SSE: "progress" {phase,percent,message}, "done" {ok,error?,instruction?}
 GET    /licenses                   text/plain, the licence list
-GET|POST|DELETE /api/pair          501 JSON until the fleet client ships (v0.3)
 ```
+
+### 6b. The v0.3 pairing routes
+
+```
+GET    /api/pair    {status: "unpaired"|"pending"|"paired", server_url, server_name?,
+                     pairing_code?, last_sync?, sync_error?, insecure?}
+POST   /api/pair    {url, token?} -> the same object. An empty token starts the code
+                    pairing. The route saves url and token in portapixel.toml and enrolls
+                    at once; it answers when the server answered.
+DELETE /api/pair    {ok:true}. It forgets the token and the claim secret, takes [server]
+                    url and token out of the TOML, and keeps the cached objects.
+```
+
+`pairing_code` is in `GET /api/pair` because that route needs a session. `/api/status`
+gives the code to loopback callers only, which is the fallback screen (D46).
+
+`insecure` is true when the address is `http://` on a host that is not loopback and not a
+private network. The status then also carries the warning `server-insecure`.
+
+While the device is paired, these routes answer 403 `{"error":"managed by <server name>"}`:
+playlist create, save, rename and delete; media upload and delete. `PUT /api/config`
+answers 403 for a change of `playback.*`, `schedule`, `display.on_time`,
+`display.off_time`, `display.power_days` or `updates.auto`, and 200 for every other field
+(D48). The boundary table is `internal/device/syncer.ManagedField`.
 
 `blocked` in the check answer is the reason that this build can install nothing, for
 example a development build with no minisign public key. It is not an error: the route
@@ -253,12 +319,25 @@ The daemon starts one process tree as the `kiosk` user:
 ```
 cage -s -- chromium --kiosk --ozone-platform=wayland \
   --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+  --remote-allow-origins=http://127.0.0.1:9222 \
   --autoplay-policy=no-user-gesture-required \
   --user-data-dir=<tmpfs>/profile --disk-cache-dir=<tmpfs>/cache \
-  --no-first-run --noerrdialogs --disable-infobars \
-  --disable-session-crashed-bubble --disable-features=Translate \
-  --password-store=basic <url>
+  --no-first-run --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
+  --disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying \
+  --password-store=basic \
+  --disable-background-networking --disable-component-update \
+  --disable-domain-reliability --metrics-recording-only --disable-sync \
+  --disable-default-apps --no-default-browser-check --disable-breakpad \
+  --gcm-checkin-url=http://127.0.0.1:1/ --gcm-registration-url=http://127.0.0.1:1/ \
+  --gcm-mcs-endpoint=http://127.0.0.1:1/ <url>
 ```
+
+This block is a copy for the reader. `command.go` is the source. There is exactly one
+`--disable-features` flag: a second one replaces the first. There is no sandbox flag.
+The environment of `cage` has `WLR_LIBINPUT_NO_DEVICES=1`, `XCURSOR_THEME`,
+`XCURSOR_PATH`, `XCURSOR_SIZE`, `XDG_RUNTIME_DIR`, `HOME` and `PATH`. It must NOT have
+`WAYLAND_DISPLAY` (CONTEXT.md section 4). The browser output goes to
+`<tmpfs>/browser.log`, with a limit of 1 MiB, and starts again at each launch.
 
 Rotation and `video_mode` go through `wlr-randr` in the cage session. They rotate all
 content, external pages included. The browser command and its flags live in ONE place,

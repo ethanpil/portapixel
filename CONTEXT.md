@@ -65,6 +65,25 @@ checked with a screenshot of the virtual display or with the ops log.
 - Chromium 149 refuses a DevTools WebSocket (403) when the request has an `Origin` that
   `--remote-allow-origins` does not name. `golang.org/x/net/websocket` always sends an
   `Origin`. The flag names the loopback DevTools endpoint only, never `*`.
+- `cage` 0.2.1 does not read `XCURSOR_THEME`. It gives wlroots no theme name, and wlroots
+  then asks for the theme `default`. With no such theme, wlroots draws its own arrow in
+  the middle of the screen. The image has a transparent theme, `portapixel-blank`, and
+  `/usr/share/icons/default/index.theme` inherits it. Chromium does read the `XCURSOR_*`
+  variables for the pointer in a page, so they stay.
+- The cursor files are copies, not links. A checkout on Windows changes a link into a
+  text file.
+- Chromium 149 calls Google at start unless flags stop it. Measured with a QEMU packet
+  dump: `OptimizationHints` stops the optimization guide calls,
+  `NetworkTimeServiceQuerying` stops `clients2.google.com`, and only the three `--gcm-*`
+  endpoint flags stop Google Cloud Messaging. `--disable-background-networking` and
+  `--disable-sync` do not stop it. With the flags, an idle screen makes no DNS request
+  in 185 s. Two TLS connections stay, to `www.google.com` and `accounts.google.com`,
+  one time at each browser start. No flag stops them. Use a firewall if that matters.
+- `--disable-client-side-phishing-detection` does not exist in Chromium 149.
+- A DNS name in a packet dump is in label form. `strings | grep` does not find it. Parse
+  the DNS questions.
+- The browser output is in `/var/cache/kiosk/browser.log` (tmpfs, 1 MiB limit). Read it
+  first when the screen is black.
 - The daemon makes `HOME` for the kiosk user in the tmpfs. The init script must create
   it. Chromium writes its crash reports there.
 - A status API that answers does not prove a picture. `player.js` once had a syntax
