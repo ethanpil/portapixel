@@ -3,8 +3,9 @@ package main
 // The fake routes. They stand in for what a Windows development machine cannot
 // do for itself.
 //
-// /api/pair is still "not implemented yet" in the daemon: the fleet client
-// arrives in v0.3, and the fake drives the three pairing flows now.
+// /api/pair is in the daemon now (v0.3). The fake keeps its own copy, so that the
+// three pairing flows can be driven with no fleet server on the network. The JSON
+// is the shape of internal/device/syncer.PairState.
 //
 // The update, disks and install-to-disk routes ARE in the daemon (v0.2). The
 // fake keeps its own copies of them so that the UI can be driven on a machine

@@ -689,6 +689,15 @@ export function mount(main, ctx) {
             ? `Checked in ${fmtAgo(status.last_sync)}, every ${cfg.server.poll_seconds} seconds. Playlists and schedules are managed there; this page keeps network, screen and sound.`
             : 'Playlists and schedules are managed there; this page keeps network, screen and sound.'),
         status.sync_error ? h('div', { class: 'pp-error', text: status.sync_error }) : null,
+        /* The address is http:// on a network that is not local, so the token of
+           this screen goes over the internet in clear text (the daemon raises the
+           same warning in status.warnings). */
+        pairState && pairState.insecure
+          ? h('div', { class: 'pp-banner pp-banner--warn', style: { 'margin-top': '12px', 'margin-bottom': '0' } },
+            h('div', { class: 'pp-banner__text' },
+              h('div', { class: 'pp-banner__title', text: 'This address is not encrypted' }),
+              h('div', { class: 'pp-banner__body', text: 'The address starts with http:// and it is not on your network, so the token of this screen travels in clear text. Use https://.' })))
+          : null,
         h('div', { class: 'pp-btns', style: { 'margin-top': '12px' } },
           h('button', { type: 'button', class: 'pp-btn pp-btn--danger-outline', text: 'Unpair', onClick: unpair })),
         pairAvailable ? null : notAvailableNote());
@@ -745,7 +754,9 @@ export function mount(main, ctx) {
     button.disabled = true;
     try {
       const out = await api('POST', '/api/pair', token ? { url, token } : { url });
-      pairState = { status: out.status, server_url: url, pairing_code: out.pairing_code };
+      /* The daemon answers with the whole state, and its address is the one that
+         it cleaned up: no slash at the end, no fragment. */
+      pairState = out && out.status ? out : { status: 'unpaired', server_url: url };
       pairAvailable = true;
       toast(out.status === 'paired' ? 'Paired.' : 'Waiting for the server to let this device in.');
       renderPairing();
@@ -771,6 +782,10 @@ export function mount(main, ctx) {
     try {
       await api('DELETE', '/api/pair');
       pairState = { status: 'unpaired' };
+      /* The daemon takes the address and the token out of portapixel.toml, so the
+         form of this page must not offer them again. */
+      cfg.server.url = '';
+      cfg.server.token = '';
       toast('Unpaired. This page is in charge again.');
       renderPairing();
       ctx.store.refresh();
