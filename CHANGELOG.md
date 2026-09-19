@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix the review findings in the daemon, the updater, the installer and the sync client (6a3fd1e to 1c9949e). The device token goes to the paired server only.
 - Fix the review findings in the two admin UIs. Move their common code to `web/shared` (66d584c to b05b496).
 - Add the lab scripts for two test machines on a bridge (105b3b6).
 - Add the fleet sync client, the pairing routes and the local lock for a paired device.
