@@ -13,8 +13,19 @@ depend() {
 
 start() {
 	ebegin "PortaPixel first boot"
-	/usr/libexec/portapixel/firstboot.sh
-	eend $?
+	# firstboot.sh returns non-zero on two states the design calls normal. One is
+	# the grow that waits for the kernel to read the new partition size. The other
+	# is a run with no daemon binary yet. Both mean "the next boot goes on from
+	# here". A hard service failure would send an operator to repair a system that
+	# works as designed. Report a warning instead and let the boot go on. The ops
+	# log holds the detail.
+	if /usr/libexec/portapixel/firstboot.sh; then
+		eend 0
+	else
+		eend 0
+		ewarn "first boot is not finished; it goes on at the next boot"
+		ewarn "read /var/lib/portapixel/ops.log"
+	fi
 }
 
 stop() {

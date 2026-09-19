@@ -1,2 +1,9 @@
-# portapixel-firstboot uses the same paths as the daemon. install.sh writes them.
-. /etc/conf.d/portapixeld
+# The same paths as the daemon. install.sh writes /etc/conf.d/portapixeld.
+# The guard matters: a dot command that cannot read its file ends a
+# non-interactive shell, and OpenRC sources this file inside the service script.
+# One missing file would then stop the service with no clear message.
+[ -f /etc/conf.d/portapixeld ] && . /etc/conf.d/portapixeld
+PP_MEDIA="${PP_MEDIA:-/media/ppmedia}"
+PP_STATE="${PP_STATE:-/var/lib/portapixel}"
+PP_RELEASES="${PP_RELEASES:-/opt/portapixel}"
+PP_RUN="${PP_RUN:-/run/portapixel}"
