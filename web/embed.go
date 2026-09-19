@@ -28,10 +28,9 @@ var (
 	ServerAdmin = sub("server-admin")
 )
 
-// sub gives one directory of the embedded tree. A failure here is a build
-// fault, not a run time fault: the directory names are constants in this file
-// and the go:embed line above puts them in the binary. A panic at start is
-// better than a web UI that serves nothing.
+// sub gives one directory of the embedded tree. A failure here is a fault of the
+// build, not of the device. A panic at start is better than a web UI that serves
+// nothing.
 func sub(dir string) fs.FS {
 	out, err := fs.Sub(files, dir)
 	if err != nil {
