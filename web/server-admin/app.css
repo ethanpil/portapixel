@@ -1,0 +1,160 @@
+/* Control server admin UI, the parts that only this UI has.
+   Everything else comes from /shared/pp.css. Add nothing here that another UI
+   could use: that belongs in the shared file.
+*/
+
+/* The hidden attribute must win. A class that sets `display` beats the rule
+   that the browser has for [hidden], so a banner or a button that this UI
+   hides would otherwise stay on the screen. */
+[hidden] { display: none !important; }
+
+/* A narrow list beside a wide panel: groups and playlists both use it. */
+.sv-split { display: flex; gap: var(--pp-space-6); align-items: flex-start; }
+.sv-split__side { flex: 0 0 244px; min-width: 0; }
+.sv-split__main { flex: 1 1 380px; min-width: 0; }
+
+/* One row of a picker list. */
+.sv-pick {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  color: inherit; padding: var(--pp-space-4) var(--pp-space-5);
+  border-bottom: 1px solid var(--pp-border-faint);
+}
+.sv-pick:last-of-type { border-bottom: 0; }
+.sv-pick:hover { background: var(--pp-subtle); }
+.sv-pick[aria-current='true'] { background: var(--pp-brand-tint); }
+.sv-pick[aria-current='true'] .sv-pick__name { color: var(--pp-brand-tint-ink); font-weight: 600; }
+.sv-pick__name {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--pp-space-3); font-size: var(--pp-fs-lead);
+}
+.sv-pick__name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sv-pick__count { font-family: var(--pp-mono); font-size: 12px; color: var(--pp-muted); flex: none; }
+.sv-pick__meta { font-size: var(--pp-fs-sm); color: var(--pp-muted); margin-top: 2px; }
+
+/* The toolbar of the fleet list: search, filters and the view switch. */
+.sv-tools { display: flex; gap: var(--pp-space-4); align-items: center; flex-wrap: wrap; margin-bottom: var(--pp-space-5); }
+.sv-tools__search { flex: 1 1 260px; min-width: 180px; }
+.sv-tools .pp-select { width: auto; }
+
+/* The fleet table. A screen that needs a look carries a red edge. */
+.sv-row--flag { box-shadow: inset var(--pp-r-tile) 0 0 0 var(--pp-danger); }
+.sv-name { display: flex; align-items: center; gap: var(--pp-space-3); min-width: 0; }
+.sv-name__id { font-family: var(--pp-mono); font-size: 11.5px; color: var(--pp-muted); }
+.sv-now { display: flex; align-items: center; gap: var(--pp-space-3); min-width: 0; }
+.sv-now__text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--pp-fs-sm); }
+.sv-now--dim { opacity: 0.55; }
+/* A generic icon stands in for a file with no thumbnail. */
+.sv-icon {
+  width: 52px; height: 32px; flex: none; display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--pp-border); border-radius: 5px; background: var(--pp-head); color: var(--pp-muted);
+}
+/* A wide preview with no thumbnail: the icon sits in the middle of the stripes. */
+.sv-blank { align-items: center; justify-content: center; color: var(--pp-muted); }
+.sv-free { display: flex; align-items: center; gap: var(--pp-space-3); }
+.sv-free .pp-progress { width: 46px; flex: none; }
+.sv-free__n { font-family: var(--pp-mono); font-size: 12px; }
+
+/* The wall view: one tile for each screen. A tile is a link, so it has to give
+   back the ink and drop the underline that a link carries. */
+a.pp-tile { display: block; color: var(--pp-ink); text-decoration: none; }
+a.pp-tile:hover { color: var(--pp-ink); border-color: var(--pp-brand-tint-border); background: var(--pp-subtle); }
+.sv-tile__head { display: flex; align-items: center; gap: var(--pp-space-3); min-width: 0; }
+.sv-tile__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--pp-fs-lead); }
+.sv-tile__meta {
+  display: flex; justify-content: space-between; gap: var(--pp-space-3);
+  font-family: var(--pp-mono); font-size: var(--pp-fs-xs); color: var(--pp-muted); margin-top: var(--pp-space-1);
+}
+
+/* One row of the pending list, with the code a person reads off the screen. */
+.sv-wait {
+  display: flex; gap: var(--pp-space-6); align-items: center; flex-wrap: wrap;
+  padding: var(--pp-space-5) var(--pp-space-7); border-bottom: 1px solid var(--pp-border-faint);
+}
+.sv-wait:last-child { border-bottom: 0; }
+.sv-wait__who { flex: 1 1 200px; min-width: 0; }
+.sv-wait__meta { font-family: var(--pp-mono); font-size: 12px; color: var(--pp-muted); margin-top: 2px; }
+.sv-wait .pp-select { width: auto; flex: none; }
+
+/* A time rule row. The columns stack on a phone. */
+.sv-rule {
+  display: flex; gap: var(--pp-space-5); align-items: flex-end; flex-wrap: wrap;
+  padding: var(--pp-space-5) var(--pp-space-7);
+  border-bottom: 1px solid var(--pp-border-faint);
+}
+.sv-rule__n {
+  flex: none; width: 20px; font-family: var(--pp-mono); font-size: 12px;
+  color: var(--pp-muted); padding-bottom: 7px;
+}
+.sv-rule__pl { flex: 1 1 180px; min-width: 150px; }
+.sv-rule__times { display: flex; gap: var(--pp-space-2); flex: none; }
+/* Wide enough for a time field that a 12-hour locale draws with AM or PM. */
+.sv-rule__times .pp-input { width: 122px; }
+.sv-rule__acts { display: flex; gap: 2px; margin-left: auto; padding-bottom: 5px; }
+
+/* Weekly coverage grid: seven rows of twenty-four hours. */
+.sv-week { display: grid; grid-template-columns: 34px 1fr; gap: 3px var(--pp-space-3); align-items: center; }
+.sv-week__day { font-size: var(--pp-fs-xs); color: var(--pp-muted); }
+.sv-week__hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; }
+.sv-week__cell { height: 14px; border-radius: 2px; background: var(--pp-head); }
+.sv-week__cell--on { background: var(--pp-brand); }
+.sv-week__axis { display: grid; grid-template-columns: repeat(24, 1fr); font-size: 10px; color: var(--pp-muted); margin-top: var(--pp-space-1); }
+.sv-week__axis span { visibility: hidden; }
+.sv-week__axis span:nth-child(6n+1) { visibility: visible; }
+
+/* The command list of a screen: what was sent and how far it got. */
+.sv-cmd {
+  display: flex; gap: var(--pp-space-5); align-items: baseline; justify-content: space-between;
+  padding: 7px 0; border-bottom: 1px solid var(--pp-border-faint); font-size: var(--pp-fs-sm);
+}
+.sv-cmd:last-child { border-bottom: 0; }
+.sv-cmd__when { font-family: var(--pp-mono); font-size: 12px; color: var(--pp-muted); text-align: right; }
+
+/* The upload area of the media page. */
+.sv-drop {
+  border: 1.5px dashed var(--pp-border); border-radius: var(--pp-r-card);
+  background: var(--pp-subtle); padding: var(--pp-space-8);
+  text-align: center; margin-bottom: var(--pp-space-6);
+}
+.sv-drop--over { border-color: var(--pp-brand); background: var(--pp-brand-tint); }
+.sv-up { display: flex; flex-direction: column; gap: var(--pp-space-3); margin-top: var(--pp-space-5); text-align: left; }
+.sv-up__row { font-size: var(--pp-fs-sm); }
+.sv-up__name { display: flex; justify-content: space-between; gap: var(--pp-space-5); margin-bottom: var(--pp-space-1); }
+
+/* A field that the server refused. The shared sheet has the same colour on a
+   wrapped field; these inputs sit in a label of their own. */
+.sv-input--bad { border-color: oklch(0.80 0.10 28); }
+
+/* The approved release keeps a tinted row, as the wireframe has it. */
+.sv-approved { background: var(--pp-brand-tint); }
+
+/* One row of the health page: a dot, a name, a note under it, and a value. */
+.sv-health {
+  display: flex; gap: var(--pp-space-5); align-items: flex-start;
+  padding: var(--pp-space-4) 0; border-bottom: 1px solid var(--pp-border-faint);
+}
+.sv-health:last-child { border-bottom: 0; padding-bottom: 0; }
+.sv-health .pp-dot { margin-top: 5px; }
+.sv-health__k { flex: 1 1 auto; min-width: 0; font-size: var(--pp-fs-body); }
+.sv-health__note { font-size: var(--pp-fs-sm); color: var(--pp-muted); margin-top: 3px; line-height: 1.5; }
+.sv-health__v { flex: none; font-family: var(--pp-mono); font-size: 12.5px; text-align: right; max-width: 45%; }
+
+/* One bar of the version histogram. */
+.sv-bar { display: flex; align-items: center; gap: var(--pp-space-5); padding: 7px 0; }
+.sv-bar__v { font-family: var(--pp-mono); font-size: 12.5px; width: 66px; flex: none; }
+.sv-bar__track { flex: 1 1 auto; }
+.sv-bar__n { font-size: var(--pp-fs-sm); color: var(--pp-muted); width: 104px; flex: none; text-align: right; }
+
+/* The panel that shows an enrollment token one time. */
+.sv-secret {
+  font-family: var(--pp-mono); font-size: 12.5px; word-break: break-all;
+  background: var(--pp-head); border: 1px solid var(--pp-border-2);
+  border-radius: var(--pp-r-chip); padding: var(--pp-space-4); margin: 5px 0 0;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 760px) {
+  .sv-split { flex-direction: column; }
+  .sv-split__side, .sv-split__main { flex: 1 1 auto; width: 100%; }
+  .sv-rule, .sv-wait { padding-left: var(--pp-space-5); padding-right: var(--pp-space-5); }
+  .sv-rule__acts { margin-left: 0; }
+}
