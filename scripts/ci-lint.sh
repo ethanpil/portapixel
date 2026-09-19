@@ -95,12 +95,21 @@ fi
 # ----------------------------------------------------- the package list format
 # packages.list is the only source of the package set. Guard its format so a
 # line with no rationale comment, or with an unknown tag, cannot slip in.
+# A line can carry more than one tag, for example "@x86_64 @image linux-lts". Read
+# every leading tag, and a package name must come after them.
 awk '
 	/^[ \t]*(#|$)/ { next }
 	{
 		if ($0 !~ /#/) { printf "FAIL: packages.list:%d: no rationale comment: %s\n", FNR, $0; bad = 1 }
-		if ($1 ~ /^@/ && $1 != "@x86_64" && $1 != "@aarch64") {
-			printf "FAIL: packages.list:%d: unknown tag %s\n", FNR, $1; bad = 1
+		n = 1
+		while (n <= NF && substr($n, 1, 1) == "@") {
+			if ($n != "@x86_64" && $n != "@aarch64" && $n != "@image") {
+				printf "FAIL: packages.list:%d: unknown tag %s\n", FNR, $n; bad = 1
+			}
+			n++
+		}
+		if (n > NF || substr($n, 1, 1) == "#") {
+			printf "FAIL: packages.list:%d: tags with no package name: %s\n", FNR, $0; bad = 1
 		}
 	}
 	END { exit bad + 0 }

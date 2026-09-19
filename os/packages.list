@@ -5,9 +5,18 @@
 #   pkgname            # rationale      -> install on all architectures
 #   @x86_64 pkgname    # rationale      -> install on x86_64 only
 #   @aarch64 pkgname   # rationale      -> install on aarch64 only
+#   @image pkgname     # rationale      -> install in an image build only
 #   # text                              -> comment, ignored
 #   (blank line)                        -> ignored
-# One package per line. Each line needs a rationale comment. Put the tag first.
+# One package per line. Each line needs a rationale comment. Put the tags first.
+# A line can carry more than one tag, for example "@x86_64 @image linux-lts".
+#
+# THE @image TAG is the kernel, the kernel firmware, the CPU microcode and any
+# boot loader package. An ON-BOX install (os/install.sh with no --root) puts
+# PortaPixel on a system that already runs and already boots itself. It must never
+# install a second kernel there: a typical virtual machine host runs linux-virt,
+# our image runs linux-lts, and a host with two kernels does not know which one
+# starts. install.sh skips every @image line on-box and prints which ones.
 #
 # VERIFIED on Alpine 3.23.2 (an x86_64 box, and an aarch64 apk root from the
 # same v3.23 repositories) on 2026-09-18. Every name below exists in main or
@@ -117,9 +126,9 @@ acpid                      # act on the ACPI power button and shut down cleanly.
 acpid-openrc               # the acpid init script. The main package holds no init script.
 
 # --------------------------------------------------------------- x86_64 kernel
-@x86_64 linux-lts          # long term support kernel for generic PC hardware (D8).
-@x86_64 intel-ucode        # Intel CPU microcode. The boot loader puts it first in the initrd chain.
-@x86_64 amd-ucode          # AMD CPU microcode.
+@x86_64 @image linux-lts          # long term support kernel for generic PC hardware (D8).
+@x86_64 @image intel-ucode        # Intel CPU microcode. The boot loader puts it first in the initrd chain.
+@x86_64 @image amd-ucode          # AMD CPU microcode.
 
 # ------------------------------------------------------- x86_64 video decode
 @x86_64 libva              # VA-API client library for hardware video decode (D9).
@@ -130,27 +139,27 @@ acpid-openrc               # the acpid init script. The main package holds no in
 # --------------------------------------------------------- x86_64 firmware set
 # Curated but generous, per the "maximal drivers" goal (plan section 4). One
 # line per family, so a size problem can be traced to a family.
-@x86_64 linux-firmware-i915    # Intel graphics DMC and GuC blobs. Without them i915 loses its display power states.
-@x86_64 linux-firmware-xe      # Intel Xe graphics (Meteor Lake and later).
-@x86_64 linux-firmware-amdgpu  # AMD GPU. Modern Radeon and APU display needs it.
-@x86_64 linux-firmware-radeon  # older Radeon that the radeon driver handles.
-@x86_64 linux-firmware-nvidia  # nouveau signed firmware. NVIDIA renders through nouveau, software decode (D9).
-@x86_64 linux-firmware-intel   # Intel WiFi (iwlwifi). The plan called this "linux-firmware-iwlwifi", which does not exist.
-@x86_64 linux-firmware-ath9k_htc  # Atheros USB WiFi. PCIe ath9k needs no firmware, so there is no linux-firmware-ath9k.
-@x86_64 linux-firmware-ath10k  # Qualcomm Atheros 802.11ac WiFi.
-@x86_64 linux-firmware-ath11k  # Qualcomm Atheros WiFi 6.
-@x86_64 linux-firmware-ath12k  # Qualcomm Atheros WiFi 7.
-@x86_64 linux-firmware-brcm    # Broadcom WiFi. Common in thin clients and mini PCs.
-@x86_64 linux-firmware-rtw88   # Realtek 802.11ac WiFi, very common on cheap USB adapters.
-@x86_64 linux-firmware-rtw89   # Realtek WiFi 6.
-@x86_64 linux-firmware-rtlwifi # older Realtek WiFi.
-@x86_64 linux-firmware-mediatek # MediaTek WiFi, which includes the mt76 blobs.
-@x86_64 linux-firmware-rtl_nic # Realtek wired Ethernet. Many boards do not link without it.
-@x86_64 linux-firmware-realtek # Realtek audio codec blobs.
-@x86_64 linux-firmware-cirrus  # Cirrus audio codec blobs, used by recent laptop class boards.
+@x86_64 @image linux-firmware-i915    # Intel graphics DMC and GuC blobs. Without them i915 loses its display power states.
+@x86_64 @image linux-firmware-xe      # Intel Xe graphics (Meteor Lake and later).
+@x86_64 @image linux-firmware-amdgpu  # AMD GPU. Modern Radeon and APU display needs it.
+@x86_64 @image linux-firmware-radeon  # older Radeon that the radeon driver handles.
+@x86_64 @image linux-firmware-nvidia  # nouveau signed firmware. NVIDIA renders through nouveau, software decode (D9).
+@x86_64 @image linux-firmware-intel   # Intel WiFi (iwlwifi). The plan called this "linux-firmware-iwlwifi", which does not exist.
+@x86_64 @image linux-firmware-ath9k_htc  # Atheros USB WiFi. PCIe ath9k needs no firmware, so there is no linux-firmware-ath9k.
+@x86_64 @image linux-firmware-ath10k  # Qualcomm Atheros 802.11ac WiFi.
+@x86_64 @image linux-firmware-ath11k  # Qualcomm Atheros WiFi 6.
+@x86_64 @image linux-firmware-ath12k  # Qualcomm Atheros WiFi 7.
+@x86_64 @image linux-firmware-brcm    # Broadcom WiFi. Common in thin clients and mini PCs.
+@x86_64 @image linux-firmware-rtw88   # Realtek 802.11ac WiFi, very common on cheap USB adapters.
+@x86_64 @image linux-firmware-rtw89   # Realtek WiFi 6.
+@x86_64 @image linux-firmware-rtlwifi # older Realtek WiFi.
+@x86_64 @image linux-firmware-mediatek # MediaTek WiFi, which includes the mt76 blobs.
+@x86_64 @image linux-firmware-rtl_nic # Realtek wired Ethernet. Many boards do not link without it.
+@x86_64 @image linux-firmware-realtek # Realtek audio codec blobs.
+@x86_64 @image linux-firmware-cirrus  # Cirrus audio codec blobs, used by recent laptop class boards.
 
 # ------------------------------------------------------------ aarch64 (Pi) set
-@aarch64 linux-rpi         # the Raspberry Pi kernel. One flavour covers Zero 2 W to Pi 5 (D8).
-@aarch64 raspberrypi-bootloader   # start*.elf, bootcode.bin, fixup files and the DTBs for PPBOOT (plan section 6).
-@aarch64 linux-firmware-brcm      # Pi WiFi and Bluetooth blobs.
-@aarch64 linux-firmware-cypress   # Pi 3 and Pi 4 Cypress and Infineon WiFi blobs.
+@aarch64 @image linux-rpi         # the Raspberry Pi kernel. One flavour covers Zero 2 W to Pi 5 (D8).
+@aarch64 @image raspberrypi-bootloader   # start*.elf, bootcode.bin, fixup files and the DTBs for PPBOOT (plan section 6).
+@aarch64 @image linux-firmware-brcm      # Pi WiFi and Bluetooth blobs.
+@aarch64 @image linux-firmware-cypress   # Pi 3 and Pi 4 Cypress and Infineon WiFi blobs.

@@ -234,15 +234,46 @@ fi
 # ------------------------------------------------------------- 2. the packages
 # packages.list is the only source of the package set. Read the lines for this
 # architecture: untagged lines plus the lines tagged with our architecture.
+#
+# ON-BOX mode leaves every @image line out. Those lines are the kernel, the kernel
+# firmware, the CPU microcode and any boot loader package. An on-box install puts
+# PortaPixel on a system that already boots itself: a normal virtual machine host
+# runs linux-virt, this image runs linux-lts, and installing ours gave the host two
+# kernels and no way to know which one starts. See packages.list, the @image tag.
+ONBOX=0
+[ -n "$ROOT" ] || ONBOX=1
+
+# read_packages prints one package name per line. The first argument is the set:
+# "keep" gives the packages to install, "skip" gives the @image packages that
+# on-box mode leaves out.
+read_packages() {
+	awk -v arch="$ARCH" -v onbox="$ONBOX" -v want="$1" '
+		{ sub(/[ \t]*#.*$/, "") }        # drop the rationale comment
+		{ gsub(/^[ \t]+|[ \t]+$/, "") }  # trim
+		$0 == "" { next }
+		{
+			# The tags come first, and there can be more than one.
+			n = 1; image = 0; archok = 1
+			while (n <= NF && substr($n, 1, 1) == "@") {
+				if ($n == "@image") image = 1
+				else if ($n != "@" arch) archok = 0
+				n++
+			}
+			if (!archok || n > NF) next
+			if (image && onbox == 1) { if (want == "skip") print $n; next }
+			if (want == "keep") print $n
+		}
+	' "$SRC/packages.list"
+}
+
 say "read the package set for $ARCH"
-PKGS="$(awk -v arch="$ARCH" '
-	{ sub(/[ \t]*#.*$/, "") }        # drop the rationale comment
-	{ gsub(/^[ \t]+|[ \t]+$/, "") }  # trim
-	$0 == "" { next }
-	$1 ~ /^@/ { if ($1 == "@" arch) print $2; next }
-	{ print $1 }
-' "$SRC/packages.list")"
+PKGS="$(read_packages keep)"
 [ -n "$PKGS" ] || die "packages.list gave no packages for $ARCH"
+if [ "$ONBOX" = 1 ]; then
+	SKIPPED="$(read_packages skip | tr '\n' ' ')"
+	say "on-box mode installs no kernel, kernel firmware, microcode or boot loader."
+	say "  this host keeps the kernel it boots. Skipped: ${SKIPPED:-none}"
+fi
 
 say "install $(printf '%s\n' "$PKGS" | wc -l | tr -d ' ') packages"
 # shellcheck disable=SC2086  # $APK and $PKGS are deliberate word lists
@@ -405,26 +436,24 @@ if [ -n "$ROOT" ]; then
 	say "write the mkinitfs feature list"
 	mkdir -p "$ROOT/etc/mkinitfs"
 	printf 'features="%s"\n' "$MKINITFS_FEATURES" >"$ROOT/etc/mkinitfs/mkinitfs.conf"
-else
-	# On-box, the host root can be on LVM, on LUKS or on a RAID set. Its feature
-	# list is what makes the host boot. Replace the list and rebuild the
-	# initramfs, and the host does not come back from the next reboot. The host
-	# already boots itself, so leave this alone.
-	say "keep the mkinitfs feature list of the host (on-box mode)"
-fi
 
-# Exactly one kernel, or we cannot know which one the boot loader will name.
-# "ls | head -n1" is alphabetical order, not version order, so with two kernels
-# it can pick the one that is not installed in /boot.
-KVER="$(ls "$ROOT/lib/modules" 2>/dev/null || true)"
-KCOUNT="$(printf '%s\n' "$KVER" | grep -c . || true)"
-[ -n "$KVER" ] || die "no kernel found in $ROOT/lib/modules"
-[ "$KCOUNT" = 1 ] || die "found $KCOUNT kernels in $ROOT/lib/modules:
+	# Exactly one kernel, or we cannot know which one the boot loader will name.
+	# "ls | head -n1" is alphabetical order, not version order, so with two kernels
+	# it can pick the one that is not installed in /boot.
+	#
+	# This is an IMAGE rule and it lives inside this branch for that reason. On-box
+	# mode installs no kernel and builds no initramfs, so the number of kernels on
+	# the host is not our business. The test ran for both modes once, and a normal
+	# Alpine host with linux-virt plus our linux-lts then stopped the install with
+	# "found 2 kernels".
+	KVER="$(ls "$ROOT/lib/modules" 2>/dev/null || true)"
+	KCOUNT="$(printf '%s\n' "$KVER" | grep -c . || true)"
+	[ -n "$KVER" ] || die "no kernel found in $ROOT/lib/modules"
+	[ "$KCOUNT" = 1 ] || die "found $KCOUNT kernels in $ROOT/lib/modules:
 $KVER
  PortaPixel needs exactly one. Remove the kernels it must not use."
-# 6.18.52-0-lts -> lts, 6.12.85-0-rpi -> rpi. apk names the file after it.
-FLAVOR="${KVER##*-}"
-if [ -n "$ROOT" ]; then
+	# 6.18.52-0-lts -> lts, 6.12.85-0-rpi -> rpi. apk names the file after it.
+	FLAVOR="${KVER##*-}"
 	say "build initramfs-$FLAVOR for kernel $KVER"
 	# -b takes every file from the target tree, so this also works when the
 	# target architecture is not the architecture of this host.
@@ -434,8 +463,11 @@ if [ -n "$ROOT" ]; then
 		-P "$ROOT/etc/mkinitfs/features.d" \
 		-o "$ROOT/boot/initramfs-$FLAVOR" "$KVER"
 else
-	# On-box: the host owns its initramfs. See the note above.
-	say "keep the initramfs of the host (on-box mode)"
+	# On-box, the host root can be on LVM, on LUKS or on a RAID set. Its feature
+	# list and its initramfs are what make the host boot. Replace them, and the host
+	# does not come back from the next reboot. The host boots itself already, and
+	# this mode installs no kernel at all, so leave all three alone.
+	say "keep the kernel, the mkinitfs feature list and the initramfs of the host (on-box mode)"
 fi
 
 # ---------------------------------------------------------------- 8. the console

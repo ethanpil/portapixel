@@ -56,17 +56,14 @@ chroot /m /bin/sh -c 'echo "root:portapixel" | chpasswd'
 cp /etc/network/interfaces /m/etc/network/interfaces
 cp /etc/apk/repositories /m/etc/apk/repositories
 
-# The kernel flavour. The virt ISO installs linux-virt, and os/packages.list
-# names linux-lts for x86_64. Two kernels in one tree make install.sh refuse the
-# box, and it is right to refuse: it cannot know which one the boot loader names.
-# A PC install from the standard ISO runs linux-lts, so make this guest the same
-# kind of box and let install.sh see one kernel.
-# --no-interactive and no terminal: apk and update-extlinux must never wait for
-# an answer. Run 35432925149 stopped here for 30 minutes with no output, because
-# something asked a question that nobody could answer.
-apk --root /m --no-interactive add linux-lts </dev/null
-apk --root /m --no-interactive del linux-virt </dev/null
-chroot /m update-extlinux </dev/null
+# The kernel of this guest stays as the ISO installed it, which is linux-virt.
+# THAT IS THE POINT of this test. On-box mode installs no kernel, no kernel
+# firmware, no microcode and no boot loader package (the @image tag of
+# os/packages.list): it puts PortaPixel on a system that boots itself already.
+# This guest swapped linux-virt for the linux-lts of the image before, because
+# install.sh counted the kernels of the host and refused a box that had two. A
+# normal virtual machine host has linux-virt, so that refusal made the second
+# install path impossible on the most common kind of host.
 ls /m/boot
 
 # Put everything that the next phase needs ON THE DISK. The installed system
