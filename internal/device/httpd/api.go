@@ -103,7 +103,7 @@ func (d Deps) putConfig(w http.ResponseWriter, r *http.Request) {
 		// whole route.
 		var managed ErrManaged
 		if errors.As(err, &managed) {
-			writeError(w, http.StatusForbidden, managed.Error())
+			refuseManaged(w, r, managed.Server, managed.Field)
 			return
 		}
 		var fields config.Errors

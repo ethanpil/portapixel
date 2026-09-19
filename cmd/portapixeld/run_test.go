@@ -10,8 +10,11 @@ import (
 	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
+	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
+	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/opslog"
+	"slices"
 )
 
 // A rename of a playlist must correct every place that names it. The schedule
@@ -249,5 +252,73 @@ func TestRefreshConfigIDKeepsAFileThatHasAFault(t *testing.T) {
 				t.Errorf("no provision.config.kept line: %s", lines)
 			}
 		})
+	}
+}
+
+// A hand edit of portapixel.toml on a paired device must not take a field that the
+// fleet server owns (D48). The other fields of the same edit apply, the file of the
+// person is never rewritten, and a warning names the field.
+func TestKeepManagedHoldsTheFleetFields(t *testing.T) {
+	old := config.Default()
+	old.Playback.DefaultPlaylist = "lobby"
+	old.Display.OnTime = "07:30"
+	old.Display.OffTime = "22:00"
+	old.Server.URL = "https://signage.example.com"
+	old.Device.Name = "Lobby north"
+
+	next := old
+	next.Playback.DefaultPlaylist = "the hand edit"
+	next.Display.OnTime = "05:00"
+	next.Server.URL = "https://other.example.com"
+	next.Device.Name = "Front desk" // local: this one applies
+	next.Display.Rotation = 90      // local: this one applies
+
+	d := &daemon{}
+	// A standalone device takes everything.
+	got, kept := d.keepManaged(old, next)
+	if len(kept) != 0 || got.Playback.DefaultPlaylist != "the hand edit" {
+		t.Fatalf("a standalone device did not take the edit: kept=%v", kept)
+	}
+
+	// A paired device keeps the managed fields and the pairing fields.
+	d.sync = syncer.New(syncer.Options{
+		Config: func() config.Config { return old },
+		State: func() identity.State {
+			return identity.State{DeviceToken: "t", ServerURL: old.Server.URL}
+		},
+	})
+	got, kept = d.keepManaged(old, next)
+	if got.Playback.DefaultPlaylist != "lobby" {
+		t.Errorf("the default playlist became %q", got.Playback.DefaultPlaylist)
+	}
+	if got.Display.OnTime != "07:30" {
+		t.Errorf("the screen on time became %q", got.Display.OnTime)
+	}
+	if got.Server.URL != "https://signage.example.com" {
+		t.Errorf("the server address became %q", got.Server.URL)
+	}
+	if got.Device.Name != "Front desk" || got.Display.Rotation != 90 {
+		t.Errorf("a local field of the same edit was not taken: %+v", got.Device)
+	}
+	want := []string{"playback.default_playlist", "display.on_time", "server.url"}
+	for _, field := range want {
+		if !slices.Contains(kept, field) {
+			t.Errorf("%s is not in the list that the warning names: %v", field, kept)
+		}
+	}
+}
+
+// The two pairing fields change through /api/pair only. A settings save that sends
+// them back as they are must still pass.
+func TestPairingFields(t *testing.T) {
+	for _, field := range []string{"server.url", "server.token"} {
+		if !pairingField(field) {
+			t.Errorf("%s must belong to the pairing", field)
+		}
+	}
+	for _, field := range []string{"server.poll_seconds", "device.name", "web.password"} {
+		if pairingField(field) {
+			t.Errorf("%s must stay with the local admin", field)
+		}
 	}
 }

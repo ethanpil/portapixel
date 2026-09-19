@@ -222,10 +222,16 @@ func TestFleetLockOfTheConfigurationFields(t *testing.T) {
 		locked bool
 	}{
 		{"the default playlist", map[string]any{"playback": map[string]any{"default_playlist": "other"}}, true},
-		{"the transition", map[string]any{"playback": map[string]any{"transition": "cut"}}, true},
 		{"the screen on time", map[string]any{"display": map[string]any{"on_time": "07:30", "off_time": "22:00"}}, true},
-		{"automatic updates", map[string]any{"updates": map[string]any{"auto": true}}, true},
 		{"the schedule", map[string]any{"schedule": []map[string]any{{"playlist": "default"}}}, true},
+
+		// The boundary is exactly what the manifest carries. The other playback
+		// fields are the local defaults of this screen, and a fleet playlist carries
+		// its own transition and its own shuffle.
+		{"the transition", map[string]any{"playback": map[string]any{"transition": "cut"}}, false},
+		// The server gates which release is approved (D28). Whether this device
+		// installs it without a person belongs to the owner of the screen.
+		{"automatic updates", map[string]any{"updates": map[string]any{"auto": true}}, false},
 
 		{"the rotation", map[string]any{"display": map[string]any{"rotation": 90}}, false},
 		{"the audio output", map[string]any{"audio": map[string]any{"output": "hdmi"}}, false},

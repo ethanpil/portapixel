@@ -145,6 +145,25 @@ func NewSecret() string {
 // New builds the router with the hardening around it.
 func New(d Deps) http.Handler {
 	mux := http.NewServeMux()
+	// known holds the same API patterns without their methods. It answers the
+	// requests that fall through to the catch-all: a path that a route has, with a
+	// method that it does not, gives 405; everything else under /api/ gives 404.
+	//
+	// A wrapper around the whole router did this before, and it could not tell the
+	// 404 of the router from the 404 of a handler. "there is no playlist with this
+	// name" became "this device has no route with this path". The wrapper also hid
+	// the reader of http.MaxBytesReader, so an oversized body no longer closed the
+	// connection.
+	known := http.NewServeMux()
+	paths := map[string]bool{}
+	api := func(pattern string, h http.Handler) {
+		mux.Handle(pattern, h)
+		// One path can carry three methods, and a mux takes each pattern one time.
+		if path := pathOf(pattern); !paths[path] {
+			paths[path] = true
+			known.Handle(path, http.HandlerFunc(methodNotAllowed))
+		}
+	}
 
 	// Static files. No session: the player must work before anybody logs in, and
 	// the admin UI has to be able to show its own login form.
@@ -155,21 +174,21 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("GET /media/", d.serveMedia)
 
 	// Open API.
-	mux.HandleFunc("GET /api/status", d.getStatus)
-	mux.HandleFunc("POST /api/login", d.postLogin)
-	mux.HandleFunc("POST /api/logout", d.postLogout)
-	mux.HandleFunc("GET /api/session", d.getSession)
+	api("GET /api/status", http.HandlerFunc(d.getStatus))
+	api("POST /api/login", http.HandlerFunc(d.postLogin))
+	api("POST /api/logout", http.HandlerFunc(d.postLogout))
+	api("GET /api/session", http.HandlerFunc(d.getSession))
 
 	// The API of the admin UI. Every route needs a session.
 	auth := func(pattern string, h http.HandlerFunc) {
-		mux.Handle(pattern, d.Sessions.Require(h))
+		api(pattern, d.Sessions.Require(h))
 	}
 	// fleet locks a route that the fleet server owns while the device is paired
 	// (D48). PUT /api/config is not locked as a route: the local admin keeps the
 	// rotation, the audio, the network and the passwords there, so that refusal is
 	// per field and lives in the configuration save.
 	fleet := func(pattern string, h http.HandlerFunc) {
-		mux.Handle(pattern, d.Sessions.Require(d.fleetGuard(h)))
+		api(pattern, d.Sessions.Require(d.fleetGuard(h)))
 	}
 	auth("GET /api/config", d.getConfig)
 	auth("PUT /api/config", d.putConfig)
@@ -204,7 +223,7 @@ func New(d Deps) http.Handler {
 
 	// The player API: the device itself, with the boot secret.
 	player := func(pattern string, h http.HandlerFunc) {
-		mux.Handle(pattern, httpguard.LoopbackOnly(d.requireSecret(h)))
+		api(pattern, httpguard.LoopbackOnly(d.requireSecret(h)))
 	}
 	player("GET /api/player/manifest", d.getPlayerManifest)
 	player("POST /api/player/heartbeat", d.postHeartbeat)
@@ -213,74 +232,47 @@ func New(d Deps) http.Handler {
 	player("POST /api/player/ready", d.postPlayerReady)
 	player("GET /api/player/qr.svg", d.getQR)
 
-	var h http.Handler = notFoundJSON(mux)
+	// The catch-all. Go 1.22 gives the more specific pattern to a request, so every
+	// real route wins over it.
+	//
+	// It is registered for each method and not as one pattern with no method: a
+	// pattern of "/api/" takes every method, and "GET /" takes every path, so the two
+	// cross and the router refuses to hold both. HEAD is not in the list, because a
+	// GET pattern already answers HEAD.
+	known.HandleFunc("/api/", notFound)
+	for _, method := range []string{
+		http.MethodGet, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodOptions,
+	} {
+		mux.Handle(method+" /api/", known)
+	}
+
+	var h http.Handler = mux
 	h = httpguard.RequireHeader(h)
 	h = httpguard.HostAllowlist(d.Hosts)(h)
 	return h
 }
 
-// notFoundJSON turns the 404 and the 405 of the router into JSON under /api/.
-//
-// web/shared/api.js reads {"error": "..."} from every failure. The text page of
-// http.ServeMux gives it nothing to parse, so a route name with a spelling mistake
-// looked like a broken build and not like a wrong path. The fleet server holds the
-// same rule in internal/server/httpjson; a device must not import the server
-// packages, so the rule is here in its own words.
-func notFoundJSON(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasPrefix(r.URL.Path, "/api/") {
-			next.ServeHTTP(w, r)
-			return
-		}
-		next.ServeHTTP(&jsonErrorWriter{ResponseWriter: w}, r)
-	})
+// pathOf gives the path of a route pattern: "GET /api/status" becomes
+// "/api/status". The catch-all mux registers the paths with no method, so it can
+// tell a path that this device does not have from a method that a route does not
+// take.
+func pathOf(pattern string) string {
+	if at := strings.IndexByte(pattern, ' '); at >= 0 {
+		return pattern[at+1:]
+	}
+	return pattern
 }
 
-// jsonErrorWriter replaces the body of a 404 and a 405 with JSON. Every other
-// answer goes through as it is.
-type jsonErrorWriter struct {
-	http.ResponseWriter
-	replaced bool
-	done     bool
+// notFound and methodNotAllowed are the two answers of the catch-all. Every failure
+// under /api/ is JSON: web/shared/api.js reads {"error": "..."} from all of them, and
+// the text page of http.ServeMux gave it nothing to parse.
+func notFound(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusNotFound, "this device has no route with this path")
 }
 
-func (j *jsonErrorWriter) WriteHeader(code int) {
-	if j.done {
-		return
-	}
-	j.done = true
-	switch code {
-	case http.StatusNotFound:
-		j.replaced = true
-		writeError(j.ResponseWriter, code, "this device has no route with this path")
-	case http.StatusMethodNotAllowed:
-		j.replaced = true
-		writeError(j.ResponseWriter, code, "this route does not take this method")
-	default:
-		j.ResponseWriter.WriteHeader(code)
-	}
-}
-
-func (j *jsonErrorWriter) Write(b []byte) (int, error) {
-	if !j.done {
-		j.WriteHeader(http.StatusOK)
-	}
-	if j.replaced {
-		// The body of the answer that we replaced goes nowhere.
-		return len(b), nil
-	}
-	return j.ResponseWriter.Write(b)
-}
-
-// Unwrap gives the writer below, so http.NewResponseController reaches the real
-// connection.
-func (j *jsonErrorWriter) Unwrap() http.ResponseWriter { return j.ResponseWriter }
-
-// Flush keeps the SSE streams working. They are under /api/, so they get this
-// wrapper, and a type assertion on http.Flusher does not see through a wrapper. The
-// response controller follows Unwrap, so the bytes reach the connection.
-func (j *jsonErrorWriter) Flush() {
-	http.NewResponseController(j.ResponseWriter).Flush()
+func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
+	writeError(w, http.StatusMethodNotAllowed, "this route does not take this method")
 }
 
 // requireSecret checks the boot secret of the player endpoints (D46). The secret

@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"errors"
+	"io"
 	"net/http"
 
 	"github.com/ethanpil/portapixel/internal/device/syncer"
@@ -16,6 +17,8 @@ type PairState = syncer.PairState
 type ErrManaged struct {
 	// Server is the name of the fleet server, for the sentence that a person reads.
 	Server string
+	// Field is the configuration field that the body changed, or "".
+	Field string
 }
 
 func (e ErrManaged) Error() string { return managedMessage(e.Server) }
@@ -40,12 +43,63 @@ func (d Deps) fleetGuard(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if d.Managed != nil {
 			if name, paired := d.Managed(); paired {
-				writeError(w, http.StatusForbidden, managedMessage(name))
+				refuseManaged(w, r, name, "")
 				return
 			}
 		}
 		h(w, r)
 	}
+}
+
+// drainOnRefusal is how much of an unread body the device reads before it answers a
+// refusal. Go drains a small body by itself, and a body that is longer goes
+// unread: the connection is then closed and the client sees a reset in place of the
+// answer. A media upload is the case that matters, and the person must read the
+// sentence that says why.
+const drainOnRefusal = 1 << 20
+
+// refuseManaged answers 403 for a route that the fleet server owns.
+//
+// The refusal comes before the body is read, so an upload of 500 MB is never
+// written to the card. The answer says which server is in charge and which
+// configuration fields belong to it, so the admin UI needs no copy of that list.
+func refuseManaged(w http.ResponseWriter, r *http.Request, server, field string) {
+	if r.Body != nil && r.ContentLength != 0 {
+		// Enough of the body to let the client read the answer, and no more.
+		io.CopyN(io.Discard, r.Body, drainOnRefusal)
+		w.Header().Set("Connection", "close")
+	}
+	writeJSON(w, http.StatusForbidden, map[string]any{
+		"error":  managedMessage(server),
+		"fields": managedFieldErrors(field),
+	})
+}
+
+// managedFieldErrors names each configuration field that the fleet server owns, in
+// the shape of a 422 answer. The admin UI disables exactly these.
+//
+// cause is the field of the body that made this refusal, or "". A field that is not
+// one of the fleet fields is one of the pairing fields, which change through
+// /api/pair only.
+func managedFieldErrors(cause string) []fieldError {
+	fields := syncer.ManagedFields()
+	out := make([]fieldError, 0, len(fields)+1)
+	for _, f := range fields {
+		out = append(out, fieldError{Field: f, Message: "the fleet server manages this"})
+	}
+	if cause != "" && !syncer.ManagedField(cause) {
+		out = append(out, fieldError{
+			Field:   cause,
+			Message: "this device is paired; unpair it to change this",
+		})
+	}
+	return out
+}
+
+// fieldError is one field of a 422 or of a managed 403.
+type fieldError struct {
+	Field   string `json:"field"`
+	Message string `json:"message"`
 }
 
 // GET /api/pair gives the pairing state to the admin UI.
@@ -88,8 +142,14 @@ func (d Deps) postPair(w http.ResponseWriter, r *http.Request) {
 		// this device and the server, and 502 says which of the two to look at.
 		code := http.StatusBadGateway
 		var bad syncer.BadURL
-		if errors.As(err, &bad) {
+		var already syncer.ErrAlreadyPaired
+		switch {
+		case errors.As(err, &bad):
 			code = http.StatusUnprocessableEntity
+		case errors.As(err, &already):
+			// A device with a pairing must be unpaired first. The admin UI has the
+			// button, and the token of the old server must never go to a new one.
+			code = http.StatusConflict
 		}
 		writeError(w, code, err.Error())
 		return

@@ -1270,3 +1270,145 @@ func TestInstallEventsReplayTheLastEvent(t *testing.T) {
 		t.Errorf("the stream did not replay the last event: %q", w.Body.String())
 	}
 }
+
+// A 404 that a handler wrote must reach the caller as it is. A wrapper around the
+// whole router replaced every one of them with "this device has no route with this
+// path". A person who looked for a missing playlist was then told that the API is
+// broken.
+func TestAHandlerKeepsItsOwn404(t *testing.T) {
+	f := newFx(t)
+	f.login()
+
+	w := f.do(http.MethodGet, "/api/media/there-is-no-such-playlist", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("code = %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "no playlist with this name") {
+		t.Errorf("body = %s, want the sentence of the handler", w.Body)
+	}
+
+	// A path that no route has still gives the sentence of the router.
+	w = f.do(http.MethodGet, "/api/there-is-no-such-route", nil)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("code = %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "no route with this path") {
+		t.Errorf("body = %s", w.Body)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("content type = %q", got)
+	}
+}
+
+// A method that a route does not take gives 405 and JSON.
+func TestAMethodThatARouteDoesNotTake(t *testing.T) {
+	f := newFx(t)
+	f.login()
+
+	w := f.do(http.MethodDelete, "/api/status", nil)
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "does not take this method") {
+		t.Errorf("body = %s", w.Body)
+	}
+}
+
+// The 403 of a route that the fleet server owns names the fields that it owns, so
+// the admin UI needs no copy of that list.
+func TestTheManagedRefusalNamesTheFields(t *testing.T) {
+	f := newFx(t)
+	f.fleet = true
+	f.serverName = "Ridgeline Signage"
+	f.rebuild()
+	f.login()
+
+	w := f.do(http.MethodPost, "/api/playlists", map[string]any{"title": "New"})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("code = %d: %s", w.Code, w.Body)
+	}
+	var body struct {
+		Error  string `json:"error"`
+		Fields []struct {
+			Field   string `json:"field"`
+			Message string `json:"message"`
+		} `json:"fields"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Error != "managed by Ridgeline Signage" {
+		t.Errorf("error = %q", body.Error)
+	}
+	want := syncer.ManagedFields()
+	if len(body.Fields) != len(want) {
+		t.Fatalf("fields = %+v, want %v", body.Fields, want)
+	}
+	for i, f := range body.Fields {
+		if f.Field != want[i] {
+			t.Errorf("field %d = %q, want %q", i, f.Field, want[i])
+		}
+	}
+}
+
+// A media upload on a paired device must read the JSON 403 and not a connection
+// that closed in its face. Go drains only a small unread body by itself.
+func TestALargeUploadOnAPairedDeviceReadsTheRefusal(t *testing.T) {
+	f := newFx(t)
+	f.fleet = true
+	f.serverName = "Ridgeline Signage"
+	f.rebuild()
+	f.login()
+
+	big := bytes.Repeat([]byte("x"), 5<<20)
+	w := f.do(http.MethodPost, "/api/media/default?filename=a.jpg", nil, func(r *request) {
+		r.rawBody = bytes.NewReader(big)
+	})
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("code = %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "managed by") {
+		t.Errorf("body = %s", w.Body)
+	}
+}
+
+// GET /api/pair carries the fields that the fleet server owns while the device is
+// paired. The admin UI disables exactly these.
+func TestPairStateCarriesTheManagedFields(t *testing.T) {
+	f := newFx(t)
+	f.fleet = true
+	f.serverName = "Ridgeline Signage"
+	f.pairState = PairState{Status: syncer.StatusPaired, ManagedFields: syncer.ManagedFields()}
+	f.rebuild()
+	f.login()
+
+	w := f.do(http.MethodGet, "/api/pair", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("code = %d: %s", w.Code, w.Body)
+	}
+	var body PairState
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if len(body.ManagedFields) != len(syncer.ManagedFields()) {
+		t.Errorf("managed_fields = %v", body.ManagedFields)
+	}
+}
+
+// POST /api/pair on a device that is paired answers 409, so the UI can send the
+// person to the Unpair button.
+func TestPairOnAPairedDeviceAnswers409(t *testing.T) {
+	f := newFx(t)
+	f.fleet = true
+	f.pairErr = syncer.ErrAlreadyPaired{Server: "Ridgeline Signage"}
+	f.rebuild()
+	f.login()
+
+	w := f.do(http.MethodPost, "/api/pair", map[string]any{"url": "https://other.example.com"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("code = %d: %s", w.Code, w.Body)
+	}
+	if !strings.Contains(w.Body.String(), "unpair it first") {
+		t.Errorf("body = %s", w.Body)
+	}
+}

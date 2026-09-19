@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -67,6 +69,11 @@ const configPoll = 5 * time.Second
 // shutdownGrace is how long the HTTP server may take to finish its requests.
 const shutdownGrace = 5 * time.Second
 
+// readIdleLimit is how long a connection may send nothing before the server closes
+// it. It is not a limit on a request: a media upload of 1 GB sends bytes all the
+// time.
+const readIdleLimit = 2 * time.Minute
+
 // updateApplyLimit is the longest that one update may take. A release of 25 MB on a
 // slow link needs minutes; a download that never ends must not hold a goroutine for
 // ever.
@@ -103,6 +110,10 @@ type daemon struct {
 
 	secret string
 	port   int
+
+	// stateMu holds one change of state.json at a time: the read, the change and
+	// the write are one step. See updateState.
+	stateMu sync.Mutex
 
 	mu          sync.Mutex
 	cfg         config.Config
@@ -287,6 +298,7 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		Now:            d.localNow,
 		Auto:           func() bool { return d.config().Updates.Auto },
 		ApplyMinute:    d.applyMinute,
+		SourceKind:     d.updateSourceKind,
 	})
 	d.update.CheckRollback()
 
@@ -305,36 +317,62 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 	// device with no network must not use them at all. Nothing else here talks to a
 	// network; the poll loop starts in serve.
 	d.sync = syncer.New(syncer.Options{
-		MediaRoot:       p.media,
-		Log:             d.log,
-		Now:             d.localNow,
-		Identity:        d.id,
-		Config:          d.config,
-		State:           d.deviceState,
-		SaveState:       d.updateState,
-		SaveServer:      d.saveServer,
-		Status:          func() manifest.Status { return d.status(false) },
-		SetFleetRules:   d.sched.SetFleetRules,
-		ClearFleetRules: d.sched.ClearFleetRules,
+		MediaRoot:  p.media,
+		Log:        d.log,
+		Now:        d.localNow,
+		Identity:   d.id,
+		Config:     d.config,
+		State:      d.deviceState,
+		SaveState:  d.updateState,
+		SaveServer: d.saveServer,
+		Status:     func() manifest.Status { return d.status(false) },
+		// Closures and not bound method values. A bound method value takes the
+		// receiver now. A block that moves above the one that makes d.sched would
+		// bind a nil pointer here, and the panic would come later, on a paired
+		// device, inside Restore. A closure asks for the field when it is called.
+		SetFleetRules: func(def string, rules []manifest.Rule, screen *manifest.ScreenRule) {
+			d.sched.SetFleetRules(def, rules, screen)
+		},
+		ClearFleetRules: func() { d.sched.ClearFleetRules() },
 		Rescan:          func() { d.lib.Rescan() },
 		Command:         d.command,
 		Update:          d.fleetUpdate,
-		CachedSHA:       d.lib.CachedSHA,
-		FindSHA:         d.lib.FindSHA,
-		NoteSHA:         d.lib.NoteSHA,
+		ResetUpdate:     func() { d.update.Reset() },
+		CachedSHA:       func(abs string, size, modNS int64) (string, bool) { return d.lib.CachedSHA(abs, size, modNS) },
+		FindSHA:         func(sha string) (string, bool) { return d.lib.FindSHA(sha) },
+		NoteSHA:         func(abs, sha string) { d.lib.NoteSHA(abs, sha) },
 	})
 	d.sync.Restore()
 	return d, nil
 }
 
 // updateState changes the device state and writes the file under one lock. The
-// fleet client and the updater both change it, so the read and the write of one
-// change must not be two steps that another goroutine can come between.
+// fleet client and the updater both change it, so the read, the change and the write
+// of one change must not be three steps that another goroutine can come between.
+//
+// The write is inside the lock. It was outside once, and then two callers could
+// write their snapshots in the other order: an Unpair came back after a reboot,
+// and the ID of a command that ran was lost, so the server sent the command again
+// and the screen rebooted twice. stateMu and not mu, because mu is held by every
+// status call and a write to a flash card takes milliseconds.
+//
+// A change that changes nothing writes nothing. The claim poll of a device that
+// waits for approval asks every ten seconds for days, and an fsync each time is
+// flash wear for a screen that nobody approved yet.
 func (d *daemon) updateState(change func(*identity.State)) error {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+
 	d.mu.Lock()
+	before, _ := json.Marshal(d.state)
 	change(&d.state)
 	state := d.state
+	after, _ := json.Marshal(d.state)
 	d.mu.Unlock()
+
+	if bytes.Equal(before, after) {
+		return nil
+	}
 	return state.Save(d.paths.state)
 }
 
@@ -377,12 +415,7 @@ func (d *daemon) isBadRelease(v string) bool {
 // markBadRelease records a release that failed its health gate, so that the updater
 // never installs it again (plan section 15).
 func (d *daemon) markBadRelease(v string) {
-	d.mu.Lock()
-	d.state.MarkBadRelease(v)
-	state := d.state
-	d.mu.Unlock()
-
-	if err := state.Save(d.paths.state); err != nil {
+	if err := d.updateState(func(st *identity.State) { st.MarkBadRelease(v) }); err != nil {
 		d.log.Log("update.badlist.write.fail", err.Error())
 	}
 }
@@ -397,10 +430,14 @@ func (d *daemon) serve(listen string) int {
 	server := &http.Server{
 		Addr:    address,
 		Handler: httpd.New(d.deps()),
-		// No read timeout: a media upload of a 1 GB video is a slow request that
-		// is not a fault. The write timeout is out for the same reason and for the
-		// SSE stream, which never ends.
+		// No read timeout and no write timeout: a media upload of a 1 GB video is a
+		// slow request that is not a fault, and the SSE stream never ends.
+		//
+		// IdleTimeout takes the place of both for a connection that sends nothing.
+		// Such a connection used to hold a goroutine and a file handle for ever. A
+		// few hundred of them are the memory of a device with 512 MB.
 		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       readIdleLimit,
 	}
 
 	listener, err := net.Listen("tcp", address)
@@ -528,18 +565,27 @@ func (d *daemon) updateSource() updater.Source {
 	return updater.Source{Repo: GitHubRepo}
 }
 
+// updateSourceKind names the source that this device may install from now. The
+// updater refuses a release of any other source: a check and an apply are minutes
+// apart, and a device that paired in that time must install what its server approved
+// (D28).
+func (d *daemon) updateSourceKind() string {
+	if _, ok := d.sync.UpdateSource(); ok {
+		return "fleet"
+	}
+	return "github"
+}
+
 // checkUpdate asks the release source. The handler holds no rule: the updater owns
 // the refusals and the state.
 //
 // A paired device with no approved release has nothing to offer, and that is not a
-// fault: the GitHub source is off while a device is paired, so the About page says
-// "there is no newer release" and not an error about a source that is missing.
+// fault. updater.Check answers ErrNoRelease for such a source, so the About page says
+// "there is no newer release" and not an error about a source that is missing. The
+// rule was here as well before, and the two other callers did not have it: a healthy
+// paired device then showed an update fault.
 func (d *daemon) checkUpdate(ctx context.Context) (updater.Release, error) {
-	src := d.updateSource()
-	if src.Repo == "" && src.BaseURL == "" {
-		return updater.Release{}, updater.ErrNoRelease
-	}
-	return d.update.Check(ctx, src)
+	return d.update.Check(ctx, d.updateSource())
 }
 
 // applyUpdate installs the release that the last check found.
@@ -884,15 +930,17 @@ func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
 		return httpd.Applied{}, errs
 	}
 
-	// The settings boundary of D48. The fleet server owns the playlists, the
-	// schedules, the screen times and the updates while the device is paired. The
-	// rotation, the audio, the network, the name, the time zone and the passwords
-	// stay with the local admin, so the refusal is per field and not per route.
+	// The settings boundary of D48. The fleet server owns the default playlist, the
+	// schedule and the screen times while the device is paired. Everything else
+	// stays with the local admin, so the refusal is per field and not per route.
+	//
+	// ChangeClass names only the fields that differ, so a normal save that sends the
+	// same values back passes.
 	changes := config.ChangeClass(old, next)
 	if name, paired := d.sync.Managed(); paired {
 		for _, c := range changes {
-			if syncer.ManagedField(c.Field) {
-				return httpd.Applied{}, httpd.ErrManaged{Server: name}
+			if syncer.ManagedField(c.Field) || pairingField(c.Field) {
+				return httpd.Applied{}, httpd.ErrManaged{Server: name, Field: c.Field}
 			}
 		}
 	}
@@ -906,6 +954,53 @@ func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
 	d.applyChanges(changes)
 	d.log.Log("config.save", fmt.Sprintf("%d changes", len(changes)))
 	return httpd.Applied{Applied: highestClass(changes), Changes: changes}, nil
+}
+
+// pairingField reports if a configuration field belongs to the pairing. The two
+// values are written together by POST /api/pair and cleared together by DELETE
+// /api/pair, and nothing else may take them apart: a token beside the address of
+// another server is a token that the device sends to a stranger.
+func pairingField(field string) bool {
+	return field == "server.url" || field == "server.token"
+}
+
+// keepManaged holds the fields that the fleet server owns at the value that runs.
+//
+// A hand edit of portapixel.toml is the path here. The other fields of the same edit
+// apply as they are: the file of the person is never rewritten, and the status says
+// in one sentence which field the device did not take.
+func (d *daemon) keepManaged(old, next config.Config) (config.Config, []string) {
+	// A test of the reload path builds no fleet client.
+	if d.sync == nil {
+		return next, nil
+	}
+	if _, paired := d.sync.Managed(); !paired {
+		return next, nil
+	}
+	var kept []string
+	for _, c := range config.ChangeClass(old, next) {
+		if !syncer.ManagedField(c.Field) && !pairingField(c.Field) {
+			continue
+		}
+		kept = append(kept, c.Field)
+		switch c.Field {
+		case "playback.default_playlist":
+			next.Playback.DefaultPlaylist = old.Playback.DefaultPlaylist
+		case "schedule":
+			next.Schedule = old.Schedule
+		case "display.on_time":
+			next.Display.OnTime = old.Display.OnTime
+		case "display.off_time":
+			next.Display.OffTime = old.Display.OffTime
+		case "display.power_days":
+			next.Display.PowerDays = old.Display.PowerDays
+		case "server.url":
+			next.Server.URL = old.Server.URL
+		case "server.token":
+			next.Server.Token = old.Server.Token
+		}
+	}
+	return next, kept
 }
 
 // watchConfig picks up a hand edit of portapixel.toml. A person with SSH, or a
@@ -974,8 +1069,21 @@ func (d *daemon) reloadConfig(modified time.Time) {
 		return
 	}
 
+	// A hand edit passes the same boundary as the settings page (D48). The fields
+	// that the fleet server owns keep the value that runs, the other fields of the
+	// edit apply, and the file of the person is not rewritten.
+	next, kept := d.keepManaged(old, next)
+	warning, code := "", ""
+	if len(kept) > 0 {
+		name, _ := d.sync.Managed()
+		warning = "the fleet server " + name + " manages " + strings.Join(kept, ", ") +
+			"; the value in portapixel.toml is not used"
+		code = manifest.WarnConfigManagedIgnored
+		d.log.Log("config.reload.managed", warning)
+	}
+
 	changes := config.ChangeClass(old, next)
-	d.adopt(next, false, "", "")
+	d.adopt(next, false, warning, code)
 	d.refreshHosts()
 	if len(changes) == 0 {
 		return
