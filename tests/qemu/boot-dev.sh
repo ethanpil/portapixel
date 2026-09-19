@@ -17,6 +17,7 @@
 # Usage:
 #   boot-dev.sh start IMAGE(.img or .img.gz) [--uefi] [--mem MB] [--cpus N]
 #                                            [--http PORT] [--ssh PORT]
+#                                            [--netdump FILE.pcap]
 #   boot-dev.sh shot FILE.png    write a screenshot of the display
 #   boot-dev.sh mon "COMMAND"    send one QEMU monitor command
 #   boot-dev.sh log [N]          show the last N lines of the serial log
@@ -50,6 +51,7 @@ cmd_start() {
 	CPUS=2
 	HTTP_PORT=18080
 	SSH_PORT=18022
+	NETDUMP=""
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--uefi) UEFI=1; shift ;;
@@ -57,6 +59,7 @@ cmd_start() {
 		--cpus) CPUS="${2:?}"; shift 2 ;;
 		--http) HTTP_PORT="${2:?}"; shift 2 ;;
 		--ssh) SSH_PORT="${2:?}"; shift 2 ;;
+		--netdump) NETDUMP="${2:?}"; shift 2 ;;
 		-*) die "unknown option: $1" ;;
 		*) IMAGE="$1"; shift ;;
 		esac
@@ -103,14 +106,25 @@ cmd_start() {
 		[ -n "$BIOS" ] || die "--uefi needs OVMF; apk add ovmf"
 	fi
 
+	# filter-dump writes every frame of the guest network to a pcap file on the
+	# host. It is the proof that the device talks to nobody: the file holds the
+	# name in each DNS question and in each TLS hello, so a plain grep finds a
+	# host that the browser called. The guest needs no tool at all for this.
+	DUMP=""
+	if [ -n "$NETDUMP" ]; then
+		case "$NETDUMP" in /*) ;; *) NETDUMP="$PWD/$NETDUMP" ;; esac
+		rm -f "$NETDUMP"
+		DUMP="-object filter-dump,id=netdump,netdev=n0,file=$NETDUMP"
+	fi
+
 	# virtio-vga, not the default VGA card: the default has no KMS driver in
 	# Linux, so /dev/dri stays empty and cage cannot start.
 	qemu-system-x86_64 -device help 2>&1 | grep -q '"virtio-vga"' ||
 		die "this QEMU has no virtio-vga; apk add qemu-hw-display-virtio-vga"
 
 	say "start the guest (${MEM}M, $CPUS cpus, http $HTTP_PORT, ssh $SSH_PORT)"
-	# shellcheck disable=SC2086  # $BIOS is a deliberate word list
-	qemu-system-x86_64 -accel kvm -cpu host -smp "$CPUS" -m "$MEM" $BIOS \
+	# shellcheck disable=SC2086  # $BIOS and $DUMP are deliberate word lists
+	qemu-system-x86_64 -accel kvm -cpu host -smp "$CPUS" -m "$MEM" $BIOS $DUMP \
 		-device virtio-vga \
 		-display none \
 		-drive "file=$DISK,format=qcow2,if=virtio" \
@@ -138,6 +152,7 @@ cmd_start() {
     screenshot : $0 shot FILE.png
     stop       : $0 stop
 EOF
+	[ -z "$NETDUMP" ] || printf '    network    : %s\n' "$NETDUMP"
 }
 
 cmd_shot() {
