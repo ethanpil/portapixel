@@ -56,6 +56,18 @@ chroot /m /bin/sh -c 'echo "root:portapixel" | chpasswd'
 cp /etc/network/interfaces /m/etc/network/interfaces
 cp /etc/apk/repositories /m/etc/apk/repositories
 
+# Put everything that the next phase needs ON THE DISK. The installed system
+# then needs no 9p share at all. The first attempt mounted the share in the live
+# ISO and got "Resource busy" on the installed system, and one file system less
+# is one fault less. install.sh reads os/ and LICENSES-THIRD-PARTY.md only.
+mkdir -p /m/root/pp
+cp -a /mnt/repo/os /m/root/pp/
+cp -a /mnt/repo/LICENSES-THIRD-PARTY.md /m/root/pp/
+cp /mnt/work/portapixeld /m/root/portapixeld
+chmod 0755 /m/root/portapixeld
+cp /mnt/work/vanilla-onbox.sh /m/root/
+cp /mnt/work/params /m/root/
+
 umount /m
 sync
 echo VANILLA-INSTALL-DONE

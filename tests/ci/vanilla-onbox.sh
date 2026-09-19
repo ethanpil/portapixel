@@ -4,17 +4,18 @@
 # that PortaPixel made.
 set -eux
 
-. /mnt/work/params
+# vanilla-guest.sh put the os/ tree, the binary and this file under /root, so
+# this phase needs no 9p share.
+. /root/params
 
-# 9pnet_virtio holds the share. The repository is under /mnt/repo.
 ip link set eth0 up 2>/dev/null || true
 udhcpc -i eth0 -n -q 2>/dev/null || true
 apk update
 
 # The on-box install. No --root and no --media-partition, so the media directory
 # is /var/lib/portapixel/media, which is what install.sh documents.
-sh /mnt/repo/os/install.sh \
-	--binary /mnt/work/portapixeld \
+sh /root/pp/os/install.sh \
+	--binary /root/portapixeld \
 	--version "$VERSION"
 
 # The daemon needs a browser to show a picture, and this virtual machine has no

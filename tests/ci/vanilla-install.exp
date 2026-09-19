@@ -66,9 +66,9 @@ expect {
 	timeout { die "the shell gave no output" }
 }
 
-mount_shares
-
 if {$phase eq "install"} {
+	mount_shares
+
 	# ------------------------------------------------- 1. install stock Alpine
 	set timeout 1800
 	send "sh /mnt/work/vanilla-guest.sh 2>&1 | tail -n 40\r"
@@ -91,7 +91,7 @@ if {$phase eq "install"} {
 
 # --------------------------------------------------- 2. the on-box install (D51)
 set timeout 2400
-send "sh /mnt/work/vanilla-onbox.sh 2>&1 | tail -n 60\r"
+send "sh /root/vanilla-onbox.sh 2>&1 | tail -n 60\r"
 expect {
 	"ONBOX-INSTALL-DONE" { send_user "\n==> os/install.sh finished on the live system\n" }
 	-re {install.sh: (.*)} { die "install.sh refused: $expect_out(1,string)" }
