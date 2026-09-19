@@ -52,6 +52,24 @@ something that cost you time. Remove an entry when it is no longer true.
 
 ## 5. Lessons
 
+- The daemon does not serve `*.toml` files or `_update/` from `/media/`. The first live
+  run showed that `/media/portapixel.toml` gave the admin password and the WiFi key to
+  the LAN. `/media/` has no session check, because the player has no session.
+- `--browser-cmd none` sets the browser off (`browser_state: "disabled"`). Use it for
+  development on a desktop. The health marker treats it as healthy.
+- The daemon picks the navigation rung one time, at the first browser start. A probe at
+  each restart would cost 45 s each time.
+- The reboot ladder counts crashes and watchdog restarts only. A restart from a person,
+  from a settings change or from the nightly job does not count.
+- The frame counter starts at 0 on each new page. A lower value is a reset. The same
+  value in three heartbeats is a stall (D45).
+- The device ID falls back to a hash of the host name when there is no Pi serial, no DMI
+  UUID and no physical NIC. Only a development machine gets there.
+- A day that is not in `power_days` has no on-period. The screen stays off that day.
+- A `playlist.toml` with no items is not a fault. The editor makes one before the first
+  item.
+- A static address goes to `wlan0` when an SSID is set, else to `eth0`.
+- The `opslog` tests take about 20 s because they write many lines to a real file.
 - `internal/config` imports `time/tzdata` (about 450 KB). Without it, time zone checks
   fail on a host with no zone database. The system database still wins on Alpine.
 - The API shows a secret as `********`. A PUT that sends this mask keeps the old secret.
