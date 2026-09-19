@@ -5,9 +5,11 @@
    "at the next check-in" and never "now".
 */
 
-import { h, toast, modal, confirmDialog } from '/shared/ui.js';
+import {
+  h, toast, modal, confirmDialog, errorText,
+} from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { COMMANDS, errorText } from './util.js';
+import { COMMANDS } from './util.js';
 
 /** Ask, then queue one command for one screen. Returns true when it is queued. */
 export async function sendToScreen(deviceId, screenName, type) {

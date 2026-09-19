@@ -6,10 +6,11 @@
    pages/ and gets the same small context object.
 */
 
-import { h, fill, renderShell, route, confirmDialog, statusDot } from '/shared/ui.js';
+import {
+  h, fill, renderShell, route, confirmDialog, closeModal, statusDot, setText,
+} from '/shared/ui.js';
 import { api, UNAUTHORIZED } from '/shared/api.js';
 import { createStore } from './store.js';
-import { setText } from './util.js';
 import * as screens from './pages/screens.js';
 import * as screen from './pages/screen.js';
 import * as addScreens from './pages/add-screens.js';
@@ -66,12 +67,18 @@ const ctx = {
 boot();
 
 async function boot() {
+  let note = '';
   try {
     session = await api('GET', '/api/admin/session');
-  } catch {
+  } catch (err) {
+    // A 421, a 500 or a network fault is not "your session ended". Say which one
+    // it was, or the admin retypes a password that was never wrong.
     session = {};
+    note = err.status === 421
+      ? 'This server does not answer to this host name. Open it at the address in its settings.'
+      : `The server did not answer: ${err.message}`;
   }
-  if (session.logged_in) start(); else showLogin();
+  if (session.logged_in) start(); else showLogin(note);
 }
 
 /* ------------------------------------------------------------------- login */
@@ -80,6 +87,7 @@ function showLogin(note) {
   signedIn = false;
   guard = null;
   store.stop();
+  closeModal();
   // Take the page down before the form goes up. A page that stayed mounted
   // would keep its own timers running and every one of them would ask again
   // and be refused again.
@@ -152,6 +160,7 @@ function start() {
   }
 
   shell = renderShell({
+    brandSub: 'Control',
     subtitle: [hostEl],
     tools: [
       h('span', { class: 'pp-small pp-muted pp-hide-sm', text: 'Signed in as admin' }),
@@ -167,9 +176,6 @@ function start() {
     footer: [totalsEl],
     wide: true,
   });
-  // renderShell builds the brand mark and the name. The control server adds one
-  // muted word, so the two UIs are never mistaken for each other.
-  shell.topbar.querySelector('.pp-brand').append(h('span', { class: 'pp-brand__sub', text: 'Control' }));
   fill(root, shell.el);
   paintSession();
 
@@ -229,8 +235,12 @@ function paintTotals({ totals }) {
 function enter(name, module) {
   return (arg) => {
     if (goingBack) { goingBack = false; return; }
-    if (guard && guard() && name !== at) { askToLeave(); return; }
+    /* Two different screens both match the pattern "screens/:id", so a guard that
+       compared the pattern let unsaved rules go without a word. Compare the
+       address instead. */
+    if (guard && guard() && location.hash !== atHash) { askToLeave(); return; }
 
+    closeModal();
     if (page && page.destroy) page.destroy();
     page = null;
     guard = null;

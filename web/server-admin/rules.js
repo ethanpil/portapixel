@@ -6,11 +6,12 @@
    of every row.
 */
 
-import { h, fill, icon, toast, confirmDialog } from '/shared/ui.js';
-import { api } from '/shared/api.js';
 import {
-  card, errorText, dayChips, daysInWords, inWindow, clockNow, setText,
-} from './util.js';
+  h, fill, icon, toast, confirmDialog, card, errorText, dayChips,
+  daysInWords, inWindow, setText,
+} from '/shared/ui.js';
+import { api } from '/shared/api.js';
+import { clockNow } from './util.js';
 
 /** Mount the rule table and the week picture.
     owner:       {group_id} or {device_id}
@@ -32,7 +33,7 @@ export function mountRules(el, opts = {}) {
   const rowsSlot = h('div');
   const weekSlot = h('div');
   const dirtyNote = h('span', { class: 'pp-pe__dirty' });
-  const nowLine = h('div', { class: 'pp-help', style: { 'margin-top': '0' } });
+  const nowLine = h('div', { class: 'pp-help', style: { 'margin-top': '0' }, role: 'status', 'aria-live': 'polite' });
   const saveBtn = h('button', {
     type: 'button', class: 'pp-btn pp-btn--primary', disabled: true, onClick: save,
   });
@@ -129,17 +130,18 @@ export function mountRules(el, opts = {}) {
       rules.splice(to, 0, it);
       touch();
       renderRows();
+      focusMove(to, to > i);
     };
 
     const error = h('div', { class: 'pp-error', hidden: true, style: { flex: '1 1 100%' } });
-    const row = h('div', { class: 'sv-rule' },
-      h('div', { class: 'sv-rule__n', text: `${i + 1}` }),
-      h('label', { class: 'pp-label sv-rule__pl' }, 'Play this', playlistSelect),
+    const row = h('div', { class: 'pp-rule' },
+      h('div', { class: 'pp-rule__n', text: `${i + 1}` }),
+      h('label', { class: 'pp-label pp-rule__pl' }, 'Play this', playlistSelect),
       h('div', null, h('div', { class: 'pp-label', text: 'On these days' }),
         h('div', { style: { 'margin-top': '5px' } }, chips)),
       h('div', null, h('div', { class: 'pp-label', text: 'Between' }),
-        h('div', { class: 'sv-rule__times', style: { 'margin-top': '5px' } }, time('start', 'Start'), time('end', 'End'))),
-      h('div', { class: 'sv-rule__acts' },
+        h('div', { class: 'pp-rule__times', style: { 'margin-top': '5px' } }, time('start', 'Start'), time('end', 'End'))),
+      h('div', { class: 'pp-rule__acts' },
         h('button', {
           type: 'button', class: 'pp-btn pp-btn--icon', 'aria-label': `Move rule ${i + 1} up`,
           disabled: i === 0, onClick: () => move(i - 1),
@@ -162,6 +164,21 @@ export function mountRules(el, opts = {}) {
     return row;
   }
 
+  /* renderRows() builds every row again, so the button that made the move is
+     gone and the keyboard would fall to the body. Put it on the row that moved,
+     and say in words where the row is now. */
+  function focusMove(index, wentDown) {
+    const rows = [...rowsSlot.querySelectorAll('.pp-rule')];
+    const row = rows[index];
+    if (!row) return;
+    const btns = row.querySelectorAll('.pp-rule__acts .pp-btn--icon');
+    const wanted = btns[wentDown ? 1 : 0];
+    const other = btns[wentDown ? 0 : 1];
+    if (wanted && !wanted.disabled) wanted.focus();
+    else if (other && !other.disabled) other.focus();
+    setText(nowLine, `Rule ${index + 1} of ${rules.length}. ${nowWords()}`);
+  }
+
   function addRule() {
     rules.push({
       id: 0, playlist_id: (playlists[0] && playlists[0].id) || 0,
@@ -177,27 +194,27 @@ export function mountRules(el, opts = {}) {
      middle of that hour, which is the reading a person wants from a picture. */
   function renderWeek() {
     const labels = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
-    const grid = h('div', { class: 'sv-week' });
+    const grid = h('div', { class: 'pp-week' });
     for (let d = 0; d < 7; d++) {
-      const hours = h('div', { class: 'sv-week__hours' });
+      const hours = h('div', { class: 'pp-week__hours' });
       for (let hour = 0; hour < 24; hour++) {
         const minute = hour * 60 + 30;
         const hit = rules.findIndex((r) => inWindow(r.start, r.end, minute, d, r.days));
         hours.append(h('span', {
-          class: `sv-week__cell${hit >= 0 ? ' sv-week__cell--on' : ''}`,
+          class: `pp-week__cell${hit >= 0 ? ' pp-week__cell--on' : ''}`,
           title: hit >= 0
             ? `${labels[d]} ${String(hour).padStart(2, '0')}:00 — rule ${hit + 1}, ${titleOf(rules[hit].playlist_id)}`
             : `${labels[d]} ${String(hour).padStart(2, '0')}:00 — ${fallback || 'nothing'}`,
         }));
       }
-      grid.append(h('div', { class: 'sv-week__day', text: labels[d] }), hours);
+      grid.append(h('div', { class: 'pp-week__day', text: labels[d] }), hours);
     }
 
-    const axis = h('div', { class: 'sv-week__axis' });
+    const axis = h('div', { class: 'pp-week__axis' });
     for (let hour = 0; hour < 24; hour++) axis.append(h('span', { text: String(hour).padStart(2, '0') }));
 
     fill(weekSlot, grid,
-      h('div', { class: 'sv-week', style: { 'margin-top': '2px' } }, h('span'), axis),
+      h('div', { class: 'pp-week', style: { 'margin-top': '2px' } }, h('span'), axis),
       h('div', { class: 'pp-row', style: { 'margin-top': '10px' } },
         h('span', { class: 'pp-status', style: { gap: '6px' } },
           h('span', { class: 'pp-swatch pp-swatch--ok' }), h('span', { class: 'pp-small pp-muted', text: 'A rule' })),
@@ -210,28 +227,29 @@ export function mountRules(el, opts = {}) {
      of this browser; every screen keeps its own time zone, and the line says
      so where it is shown. */
   function updateNow() {
+    setText(nowLine, nowWords());
+  }
+
+  function nowWords() {
     const { weekday, minute } = clockNow();
     const hit = rules.findIndex((r) => inWindow(r.start, r.end, minute, weekday, r.days));
-    if (hit < 0) {
-      setText(nowLine, `At this hour no rule matches, so ${fallback || 'nothing'} plays.`);
-      return;
-    }
+    if (hit < 0) return `At this hour no rule matches, so ${fallback || 'nothing'} plays.`;
     const r = rules[hit];
     const when = r.start && r.end ? ` from ${r.start} to ${r.end}` : ' all day';
-    setText(nowLine, `At this hour rule ${hit + 1} matches: ${titleOf(r.playlist_id) || 'pick a playlist'}, ${daysInWords(r.days)}${when}.`);
+    return `At this hour rule ${hit + 1} matches: ${titleOf(r.playlist_id) || 'pick a playlist'}, ${daysInWords(r.days)}${when}.`;
   }
 
   /* ------------------------------------------------------------------ save */
 
   function clearErrors() {
-    for (const row of rowsSlot.querySelectorAll('.sv-rule')) {
+    for (const row of rowsSlot.querySelectorAll('.pp-rule')) {
       if (row.errorSlot) { row.errorSlot.hidden = true; row.errorSlot.textContent = ''; }
       row.classList.remove('pp-field--invalid');
     }
   }
 
   function showError(index, message) {
-    const rows = [...rowsSlot.querySelectorAll('.sv-rule')];
+    const rows = [...rowsSlot.querySelectorAll('.pp-rule')];
     const row = rows[index];
     if (!row || !row.errorSlot) { toast(message, 'danger'); return; }
     row.errorSlot.textContent = message;
@@ -275,8 +293,12 @@ export function mountRules(el, opts = {}) {
         : 'The times are saved.');
       if (opts.onSaved) opts.onSaved();
     } catch (err) {
-      if (err.fields) {
-        for (const f of err.fields) toast(`${f.field}: ${f.message}`, 'danger');
+      /* A toast replaces the one before it, so a loop of them shows only the
+         last field. Put each message at the row that it belongs to. */
+      if (err.fields && err.fields.length) {
+        const row = rules.findIndex((r) => r.id === 0) >= 0 ? rules.findIndex((r) => r.id === 0) : 0;
+        showError(row, err.fields.map((f) => f.message).join(' '));
+        toast('One of these rules is not usable.', 'danger');
       } else {
         toast(errorText(err), 'danger');
       }
@@ -285,6 +307,9 @@ export function mountRules(el, opts = {}) {
       await load();
       return;
     }
+    // A save that lands after the page went away must not put the guard of a dead
+    // page on the page that is on the screen now.
+    if (gone) return;
     touch();
   }
 

@@ -9,12 +9,14 @@
    make the page blink and does not lose the place of the pointer.
 */
 
-import { h, fill, toast, banner, statusDot, modal, fmtAgo } from '/shared/ui.js';
+import {
+  h, fill, toast, banner, statusDot, modal, confirmDialog, fmtAgo, pageHead,
+  errorText, setText, setShown, setClass, fmtTemp, guessKind, cell,
+} from '/shared/ui.js';
 import { api } from '/shared/api.js';
 import { sendToGroup } from '../commands.js';
 import {
-  pageHead, errorText, setText, setClass, stateInfo, parseStatus, fmtTemp,
-  freeSpace, preview, thumbURL, screenHref, download, guessKind,
+  stateInfo, parseStatus, freeSpace, preview, thumbURL, screenHref, download, csvCell,
 } from '../util.js';
 
 /* The filter and the view live in the module, so a trip to one screen and back
@@ -30,7 +32,6 @@ const CHIPS = [
   { id: 'online', label: 'Checked in' },
   { id: 'quiet', label: 'Quiet' },
   { id: 'look', label: 'Needs a look' },
-  { id: 'pending', label: 'Waiting for approval' },
 ];
 
 export function mount(main, ctx) {
@@ -43,10 +44,18 @@ export function mount(main, ctx) {
      holds them, and it belongs to one view. */
   const entries = new Map();
   let frame = null;
+  /* The group that the admin picked for a waiting request, by its code. The
+     pending card is built again at every poll, so the choice cannot live in the
+     DOM or it would snap back every ten seconds. */
+  const pendingGroup = new Map();
 
   const noticesSlot = h('div');
   const pendingSlot = h('div');
   const listSlot = h('div');
+  const staleNote = h('div', { class: 'pp-banner pp-banner--warn', hidden: true },
+    h('div', { class: 'pp-banner__text' },
+      h('div', { class: 'pp-banner__title', text: 'The last refresh did not answer' }),
+      h('div', { class: 'pp-banner__body', text: 'The rows below are the ones that came in last. Every screen keeps playing either way.' })));
 
   /* ---- the toolbar ---- */
 
@@ -94,6 +103,7 @@ export function mount(main, ctx) {
           onClick: () => sendToGroup(groups, groupFilter).then((sent) => { if (sent) ctx.store.refresh(); }),
         }),
         h('a', { class: 'pp-btn pp-btn--primary', href: '#/screens/add', text: 'Add screens' }))),
+    staleNote,
     noticesSlot,
     pendingSlot,
     h('div', { class: 'sv-tools' }, searchInput, groupSelect, chipRow, h('div', { class: 'pp-spacer pp-hide-sm' }), viewToggle),
@@ -145,17 +155,21 @@ export function mount(main, ctx) {
       fill(listSlot, banner({ kind: 'danger', title: 'The fleet did not load', body: errorText(error) }));
       return;
     }
+    setShown(staleNote, !!error && loaded);
     paintNotices(devices);
     paintPending(devices);
     paintRows(devices.filter(keep));
   }
 
   function keep(dev) {
+    /* A row with pending:true is an enrollment request and not a screen: it holds
+       no group, no playlist, no last check-in and no status. It has its own card
+       above the table, so it never becomes a row here (API change 1). */
+    if (dev.pending) return false;
     const info = stateInfo(dev.state);
     if (chip === 'online' && dev.state !== 'online') return false;
     if (chip === 'quiet' && dev.state !== 'quiet') return false;
     if (chip === 'look' && !info.flag) return false;
-    if (chip === 'pending' && dev.state !== 'pending') return false;
     if (groupFilter && dev.group_id !== groupFilter) return false;
     const q = search.trim().toLowerCase();
     if (!q) return true;
@@ -229,33 +243,66 @@ export function mount(main, ctx) {
   }
 
   function pendingRow(dev) {
-    const pick = h('select', { class: 'pp-select', 'aria-label': `Group for ${dev.name || dev.id}` },
+    const code = dev.pending_code || '';
+    const pick = h('select', {
+      class: 'pp-select', 'aria-label': `Group for ${dev.name || dev.id}`,
+      onChange: () => { pendingGroup.set(code, pick.value); },
+    },
       h('option', { value: '0', text: 'No group yet' }),
       groups.map((g) => h('option', { value: String(g.id), text: g.name })));
+    pick.value = pendingGroup.get(code) || '0';
+
+    /* collides_with names a screen that is already paired. The name reads better
+       than the ID, so look it up in the fleet that the poller holds. */
+    const other = () => {
+      const row = ctx.store.device(dev.collides_with);
+      return (row && row.name) || dev.collides_with;
+    };
+    const collideWords = () => `A different machine asks to be ${other()} (${dev.collides_with}), `
+      + 'which is already paired. Approve only if you replaced the hardware. '
+      + 'Approving signs the old machine out.';
 
     const act = async (what) => {
-      const body = what === 'approve' ? { group_id: Number(pick.value) } : {};
+      if (what === 'approve' && dev.collides_with && !(await confirmDialog({
+        title: `Let this machine be ${other()}?`,
+        body: h('div', null,
+          h('div', { text: collideWords() }),
+          h('div', { style: { 'margin-top': '8px' } },
+            'The token of the machine that holds that ID is revoked, so it stops checking in. It keeps playing what it already has.')),
+        confirm: 'Let it in',
+        cancel: 'Not now',
+        kind: 'danger',
+      }))) return;
       try {
-        await api('POST', `/api/admin/pending/${encodeURIComponent(dev.pending_code)}/${what}`, body);
+        // The approve and the reject routes take no body at all. The group is the
+        // one value that is worth sending (API change 9).
+        const body = what === 'approve' ? { group_id: Number(pick.value) } : null;
+        await api('POST', `/api/admin/pending/${encodeURIComponent(code)}/${what}`, body);
+        pendingGroup.delete(code);
         toast(what === 'approve'
           ? 'It is in. It gets its token at its next check-in, within one poll interval.'
           : 'It was turned away.');
-        ctx.store.refresh();
       } catch (err) {
-        toast(errorText(err), 'danger');
+        if (err.status === 409) toast('That request does not wait any more. Somebody may have answered it already.', 'danger');
+        else if (err.status === 404) toast('That request is gone. The list is up to date now.', 'danger');
+        else toast(errorText(err), 'danger');
       }
+      ctx.store.refresh();
     };
 
     return h('div', { class: 'sv-wait' },
-      h('span', { class: 'pp-code pp-code--md', text: dev.pending_code || '——————' }),
+      h('span', { class: 'pp-code pp-code--md', text: code || '——————' }),
       h('div', { class: 'sv-wait__who' },
         h('div', { style: { 'font-weight': '500' } }, dev.name || 'A new screen'),
         h('div', { class: 'sv-wait__meta' },
           [dev.id, dev.last_ip, short(dev.hardware_id)].filter(Boolean).join(' · ')),
-        // The server sets this when the ID of the request is already a screen.
-        // Letting it in would take that screen over, so the row says so.
-        dev.collides_with ? h('div', { class: 'pp-small', style: { color: 'var(--pp-danger)', 'margin-top': '3px' } },
-          'This ID already belongs to ', h('b', { text: dev.collides_with }), '. Check which box this is before you let it in.') : null),
+        // The server sets collides_with when the ID of the request is already a
+        // paired screen. Letting it in takes that screen over, so the row says so
+        // and the click asks again.
+        dev.collides_with ? h('div', {
+          class: 'pp-small', style: { color: 'var(--pp-danger)', 'margin-top': '3px' },
+          text: collideWords(),
+        }) : null),
       h('div', { class: 'pp-small pp-muted pp-nowrap', text: `asked ${fmtAgo(dev.created_at)}` }),
       pick,
       h('div', { class: 'pp-btns' },
@@ -322,21 +369,15 @@ export function mount(main, ctx) {
     return { body, empty, count };
   }
 
-  function cell(opts, text) {
-    const cls = ['pp-cell'];
-    if (opts.grow) cls.push('pp-cell--grow');
-    if (opts.mono) cls.push('pp-cell--mono');
-    const el = h('span', { class: cls.join(' ') }, text === undefined ? null : text);
-    if (opts.width && !opts.grow) { el.style.flex = 'none'; el.style.width = opts.width; }
-    return el;
-  }
-
   /* ---- one row of the list view ---- */
 
   function listRow(dev) {
     const dot = statusDot('quiet');
     const name = h('span');
     const id = h('span', { class: 'sv-name__id' });
+    // A title on a button never becomes its accessible name, and the red edge is
+    // invisible to a screen reader. So the state goes in the row as words.
+    const word = h('span', { class: 'pp-sr-only' });
     const group = h('span', { class: 'pp-small' });
     const seen = h('span', { class: 'pp-cell--mono' });
     const nowSlot = h('span', { class: 'sv-now' });
@@ -348,7 +389,7 @@ export function mount(main, ctx) {
       type: 'button', class: 'pp-table__row',
       onClick: () => { location.hash = screenHref(dev.id).slice(1); },
     },
-      cell({ grow: true }, h('span', { class: 'sv-name' }, dot, h('span', { class: 'pp-trunc' }, name, ' ', id))),
+      cell({ grow: true }, h('span', { class: 'sv-name' }, dot, h('span', { class: 'pp-trunc' }, name, ' ', id), word)),
       cell({ width: '104px' }, group),
       cell({ width: '116px' }, seen),
       cell({ width: '186px' }, nowSlot),
@@ -368,6 +409,7 @@ export function mount(main, ctx) {
         const now = st.now_playing || {};
         dot.className = `pp-dot pp-dot--${info.kind}`;
         row.title = `${d.name} — ${info.word}`;
+        setText(word, ` — ${info.word}`);
         setText(name, d.name || d.id);
         setText(id, d.id);
         setText(group, d.group_name || 'No group');
@@ -434,11 +476,12 @@ export function mount(main, ctx) {
     const playing = h('span', { class: 'pp-tile__use pp-trunc' });
     const seen = h('span');
     const temp = h('span');
+    const word = h('span', { class: 'pp-sr-only' });
 
     const tile = h('a', { class: 'pp-tile', href: screenHref(dev.id), style: { display: 'block' } },
       thumbSlot,
       h('span', { class: 'pp-tile__body' },
-        h('span', { class: 'sv-tile__head' }, dot, name),
+        h('span', { class: 'sv-tile__head' }, dot, name, word),
         playing,
         h('span', { class: 'sv-tile__meta' }, seen, temp)));
 
@@ -450,6 +493,7 @@ export function mount(main, ctx) {
         const now = st.now_playing || {};
         dot.className = `pp-dot pp-dot--${info.kind}`;
         setText(name, d.name || d.id);
+        setText(word, ` — ${info.word}`);
         setClass(tile, 'sv-row--flag', info.flag);
         const item = now.item || '';
         if (item !== lastItem) {
@@ -483,11 +527,6 @@ export function mount(main, ctx) {
     const csv = lines.map((row) => row.map(csvCell).join(',')).join('\r\n');
     download('portapixel-screens.csv', csv, 'text/csv');
     toast(`${lines.length - 1} ${lines.length === 2 ? 'screen' : 'screens'} in the file.`);
-  }
-
-  function csvCell(v) {
-    const s = String(v === null || v === undefined ? '' : v);
-    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   }
 
   return {

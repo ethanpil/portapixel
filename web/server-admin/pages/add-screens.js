@@ -5,11 +5,12 @@
    only its hash, so this page says so loudly and offers a copy button.
 */
 
-import { h, fill, toast, banner, confirmDialog, statusDot, fmtAgo } from '/shared/ui.js';
-import { api } from '/shared/api.js';
 import {
-  card, pageHead, errorText, fmtDate, isNever, copyText,
-} from '../util.js';
+  h, fill, toast, banner, confirmDialog, statusDot, fmtAgo, card, pageHead,
+  errorText, cell,
+} from '/shared/ui.js';
+import { api } from '/shared/api.js';
+import { fmtDate, isNever, copyText } from '../util.js';
 
 export function mount(main, ctx) {
   let tokens = [];
@@ -150,8 +151,9 @@ export function mount(main, ctx) {
       expiryInput.value = '';
       await load();
     } catch (err) {
-      if (err.fields) for (const f of err.fields) toast(`${f.field}: ${f.message}`, 'danger');
-      else toast(errorText(err), 'danger');
+      // A toast replaces the one before it, so every field goes in one sentence.
+      const named = (err.fields || []).map((f) => f.message).join(' ');
+      toast(named || errorText(err), 'danger');
     } finally {
       makeBtn.disabled = false;
     }
@@ -197,12 +199,12 @@ export function mount(main, ctx) {
   function paintList() {
     const inner = h('div', { class: 'pp-table__inner' });
     inner.append(h('div', { class: 'pp-table__head' },
-      cell(null, 'Batch'),
-      cell('92px', 'Starts as'),
-      cell('120px', 'Group'),
-      cell('100px', 'Used'),
-      cell('130px', 'Stops working'),
-      cell('120px', '')));
+      cell({ grow: true }, 'Batch'),
+      cell({ width: '92px' }, 'Starts as'),
+      cell({ width: '120px' }, 'Group'),
+      cell({ width: '100px' }, 'Used'),
+      cell({ width: '130px' }, 'Stops working'),
+      cell({ width: '120px' }, '')));
 
     if (tokens.length === 0) {
       inner.append(h('div', { class: 'pp-empty' },
@@ -237,14 +239,14 @@ export function mount(main, ctx) {
     }
 
     return h('div', { class: 'pp-table__row' },
-      cell(null, h('span', null,
+      cell({ grow: true }, h('span', null,
         h('span', { style: { display: 'block' }, text: t.name || 'a batch of cards' }),
         h('span', { class: 'pp-mono pp-muted', style: { 'font-size': '11.5px' }, text: `${t.prefix}… · made ${fmtDate(t.created_at)}` }))),
-      cell('92px', h('span', { class: 'pp-small', text: t.mode === 'auto' ? 'paired' : 'waiting' })),
-      cell('120px', h('span', { class: 'pp-small', text: group ? group.name : 'no group' })),
-      cell('100px', h('span', { class: 'pp-mono', style: { 'font-size': '12px' }, text: t.max_uses ? `${t.uses} of ${t.max_uses}` : String(t.uses) })),
-      cell('130px', h('span', { class: 'pp-small', text: expiryWords(t) })),
-      cell('120px', actions));
+      cell({ width: '92px' }, h('span', { class: 'pp-small', text: t.mode === 'auto' ? 'paired' : 'waiting' })),
+      cell({ width: '120px' }, h('span', { class: 'pp-small', text: group ? group.name : 'no group' })),
+      cell({ width: '100px' }, h('span', { class: 'pp-mono', style: { 'font-size': '12px' }, text: t.max_uses ? `${t.uses} of ${t.max_uses}` : String(t.uses) })),
+      cell({ width: '130px' }, h('span', { class: 'pp-small', text: expiryWords(t) })),
+      cell({ width: '120px' }, actions));
   }
 
   function expiryWords(t) {
@@ -253,12 +255,6 @@ export function mount(main, ctx) {
     if (isNever(t.expires_at)) return 'no end';
     const when = Date.parse(t.expires_at);
     return when < Date.now() ? `ended ${fmtDate(t.expires_at)}` : fmtDate(t.expires_at);
-  }
-
-  function cell(width, content) {
-    const el = h('span', { class: width ? 'pp-cell' : 'pp-cell pp-cell--grow' }, content);
-    if (width) { el.style.flex = 'none'; el.style.width = width; }
-    return el;
   }
 
   async function revoke(t) {

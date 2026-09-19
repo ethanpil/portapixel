@@ -6,17 +6,14 @@
 */
 
 import {
-  h, fill, toast, banner, statusDot, modal, confirmDialog, typedConfirm,
-  factList, fmtAgo, fmtBytes, fmtDuration, progress,
+  h, fill, toast, banner, badge, statusDot, modal, confirmDialog, typedConfirm,
+  factList, fmtAgo, fmtBytes, fmtDuration, progress, card, errorText,
+  setText, setShown, fmtTemp, guessKind, dayChips, daysInWords,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
 import { mountRules } from '../rules.js';
 import { sendToScreen } from '../commands.js';
-import {
-  card, errorText, setText, stateInfo, parseStatus, fmtTemp, preview,
-  thumbURL, guessKind, dayChips, daysFromCSV, daysInWords, COMMANDS, commandState,
-  fmtClock, fmtDate, isNever, ownPageURL,
-} from '../util.js';
+import { stateInfo, parseStatus, preview, thumbURL, daysFromCSV, COMMANDS, commandState, fmtClock, fmtDate, isNever, ownPageURL } from '../util.js';
 
 const POLL_MS = 10000;
 
@@ -33,10 +30,14 @@ export function mount(main, ctx, deviceID) {
   const head = h('div');
   const notices = h('div');
   const body = h('div');
+  const staleNote = h('div', { class: 'pp-banner pp-banner--warn', hidden: true },
+    h('div', { class: 'pp-banner__text' },
+      h('div', { class: 'pp-banner__title', text: 'The last refresh did not answer' }),
+      h('div', { class: 'pp-banner__body', text: 'The values below are the ones that came in last. The screen keeps playing either way.' })));
 
   fill(main,
     h('a', { class: 'pp-back', href: '#/screens', text: '← All screens' }),
-    head, notices, body);
+    head, staleNote, notices, body);
 
   /* ------------------------------------------------------------------ load */
 
@@ -51,16 +52,34 @@ export function mount(main, ctx, deviceID) {
       view = got;
       if (gotGroups) groups = gotGroups.groups || [];
       if (gotPlaylists) playlists = gotPlaylists.playlists || [];
+      setShown(staleNote, false);
       if (first) { loadMedia(); draw(); } else { paintLive(); }
     } catch (err) {
       if (gone) return;
-      clearInterval(timer);
-      fill(body, banner({
-        kind: 'danger',
-        title: err.status === 404 ? 'There is no screen with this ID' : 'The screen did not load',
-        body: errorText(err),
-        actions: [h('a', { class: 'pp-btn', href: '#/screens', text: 'Back to the list' })],
-      }));
+      /* A 404 is the end: the row is gone. Anything else is one failed poll, and
+         a page that emptied itself for it would take away the rules table and
+         every unsaved edit in it. Say that the values are the last ones and keep
+         polling. */
+      if (err.status === 404) {
+        clearInterval(timer);
+        fill(body, banner({
+          kind: 'danger',
+          title: 'There is no screen with this ID',
+          body: errorText(err),
+          actions: [h('a', { class: 'pp-btn', href: '#/screens', text: 'Back to the list' })],
+        }));
+        return;
+      }
+      if (first) {
+        fill(body, banner({
+          kind: 'danger',
+          title: 'The screen did not load',
+          body: errorText(err),
+          actions: [h('a', { class: 'pp-btn', href: '#/screens', text: 'Back to the list' })],
+        }));
+        return;
+      }
+      setShown(staleNote, true);
     }
   }
 
@@ -272,6 +291,26 @@ export function mount(main, ctx, deviceID) {
     paintHead();
     paintNotices();
 
+    /* A row that waits for approval is an enrollment request and not a screen.
+       It has no group, no playlist and no command queue, so every control of this
+       page would answer 404. Send the admin back to the card that can answer it
+       (API change 1). */
+    if (dev().pending) {
+      fill(body, banner({
+        kind: 'warn',
+        title: 'This screen is not in the fleet yet',
+        body: h('div', null,
+          h('div', null, 'It asked to join and it waits for an answer. Its code is ',
+            h('span', { class: 'pp-code', text: dev().pending_code || '' }),
+            '. Nothing can be set on it until it is in.'),
+          dev().collides_with ? h('div', { style: { 'margin-top': '8px' } },
+            `A different machine asks to be ${dev().collides_with}, which is already paired. `,
+            'Approve only if you replaced the hardware. Approving signs the old machine out.') : null),
+        actions: [h('a', { class: 'pp-btn pp-btn--primary', href: '#/screens', text: 'Let it in or turn it away' })],
+      }));
+      return;
+    }
+
     fill(body,
       h('div', { class: 'pp-cards' },
         h('div', { class: 'pp-stack', style: { flex: '1 1 440px', 'min-width': 'min(320px, 100%)' } },
@@ -421,11 +460,13 @@ export function mount(main, ctx, deviceID) {
       return;
     }
     fill(historySlot, list.slice(0, 8).map((cmd) => {
-      const s = commandState(cmd);
+      const st = commandState(cmd);
       const label = (COMMANDS.find((c) => c.type === cmd.type) || {}).label || cmd.type;
-      return h('div', { class: 'sv-cmd' },
-        h('span', null, label, ' — ', h('b', { text: s.word })),
-        h('span', { class: 'sv-cmd__when', text: fmtClock(s.when) }));
+      return h('div', null,
+        h('div', { class: 'sv-cmd' },
+          h('span', null, label, ' ', badge(st.word, st.kind === 'danger' ? 'danger' : (st.kind === 'busy' ? 'warn' : 'plain'))),
+          h('span', { class: 'sv-cmd__when', text: fmtClock(st.when) })),
+        st.note ? h('div', { class: 'pp-help', style: { 'margin-top': '0' }, text: st.note }) : null);
     }));
   }
 
@@ -505,6 +546,20 @@ export function mount(main, ctx, deviceID) {
   }
 
   async function applyOverrides() {
+    /* The server takes both screen times or neither, and it takes a day list only
+       with both times. Say so here: a 422 that names screen_on is a worse way to
+       learn it. */
+    const on = onInput.value;
+    const off = offInput.value;
+    if (!on !== !off) {
+      toast('Give a screen-on time and a screen-off time, or leave both empty.', 'danger');
+      (on ? offInput : onInput).focus();
+      return;
+    }
+    if (!on && !off && dayRow.read().length) {
+      toast('A day list needs both screen times. Give the times, or turn every day back on.', 'danger');
+      return;
+    }
     const wantedGroup = Number(groupSelect.value);
     saveOverrides.disabled = true;
     try {
@@ -523,7 +578,8 @@ export function mount(main, ctx, deviceID) {
       paintLive();
       ctx.store.refresh();
     } catch (err) {
-      toast(errorText(err), 'danger');
+      const named = (err.fields || []).map((f) => f.message).join(' ');
+      toast(named || errorText(err), 'danger');
     } finally {
       paintOverrideHelp();
     }

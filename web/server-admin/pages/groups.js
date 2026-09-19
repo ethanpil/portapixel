@@ -5,14 +5,14 @@
    ignores the group ones, and this page says so where it matters.
 */
 
-import { h, fill, toast, banner, modal, confirmDialog, statusDot } from '/shared/ui.js';
+import {
+  h, fill, toast, banner, modal, confirmDialog, statusDot, card, pageHead,
+  errorText, setText, dayChips, daysInWords,
+} from '/shared/ui.js';
 import { api } from '/shared/api.js';
 import { mountRules } from '../rules.js';
 import { sendToGroup } from '../commands.js';
-import {
-  card, pageHead, errorText, setText, dayChips, daysFromCSV, daysInWords,
-  stateInfo, screenHref,
-} from '../util.js';
+import { daysFromCSV, stateInfo, screenHref } from '../util.js';
 
 /* The group that is open. It lives in the module, so a trip to another page and
    back comes back to the same group. */
@@ -26,8 +26,8 @@ export function mount(main, ctx) {
   let settingsDirty = false;
   let gone = false;
 
-  const side = h('div', { class: 'sv-split__side' });
-  const panel = h('div', { class: 'sv-split__main' });
+  const side = h('div', { class: 'pp-split__side' });
+  const panel = h('div', { class: 'pp-split__main' });
   const errorSlot = h('div');
 
   fill(main,
@@ -35,7 +35,7 @@ export function mount(main, ctx) {
       'A group is a set of screens that play the same thing. The times are read from the top and the first match wins.',
       h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'New group', onClick: createGroup })),
     errorSlot,
-    h('div', { class: 'sv-split' }, side, panel));
+    h('div', { class: 'pp-split' }, side, panel));
 
   load(true);
   const unsubscribe = ctx.store.subscribe(() => {
@@ -83,13 +83,13 @@ export function mount(main, ctx) {
       const bits = [titleOf(g.default_playlist_id) || 'no playlist yet'];
       bits.push(n === 0 ? 'no times' : `${n} ${n === 1 ? 'time rule' : 'time rules'}`);
       return h('button', {
-        type: 'button', class: 'sv-pick', 'aria-current': String(g.id === pickedId),
+        type: 'button', class: 'pp-pick', 'aria-current': String(g.id === pickedId),
         onClick: () => pick(g.id),
       },
-        h('div', { class: 'sv-pick__name' },
+        h('div', { class: 'pp-pick__name' },
           h('span', { text: g.name }),
-          h('span', { class: 'sv-pick__count', text: String(g.devices) })),
-        h('div', { class: 'sv-pick__meta', text: bits.join(' · ') }));
+          h('span', { class: 'pp-pick__count', text: String(g.devices) })),
+        h('div', { class: 'pp-pick__meta', text: bits.join(' · ') }));
     });
 
     fill(side, h('div', { class: 'pp-card' },
@@ -261,6 +261,20 @@ export function mount(main, ctx) {
   async function saveSettings() {
     const g = picked();
     if (!g) return;
+    /* The server takes both screen times or neither, and it takes a day list only
+       with both times. Say so here: a 422 that names screen_on is a worse way to
+       learn it. */
+    const on = onInput.value;
+    const off = offInput.value;
+    if (!on !== !off) {
+      toast('Give a screen-on time and a screen-off time, or leave both empty.', 'danger');
+      (on ? offInput : onInput).focus();
+      return;
+    }
+    if (!on && !off && dayRow.read().length) {
+      toast('A day list needs both screen times. Give the times, or turn every day back on.', 'danger');
+      return;
+    }
     saveBtn.disabled = true;
     try {
       await api('PUT', `/api/admin/groups/${g.id}`, {
@@ -278,8 +292,11 @@ export function mount(main, ctx) {
       paintHeader();
       ctx.store.refresh();
     } catch (err) {
-      if (err.fields) for (const f of err.fields) toast(`${f.field}: ${f.message}`, 'danger');
-      else toast(errorText(err), 'danger');
+      // A toast replaces the one before it, so every field goes in one sentence.
+      const named = (err.fields || []).map((f) => f.message).join(' ');
+      toast(named || (err.status === 409
+        ? 'Another group already has that name. Pick a different one.'
+        : errorText(err)), 'danger');
     } finally {
       paintHelp();
     }
@@ -310,7 +327,10 @@ export function mount(main, ctx) {
       await load(false);
       openPicked();
     } catch (err) {
-      toast(errorText(err), 'danger');
+      const named = (err.fields || []).map((f) => f.message).join(' ');
+      toast(named || (err.status === 409
+        ? 'Another group already has that name. Pick a different one.'
+        : errorText(err)), 'danger');
     }
   }
 

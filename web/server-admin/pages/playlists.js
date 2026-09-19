@@ -7,14 +7,13 @@
 */
 
 import {
-  h, fill, toast, banner, modal, confirmDialog, fmtBytes,
+  h, fill, toast, banner, modal, confirmDialog, fmtBytes, card, pageHead,
+  errorText, guessKind,
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
 import { mountPlaylistEditor } from '/shared/playlist-editor.js';
 import { warningsFor } from '/shared/item-warnings.js';
-import {
-  card, pageHead, errorText, thumbURL, parseStatus, guessKind, screenHref,
-} from '../util.js';
+import { thumbURL, parseStatus, screenHref } from '../util.js';
 
 /* The playlist that is open. It lives in the module, so a trip to the media page
    and back comes back to the same playlist. */
@@ -26,8 +25,8 @@ export function mount(main, ctx) {
   let editor = null;
   let gone = false;
 
-  const side = h('div', { class: 'sv-split__side' });
-  const panel = h('div', { class: 'sv-split__main' });
+  const side = h('div', { class: 'pp-split__side' });
+  const panel = h('div', { class: 'pp-split__main' });
   const errorSlot = h('div');
 
   fill(main,
@@ -35,7 +34,7 @@ export function mount(main, ctx) {
       'Built here, then downloaded by the screens that use them. It is the same editor that the screens have.',
       h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'New playlist', onClick: createPlaylist })),
     errorSlot,
-    h('div', { class: 'sv-split' }, side, panel));
+    h('div', { class: 'pp-split' }, side, panel));
 
   load(true);
 
@@ -64,13 +63,13 @@ export function mount(main, ctx) {
 
   function renderList() {
     const rows = playlists.map((p) => h('button', {
-      type: 'button', class: 'sv-pick', 'aria-current': String(p.id === pickedId),
+      type: 'button', class: 'pp-pick', 'aria-current': String(p.id === pickedId),
       onClick: () => pick(p.id),
     },
-      h('div', { class: 'sv-pick__name' },
+      h('div', { class: 'pp-pick__name' },
         h('span', { text: p.title }),
-        h('span', { class: 'sv-pick__count', text: String(p.devices) })),
-      h('div', { class: 'sv-pick__meta', text: summary(p) })));
+        h('span', { class: 'pp-pick__count', text: String(p.devices) })),
+      h('div', { class: 'pp-pick__meta', text: summary(p) })));
 
     fill(side, h('div', { class: 'pp-card' },
       h('div', { class: 'pp-card__head' },
@@ -152,6 +151,9 @@ export function mount(main, ctx) {
           ? `Save — ${p.devices} ${p.devices === 1 ? 'screen fetches' : 'screens fetch'} the changes`
           : 'Save playlist',
         warnPrefix: 'Some screens may struggle with it.',
+        // The report is the whole fleet at its worst, so the words must say
+        // "some screens" and never "this box".
+        warnMachine: 'some screens',
         warnAction: { label: 'Which ones?', onClick: whichScreens },
       },
       mediaSource: {
@@ -241,14 +243,16 @@ export function mount(main, ctx) {
       ? `Saved — ${n} ${n === 1 ? 'screen fetches' : 'screens fetch'} the changes at the next check-in.`
       : 'Saved. No screen uses this playlist yet.');
     await load(false);
-    // The editor marks itself clean after this promise, so the redraw waits for
-    // the next turn of the event loop. A redraw inside the promise would leave
-    // the editor with a clean copy of the old playlist and a "not saved yet"
-    // line under a playlist that is saved.
-    setTimeout(() => {
-      if (!gone && picked()) openPicked();
-    }, 0);
     ctx.clearGuard();
+    /* The answer IS the saved playlist. Give it back and the editor adopts it:
+       the new item names, the new sizes and a clean baseline in one step. There is
+       no redraw of the editor and no timer to wait for. */
+    return {
+      name: saved.title,
+      transition: saved.transition || '',
+      shuffle: saved.shuffle === undefined ? null : saved.shuffle,
+      items: (saved.items || []).map(forEditor),
+    };
   }
 
   /* The body of a save. An item carries a hash or a URL and never both, and a
@@ -381,7 +385,9 @@ export function mount(main, ctx) {
       toast(`${title} is ready. It starts with ${first.orig_name}.`);
       await load(true);
     } catch (err) {
-      toast(errorText(err), 'danger');
+      toast(err.status === 409
+        ? 'Another playlist already has that name. Pick a different one.'
+        : errorText(err), 'danger');
     }
   }
 
@@ -408,7 +414,9 @@ export function mount(main, ctx) {
       toast('Renamed.');
       await load(true);
     } catch (err) {
-      toast(errorText(err), 'danger');
+      toast(err.status === 409
+        ? 'Another playlist already holds that name or that folder. Pick a different one.'
+        : errorText(err), 'danger');
     }
   }
 

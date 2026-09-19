@@ -6,10 +6,11 @@
 */
 
 import {
-  h, fill, toast, banner, modal, confirmDialog, progress, spinner, fmtBytes,
+  h, fill, toast, banner, modal, confirmDialog, progress, spinner,
+  fmtBytes, card, pageHead, errorText, cell,
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
-import { card, pageHead, errorText, fmtDate } from '../util.js';
+import { fmtDate } from '../util.js';
 
 /* How often the page asks again while the mirror copies a release. */
 const MIRROR_POLL_MS = 3000;
@@ -132,11 +133,11 @@ export function mount(main, ctx) {
   function paintTable(releases) {
     const inner = h('div', { class: 'pp-table__inner' });
     inner.append(h('div', { class: 'pp-table__head' },
-      headCell('96px', 'Approved'),
-      headCell('86px', 'Version'),
-      headCell('120px', 'Released'),
-      headCell('150px', 'On this server'),
-      headCell(null, 'What changed')));
+      cell({ width: '96px' }, 'Approved'),
+      cell({ width: '86px' }, 'Version'),
+      cell({ width: '120px' }, 'Released'),
+      cell({ width: '150px' }, 'On this server'),
+      cell({ grow: true }, 'What changed')));
 
     if (releases.length === 0) {
       inner.append(h('div', { class: 'pp-empty' },
@@ -152,12 +153,6 @@ export function mount(main, ctx) {
       h('div', { class: 'pp-card__foot' },
         h('span', { text: 'Read from the public release page. Nothing is pushed: a screen fetches the approved version on its own.' }),
         h('span', { class: 'pp-mono', text: view.approved ? `approved ${view.approved}` : 'nothing approved' }))));
-  }
-
-  function headCell(width, text) {
-    const el = h('span', { class: width ? 'pp-cell' : 'pp-cell pp-cell--grow' }, text);
-    if (width) { el.style.flex = 'none'; el.style.width = width; }
-    return el;
   }
 
   function releaseRow(rel) {
@@ -190,20 +185,13 @@ export function mount(main, ctx) {
     }
 
     const row = h('div', { class: `pp-table__row${rel.approved ? ' sv-approved' : ''}` },
-      cell('96px', h('label', { class: 'pp-check' }, radio,
+      cell({ width: '96px' }, h('label', { class: 'pp-check' }, radio,
         h('span', { class: 'pp-small', text: rel.approved ? 'in use' : '' }))),
-      cell('86px', h('span', { class: 'pp-mono', text: rel.version })),
-      cell('120px', h('span', { class: 'pp-small pp-muted', text: fmtDate(rel.published_at) })),
-      cell('150px', h('span', null, state, actions)),
-      cell(null, h('span', { class: 'pp-small', text: rel.notes || 'No notes came with this release.' })));
+      cell({ width: '86px' }, h('span', { class: 'pp-mono', text: rel.version })),
+      cell({ width: '120px' }, h('span', { class: 'pp-small pp-muted', text: fmtDate(rel.published_at) })),
+      cell({ width: '150px' }, h('span', null, state, actions)),
+      cell({ grow: true, wrap: true }, h('span', { class: 'pp-small', text: rel.notes || 'No notes came with this release.' })));
     return row;
-  }
-
-  function cell(width, content) {
-    const el = h('span', { class: width ? 'pp-cell' : 'pp-cell pp-cell--grow' }, content);
-    if (width) { el.style.flex = 'none'; el.style.width = width; }
-    else el.style.whiteSpace = 'normal';
-    return el;
   }
 
   /* The mirror state in words. A screen installs a release only when it is both

@@ -2,115 +2,9 @@
    Nothing here builds a page. Nothing here calls the API.
 */
 
-import { h, icon, progress, statusDot, fmtBytes } from '/shared/ui.js';
-
-/* ----------------------------------------------------------- page furniture */
-
-/** The title block of a page. `right` goes on the other end of the line. */
-export function pageHead(title, lead, right) {
-  return h('div', { class: 'pp-page-head' },
-    h('div', { style: { 'min-width': 'min(260px, 100%)' } },
-      h('h1', { class: 'pp-h1', text: title }),
-      lead ? h('p', { class: 'pp-lead' }, lead) : null),
-    right || null);
-}
-
-/** A card with a head, a body and an optional footer bar. */
-export function card({ title, meta, body, foot, cls } = {}) {
-  return h('div', { class: `pp-card${cls ? ` ${cls}` : ''}` },
-    title ? h('div', { class: 'pp-card__head' },
-      h('div', { class: 'pp-h2' }, title),
-      meta ? h('div', { class: 'pp-card__meta' }, meta) : null) : null,
-    body ? h('div', { class: 'pp-card__body' }, body) : null,
-    foot ? h('div', { class: 'pp-card__foot' }, foot) : null);
-}
-
-/** Write text only when it is different. The fleet list refreshes every ten
-    seconds; a write that changes nothing would still make the browser lay the
-    line out again, and a selection in the text would be lost. */
-export function setText(el, text) {
-  const next = text === null || text === undefined ? '' : String(text);
-  if (el.textContent !== next) el.textContent = next;
-}
-
-/** Show or hide an element without moving anything else. */
-export function setShown(el, shown) {
-  if (el.hidden === !shown) return;
-  el.hidden = !shown;
-}
-
-/** Set a class only when it must change. */
-export function setClass(el, name, on) {
-  if (el.classList.contains(name) === !!on) return;
-  el.classList.toggle(name, !!on);
-}
-
-/* ------------------------------------------------------------------- errors */
-
-/** The sentence to show for a failed call. A 422 answer carries one message
-    for each field, and a toast can hold two or three of them. */
-export function errorText(err) {
-  const fields = err && err.fields;
-  if (!fields || fields.length === 0) return (err && err.message) || 'That did not work.';
-  const parts = fields.slice(0, 3).map((f) => `${f.field}: ${f.message}`);
-  if (fields.length > 3) parts.push(`and ${fields.length - 3} more`);
-  return parts.join('; ');
-}
+import { h, icon, progress, statusDot, fmtBytes, DAYS } from '/shared/ui.js';
 
 /* -------------------------------------------------------------------- days */
-
-export const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
-const DAY_INITIAL = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
-const DAY_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
-
-/** Seven toggle chips. An empty list means every day, which is what the
-    scheduler does with it, so all seven chips show as pressed.
-    Returns the element; it carries read() and set(days). */
-export function dayChips({ days = [], disabled = false, onChange } = {}) {
-  let picked = new Set(days.length ? days : DAYS);
-  let off = disabled;
-  const el = h('div', { class: 'pp-days', role: 'group', 'aria-label': 'Days' });
-
-  // The buttons are made once and only their state changes. A row that was
-  // built again on each click would take the keyboard away from the chip that
-  // the user just pressed.
-  const buttons = DAYS.map((d, i) => h('button', {
-    type: 'button', class: 'pp-day', text: DAY_INITIAL[i], title: DAY_FULL[i],
-    'aria-label': DAY_FULL[i],
-    onClick: () => {
-      // A rule with no day at all would mean "every day" on the device, which
-      // is not what an empty row of chips looks like. So the last day stays.
-      if (picked.has(d) && picked.size === 1) return;
-      if (picked.has(d)) picked.delete(d); else picked.add(d);
-      draw();
-      if (onChange) onChange(el.read());
-    },
-  }));
-  el.append(...buttons);
-
-  function draw() {
-    buttons.forEach((b, i) => {
-      b.setAttribute('aria-pressed', String(picked.has(DAYS[i])));
-      b.disabled = off;
-    });
-  }
-
-  // All seven days go back as an empty list: that is how the server says
-  // "every day", and a save must not turn it into seven names.
-  el.read = () => (picked.size === 7 ? [] : DAYS.filter((d) => picked.has(d)));
-  el.set = (next) => { picked = new Set(next && next.length ? next : DAYS); draw(); };
-  el.setDisabled = (value) => { off = !!value; draw(); };
-  draw();
-  return el;
-}
-
-/** The list of days in words, for a line of help text. */
-export function daysInWords(days) {
-  if (!days || days.length === 0 || days.length === 7) return 'every day';
-  if (days.length === 5 && DAYS.slice(0, 5).every((d) => days.includes(d))) return 'Mon to Fri';
-  if (days.length === 2 && days.includes('sat') && days.includes('sun')) return 'Sat and Sun';
-  return DAYS.filter((d) => days.includes(d)).map((d) => d[0].toUpperCase() + d.slice(1)).join(', ');
-}
 
 /** A group sends its screen days as a comma string and takes them as an array.
     This is the one place in the API where the two differ. */
@@ -119,37 +13,6 @@ export function daysFromCSV(value) {
 }
 
 /* ------------------------------------------------------------------- times */
-
-/** "HH:MM" as minutes after midnight, or null. */
-export function toMinutes(value) {
-  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
-  if (!m) return null;
-  const hours = Number(m[1]);
-  const mins = Number(m[2]);
-  if (hours > 23 || mins > 59) return null;
-  return hours * 60 + mins;
-}
-
-/** Does a rule cover this moment? This is the same rule that the device keeps:
-    a window that ends before it starts goes past midnight, and then the hours
-    after midnight belong to the day before. */
-export function inWindow(start, end, minute, weekday, days) {
-  const s = toMinutes(start);
-  const e = toMinutes(end);
-  // An empty start and an empty end cover the whole day.
-  if (!String(start || '').trim() && !String(end || '').trim()) return dayPermitted(days, weekday);
-  if (s === null || e === null || s === e) return false;
-  if (s < e) return minute >= s && minute < e && dayPermitted(days, weekday);
-  if (minute >= s) return dayPermitted(days, weekday);
-  if (minute < e) return dayPermitted(days, (weekday + 6) % 7);
-  return false;
-}
-
-/** An empty day list means every day. Day 0 is Monday here, as on the device. */
-export function dayPermitted(days, weekday) {
-  if (!days || days.length === 0) return true;
-  return days.includes(DAYS[weekday]);
-}
 
 /** The day and the minute of this moment in the browser. Monday is day 0.
     Screens keep their own time zone, so this is "roughly now" for the person
@@ -199,12 +62,6 @@ export function stateInfo(state) {
   return STATES[state] || { kind: 'quiet', word: state || 'unknown', flag: false };
 }
 
-/** The dot and the words of one screen state. */
-export function stateLine(state) {
-  const info = stateInfo(state);
-  return h('span', { class: 'pp-status' }, statusDot(info.kind), h('span', { text: info.word }));
-}
-
 /** The last heartbeat of a screen, parsed. It is a JSON string in the device
     row, and it is empty before the first check-in. */
 export function parseStatus(device) {
@@ -215,22 +72,6 @@ export function parseStatus(device) {
   } catch {
     return {};
   }
-}
-
-/** The temperature as a short string. */
-export function fmtTemp(c) {
-  const n = Number(c);
-  if (!n) return '—';
-  return `${n.toFixed(1)} °C`;
-}
-
-/** The kind of a file from its name, for an item that carries no kind. */
-export function guessKind(name) {
-  const n = String(name || '');
-  if (/^https?:\/\//i.test(n)) return 'url';
-  if (/\.(mp4|m4v|mov|webm|mkv|ogv)$/i.test(n)) return 'video';
-  if (/\.(jpg|jpeg|png|gif|webp|avif|bmp|svg)$/i.test(n)) return 'image';
-  return 'unknown';
 }
 
 /** The thumbnail route of one library object. */
@@ -270,11 +111,29 @@ export const COMMANDS = [
   { type: 'update', label: 'Install the approved version', body: 'The screen installs the version that the Versions page approved, and puts itself back on the old one if it cannot come up.' },
 ];
 
-/** The state of a command in words. */
+/** The state of a command in words: {word, when, kind, note}.
+    A command that the server delivered and that no heartbeat acknowledged goes
+    out again after ten minutes, three times in all, and then it is expired. */
 export function commandState(cmd) {
-  if (cmd.state === 'acked' || !isNever(cmd.acked_at)) return { word: 'done', when: cmd.acked_at };
-  if (cmd.state === 'delivered' || !isNever(cmd.delivered_at)) return { word: 'picked up', when: cmd.delivered_at };
-  return { word: 'queued', when: cmd.queued_at };
+  const tries = Number(cmd.deliveries) || 0;
+  if (cmd.state === 'expired') {
+    return {
+      word: 'gave up', when: cmd.delivered_at || cmd.queued_at, kind: 'danger',
+      note: tries > 1
+        ? `The screen took it ${tries} times and never reported back.`
+        : 'The screen never reported back. Send it again.',
+    };
+  }
+  if (cmd.state === 'acked' || !isNever(cmd.acked_at)) {
+    return { word: 'done', when: cmd.acked_at, kind: 'ok' };
+  }
+  if (cmd.state === 'delivered' || !isNever(cmd.delivered_at)) {
+    return {
+      word: 'picked up', when: cmd.delivered_at, kind: 'busy',
+      note: tries > 1 ? `Sent ${tries} times; the screen has not reported back yet.` : '',
+    };
+  }
+  return { word: 'queued', when: cmd.queued_at, kind: 'quiet' };
 }
 
 /* -------------------------------------------------------------------- links */
@@ -317,6 +176,15 @@ export async function copyText(text) {
   } catch {
     return false;
   }
+}
+
+/** One cell of a CSV file. A value that starts with an operator is a formula to
+    a spreadsheet, and a device name comes from the screen, so it is quoted with
+    a leading apostrophe first. */
+export function csvCell(v) {
+  let s = String(v === null || v === undefined ? '' : v);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }
 
 /** Offer a file to the browser. The media page and the fleet export use it. */

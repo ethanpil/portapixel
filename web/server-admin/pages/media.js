@@ -7,16 +7,16 @@
 
 import {
   h, fill, toast, banner, modal, confirmDialog, progress, fmtBytes, icon,
+  card, pageHead, errorText, guessKind,
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
-import {
-  card, pageHead, errorText, thumbURL, guessKind, fmtDate, preview,
-} from '../util.js';
+import { thumbURL, fmtDate, preview } from '../util.js';
 
 export function mount(main, ctx) {
   let media = [];
-  let totals = { files: 0, bytes: 0, max_bytes: 0, free_bytes: 0 };
+  let totals = { files: 0, bytes: 0, free_bytes: 0, reserve_bytes: 0 };
   let uploading = false;
+  let inFlight = null;   // the upload that runs now, so destroy() can stop it
   let gone = false;
 
   const infoSlot = h('div', { style: { 'margin-bottom': '14px' } });
@@ -24,7 +24,7 @@ export function mount(main, ctx) {
   const upSlot = h('div', { class: 'sv-up' });
 
   const fileInput = h('input', {
-    type: 'file', multiple: true, class: 'pp-sr-only',
+    type: 'file', multiple: true, class: 'pp-sr-only', tabindex: '-1', 'aria-hidden': 'true',
     onChange: () => { const files = [...fileInput.files]; fileInput.value = ''; send(files); },
   });
 
@@ -61,7 +61,10 @@ export function mount(main, ctx) {
       const out = await api('GET', '/api/admin/media');
       if (gone) return;
       media = out.media || [];
-      totals = { files: out.files, bytes: out.bytes, max_bytes: out.max_bytes, free_bytes: out.free_bytes };
+      totals = {
+        files: out.files, bytes: out.bytes,
+        free_bytes: out.free_bytes, reserve_bytes: out.reserve_bytes,
+      };
       paintInfo();
       paintGrid();
     } catch (err) {
@@ -72,6 +75,10 @@ export function mount(main, ctx) {
   function paintInfo() {
     const free = Number(totals.free_bytes) || 0;
     const used = Number(totals.bytes) || 0;
+    const reserve = Number(totals.reserve_bytes) || 0;
+    // There is no configured limit for one file (D27): the free space less the
+    // reserve is the limit, and a file that does not fit answers 507.
+    const room = Math.max(0, free - reserve);
     // The bar shows how much of the space that this library could still take is
     // already taken. There is no quota, so the pair is "what is here" and "what
     // is left on the disk".
@@ -86,10 +93,8 @@ export function mount(main, ctx) {
           h('span', { class: 'pp-small pp-muted', text: `${fmtBytes(free)} free on the disk` })),
         h('div', { style: { 'margin-top': '10px' } }, bar),
         h('div', { class: 'pp-help' },
-          Number(totals.max_bytes) > 0
-            ? `Up to ${fmtBytes(totals.max_bytes)} per file. `
-            : 'There is no limit for one file: only the free space decides. ',
-          'The store keeps 512 MB of the disk back, so a full disk never stops the fleet. ',
+          `There is no limit for one file: ${fmtBytes(room)} is the room that an upload has. `,
+          `The store keeps ${fmtBytes(reserve)} of the disk back, so a full disk never stops the fleet. `,
           h('a', { href: '#/health', text: 'Server health' }), ' has the rest of the numbers.'),
       ],
     }));
@@ -106,7 +111,7 @@ export function mount(main, ctx) {
     let done = 0;
     try {
       for (const file of files) {
-        const bar = progress(0, { brand: true });
+        const bar = progress(0, { brand: true, label: `Uploading ${file.name}` });
         const pct = h('span', { class: 'pp-mono pp-muted', text: '0%' });
         const row = h('div', { class: 'sv-up__row' },
           h('div', { class: 'sv-up__name' },
@@ -115,10 +120,14 @@ export function mount(main, ctx) {
           bar);
         upSlot.append(row);
         try {
-          const out = await upload('/api/admin/media', file, (frac) => {
+          const job = upload('/api/admin/media', file, (frac) => {
             bar.set(frac);
             pct.textContent = `${Math.round(frac * 100)}%`;
           });
+          inFlight = job;
+          const out = await job;
+          inFlight = null;
+          if (gone) return;
           if (out.duplicate) duplicates++;
           done++;
         } catch (err) {
@@ -140,8 +149,10 @@ export function mount(main, ctx) {
   }
 
   function uploadError(err, file) {
-    if (err.status === 413) return `${file.name} is longer than this server takes.`;
-    if (err.status === 507) return `${file.name} does not fit: the disk is nearly full.`;
+    // 507 is the only size refusal. There is no configured cap, so there is no 413.
+    if (err.status === 507) return `${file.name} does not fit: the disk is down to the space that the store keeps back.`;
+    if (err.status === 422) return `${file.name} went up with no name. Try it again.`;
+    if (err.status === 400) return `${file.name} did not arrive whole. Try it again.`;
     return `${file.name}: ${errorText(err)}`;
   }
 
@@ -239,6 +250,11 @@ export function mount(main, ctx) {
   }
 
   return {
-    destroy() { gone = true; },
+    destroy() {
+      gone = true;
+      // An upload that is still in flight would go on writing into nodes that
+      // are not on the page any more.
+      if (inFlight) { inFlight.abort(); inFlight = null; }
+    },
   };
 }

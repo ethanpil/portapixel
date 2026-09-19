@@ -5,9 +5,10 @@
    password.
 */
 
-import { h, fill, toast, banner, modal } from '/shared/ui.js';
+import {
+  h, fill, toast, banner, card, pageHead, errorText, setText,
+} from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { card, pageHead, errorText, setText } from '../util.js';
 
 export function mount(main, ctx) {
   let settings = null;
@@ -38,7 +39,7 @@ export function mount(main, ctx) {
 
   const nameInput = h('input', { class: 'pp-input', type: 'text', maxlength: '80', onInput: touch });
   const urlInput = h('input', { class: 'pp-input pp-input--mono', type: 'url', placeholder: 'https://signage.example.com', onInput: touch });
-  const pollInput = h('input', { class: 'pp-input pp-input--mono', type: 'number', min: '5', max: '86400', onInput: touch });
+  const pollInput = h('input', { class: 'pp-input pp-input--mono', type: 'number', min: '10', max: '86400', onInput: touch });
   const pollHelp = h('div', { class: 'pp-help' });
   const quietHelp = h('div', { class: 'pp-help' });
   const dirtyNote = h('span');
@@ -60,7 +61,7 @@ export function mount(main, ctx) {
           h('label', { class: 'pp-label pp-field' }, 'The address that screens use', urlInput,
             h('div', { class: 'pp-help' },
               'Every screen holds this address, and the server only answers a browser that asks for this host name. ',
-              h('b', { text: 'A change here needs a restart' }), ', because the allowlist is built when the server starts.')),
+              'A new address works at once: the list of host names is built at each request.')),
         ],
       }),
       card({
@@ -87,10 +88,12 @@ export function mount(main, ctx) {
         title: 'Licences',
         body: [
           h('div', { class: 'pp-small' }, 'PortaPixel is MIT licensed. This server is one Go binary with the admin pages inside it.'),
-          h('div', { class: 'pp-help' },
-            'The licences of everything that is built in are in the file ',
-            h('span', { class: 'pp-mono', text: 'LICENSES-THIRD-PARTY.md' }),
-            ' of the release, beside the binary.'),
+          h('div', { class: 'pp-btns', style: { 'margin-top': '12px' } },
+            h('a', {
+              class: 'pp-btn', href: '/licenses', target: '_blank', rel: 'noopener',
+              text: 'Licences of everything included',
+            })),
+          h('div', { class: 'pp-help', text: 'This server serves that list itself, so it works on a closed network.' }),
         ],
       }),
       h('div', { class: 'pp-savebar' },
@@ -131,8 +134,10 @@ export function mount(main, ctx) {
   function paintMath() {
     const seconds = Number(pollInput.value) || 0;
     const screens = (ctx.store.totals && ctx.store.totals.screens) || 0;
-    if (seconds < 5 || seconds > 86400) {
-      setText(pollHelp, 'It must be between 5 and 86400 seconds.');
+    // The device validator repairs anything under 10 to its own default, so a
+    // server that offered 5 would hand out a number that a screen ignores.
+    if (seconds < 10 || seconds > 86400) {
+      setText(pollHelp, 'It must be between 10 and 86400 seconds.');
     } else if (screens === 0) {
       setText(pollHelp, 'No screen has joined yet. Every screen will ask this server for its manifest on this interval.');
     } else {
@@ -140,7 +145,7 @@ export function mount(main, ctx) {
       setText(pollHelp, `${screens} ${screens === 1 ? 'screen' : 'screens'} at ${seconds} seconds is about ${rate.toFixed(rate < 1 ? 2 : 1)} check-ins a second. Stretch the interval if this host is small.`);
     }
     const quiet = Math.round(seconds * 2.5);
-    setText(quietHelp, seconds >= 5
+    setText(quietHelp, seconds >= 10
       ? `A screen counts as quiet when it has not called for ${quiet} seconds, which is two and a half intervals. That one rule decides the grey dots, so there is no second setting for it.`
       : '');
   }
@@ -159,18 +164,7 @@ export function mount(main, ctx) {
       ctx.clearGuard();
       await ctx.reloadSession();
       paintForm();
-      toast(out.restart_needed
-        ? 'Saved. The new address needs a restart of the server before a browser can use it.'
-        : 'Settings saved.');
-      if (out.restart_needed) {
-        modal({
-          title: 'Restart the server for the new address',
-          body: h('div', null,
-            h('div', null, 'The list of host names that this server answers is built when it starts, so the new address does not work yet.'),
-            h('div', { style: { 'margin-top': '8px' } }, 'Screens are not affected: each one keeps the address that it already holds, and it keeps playing either way.')),
-          actions: [{ label: 'All right', value: true, kind: 'primary' }],
-        });
-      }
+      toast('Settings saved.');
     } catch (err) {
       if (err.fields) showFieldErrors(err.fields);
       else toast(errorText(err), 'danger');
@@ -210,46 +204,37 @@ export function mount(main, ctx) {
       error.hidden = false;
     };
 
+    /* Clear every field. A password that a failed attempt left in the form is a
+       secret sitting in the page for as long as the tab is open. */
+    const clearAll = () => { current.value = ''; next.value = ''; again.value = ''; };
+
     button.addEventListener('click', async () => {
       error.hidden = true;
       if (!current.value) { fail('Type the password that you use now.'); current.focus(); return; }
       if (next.value.length < 8) { fail('The new password needs eight characters or more.'); next.focus(); return; }
       if (next.value !== again.value) { fail('The two new passwords are not the same.'); again.focus(); return; }
       button.disabled = true;
-      // The route that sets a password does not ask for the old one, so the page
-      // checks it with a sign-in first. A wrong guess costs one of the five
-      // attempts a minute that the limiter allows.
-      //
-      // This one call goes through fetch and not through api(): a 401 from api()
-      // fires the unauthorized event, and a wrong guess here would then throw the
-      // admin out of a session that is still good.
-      let checked = 0;
+      /* The route takes the password in use and the new one in one call. It
+         answers 403, not 401, for a wrong current password, so api.js does not
+         sign this browser out; the field error goes at the field it names. */
       try {
-        const res = await fetch('/api/admin/login', {
-          method: 'POST', credentials: 'same-origin',
-          headers: { 'X-PortaPixel': '1', 'Content-Type': 'application/json', Accept: 'application/json' },
-          body: JSON.stringify({ password: current.value }),
-        });
-        checked = res.status;
-      } catch {
-        checked = 0;
-      }
-      if (checked !== 200) {
-        button.disabled = false;
-        fail(checked === 429
-          ? 'Too many attempts from this address. Wait a minute.'
-          : 'That is not the password that you use now.');
-        current.focus();
-        return;
-      }
-      try {
-        await api('POST', '/api/admin/password', { password: next.value });
-        current.value = next.value = again.value = '';
-        toast('The password is set. The session stays open.');
+        await api('POST', '/api/admin/password', { current: current.value, password: next.value });
+        clearAll();
+        toast('The password is set. This browser stays signed in; every other session ended.');
         await ctx.reloadSession();
         paintBanners();
       } catch (err) {
-        fail(errorText(err));
+        clearAll();
+        const field = (err.fields || []).find((f) => f.field === 'current');
+        if (err.status === 403) {
+          fail(field ? field.message : 'That is not the password that this server uses now.');
+          current.focus();
+        } else if (err.status === 429) {
+          fail('Too many attempts from this address. Wait a minute and try again.');
+        } else {
+          fail(errorText(err));
+          next.focus();
+        }
       } finally {
         button.disabled = false;
       }

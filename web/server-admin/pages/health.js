@@ -6,10 +6,11 @@
 */
 
 import {
-  h, fill, toast, banner, statusDot, progress, factList, fmtBytes, fmtDuration, fmtAgo,
+  h, fill, toast, banner, statusDot, progress, factList, fmtBytes,
+  fmtDuration, fmtAgo, card, pageHead, errorText,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { card, pageHead, errorText, fmtClock, isNever } from '../util.js';
+import { fmtClock, isNever } from '../util.js';
 
 export function mount(main, ctx) {
   let view = null;
