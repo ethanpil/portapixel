@@ -248,6 +248,57 @@ when CDP does not answer. It writes the chosen rung to the ops log. Tests must e
 both rungs: CDP against a stub HTTP and WebSocket server, relaunch against a real stub
 process.
 
+## 7a. Player protocol
+
+The browser opens `/player?k=<secret>[&resume=<index>]`. The SPA sends the secret in the
+`X-PortaPixel-Player` header on each call. EventSource cannot set a header, so the SSE
+URL carries `?k=<secret>`.
+
+`GET /api/player/manifest`:
+
+```json
+{
+  "fallback": false,
+  "tier": "high",
+  "playlist": {
+    "name": "default", "title": "Lobby loop",
+    "transition": "crossfade", "transition_ms": 500, "shuffle": false,
+    "items": [
+      {"index": 0, "kind": "image", "name": "welcome.jpg", "src": "/media/default/welcome.jpg", "duration": 15},
+      {"index": 1, "kind": "video", "name": "promo.mp4", "src": "/media/default/promo.mp4", "mute": false, "max_duration": 0},
+      {"index": 2, "kind": "url", "name": "https://dash.example.com/board", "url": "https://dash.example.com/board", "duration": 60, "refresh_seconds": 300}
+    ]
+  }
+}
+```
+
+`fallback: true` means no playable content. Then `playlist` is null and the SPA shows the
+fallback screen from `/api/status` and `/api/player/qr.svg`. The daemon applies defaults
+(`image_duration`, playlist overrides) before it sends the manifest. The daemon does the
+shuffle. `index` is the position in the list that the SPA received. `src` for a fleet
+item is `/media/_fleet/media/<object>`.
+
+`POST /api/player/heartbeat`, every 5 s:
+
+```json
+{"playlist": "default", "index": 1, "name": "promo.mp4", "kind": "video",
+ "state": "playing", "frames": 18211, "position": 12.4}
+```
+
+`state` is `playing`, `fallback` or `handoff`. `frames` is a requestAnimationFrame
+counter that only grows (D45). The reply is `{"ok": true}`.
+
+`POST /api/player/url-item` with `{"index": 2}`: the SPA stops. The daemon navigates to
+the URL, waits for the dwell time, then opens `/player?k=...&resume=3`. A reply of
+`{"skip": true}` means the URL is not reachable (D19). Then the SPA goes to the next item.
+
+`GET /api/player/events` (SSE). Events: `playlist` (get the manifest again and start at
+item 0), `grace` (the daemon wants to restart the browser; the SPA calls
+`POST /api/player/ready` at the next item boundary), `reload` (reload the page now).
+
+Kiosk mode (D42): when the active playlist is one URL item, the daemon keeps the browser
+on that URL. The SPA does not run.
+
 ## 8. Web assets
 
 No build step. No npm. The file in the repository is the file that ships.
