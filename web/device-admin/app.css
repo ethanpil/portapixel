@@ -1,0 +1,103 @@
+/* Device admin UI, the parts that only this UI has.
+   Everything else comes from /shared/pp.css. Add nothing here that another UI
+   could use: that belongs in the shared file.
+*/
+
+/* The hidden attribute must win. A class that sets `display` beats the rule
+   that the browser has for [hidden], so a banner or a button that this UI
+   hides would otherwise stay on the screen. */
+[hidden] { display: none !important; }
+
+/* A narrow list beside a wide panel: the playlist list and its editor. */
+.dv-split { display: flex; gap: var(--pp-space-6); align-items: flex-start; }
+.dv-split__side { flex: 0 0 244px; min-width: 0; }
+.dv-split__main { flex: 1 1 380px; min-width: 0; }
+
+/* One row of the playlist list. */
+.dv-pick {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  color: inherit; padding: var(--pp-space-4) var(--pp-space-5);
+  border-bottom: 1px solid var(--pp-border-faint);
+}
+.dv-pick:last-of-type { border-bottom: 0; }
+.dv-pick:hover { background: var(--pp-subtle); }
+.dv-pick[aria-current='true'] { background: var(--pp-brand-tint); }
+.dv-pick[aria-current='true'] .dv-pick__name { color: var(--pp-brand-tint-ink); font-weight: 600; }
+.dv-pick__name { display: flex; align-items: center; gap: var(--pp-space-2); font-size: var(--pp-fs-lead); }
+.dv-pick__name span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dv-pick__meta { font-size: var(--pp-fs-sm); color: var(--pp-muted); margin-top: 2px; }
+.dv-pick__tags { display: flex; gap: var(--pp-space-1); flex-wrap: wrap; margin-top: 5px; }
+
+/* The read-only cascade of a paired device: one class on the wrapper. */
+.dv-ro { opacity: 0.62; }
+
+/* Now playing: the preview and the numbers under it. */
+.dv-now__meta {
+  display: flex; justify-content: space-between; gap: var(--pp-space-5);
+  flex-wrap: wrap; margin: 11px 0 var(--pp-space-2); font-size: var(--pp-fs-sm);
+}
+.dv-now__thumb { background: #000; }
+.dv-now__thumb video, .dv-now__thumb img { width: 100%; height: 100%; object-fit: contain; }
+
+/* A schedule rule row. The columns stack on a phone. */
+.dv-rule {
+  display: flex; gap: var(--pp-space-5); align-items: flex-end; flex-wrap: wrap;
+  padding: var(--pp-space-5) var(--pp-space-7);
+  border-bottom: 1px solid var(--pp-border-faint);
+}
+.dv-rule__n {
+  flex: none; width: 20px; font-family: var(--pp-mono); font-size: 12px;
+  color: var(--pp-muted); padding-bottom: 7px;
+}
+.dv-rule__pl { flex: 1 1 180px; min-width: 150px; }
+.dv-rule__when { flex: none; }
+.dv-rule__times { display: flex; gap: var(--pp-space-2); flex: none; }
+/* Wide enough for a time field that a 12-hour locale draws with AM or PM. */
+.dv-rule__times .pp-input { width: 122px; }
+.dv-rule__acts { display: flex; gap: 2px; margin-left: auto; padding-bottom: 5px; }
+
+/* Weekly coverage grid: seven rows of twenty-four hours. */
+.dv-week { display: grid; grid-template-columns: 34px 1fr; gap: 3px var(--pp-space-3); align-items: center; }
+.dv-week__day { font-size: var(--pp-fs-xs); color: var(--pp-muted); }
+.dv-week__hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; }
+.dv-week__cell { height: 14px; border-radius: 2px; background: var(--pp-head); }
+.dv-week__cell--on { background: var(--pp-brand); }
+.dv-week__axis { display: grid; grid-template-columns: repeat(24, 1fr); font-size: 10px; color: var(--pp-muted); margin-top: var(--pp-space-1); }
+.dv-week__axis span:nth-child(6n+1) { visibility: visible; }
+.dv-week__axis span { visibility: hidden; }
+
+/* Settings: a card that the fleet server owns while the device is paired. */
+.dv-managed { border-color: var(--pp-brand-tint-border); }
+
+/* The log table keeps its timestamps on one line. */
+.dv-when { font-family: var(--pp-mono); font-size: 12px; white-space: nowrap; }
+.dv-event { font-family: var(--pp-mono); font-size: 12px; color: var(--pp-muted); }
+
+/* The log table must keep its Kind column on the card. A long detail line
+   wraps instead of making the row wider than the card. */
+.dv-log .pp-table__inner { min-width: 0; }
+.dv-log .pp-cell--grow { white-space: normal; overflow-wrap: anywhere; }
+
+/* One line of the short log on the dashboard. */
+.dv-logline {
+  display: flex; gap: var(--pp-space-5); align-items: baseline;
+  padding: 7px 0; border-bottom: 1px solid var(--pp-border-faint);
+  font-size: var(--pp-fs-sm);
+}
+.dv-logline:last-child { border-bottom: 0; padding-bottom: 0; }
+.dv-logline__what { flex: 1 1 auto; min-width: 0; }
+
+/* Install to disk: one row for each disk that the device found. */
+.dv-disk {
+  display: flex; gap: var(--pp-space-5); align-items: center; flex-wrap: wrap;
+  padding: var(--pp-space-4) 0; border-bottom: 1px solid var(--pp-border-faint);
+}
+.dv-disk:last-child { border-bottom: 0; }
+.dv-disk__name { flex: 1 1 180px; min-width: 0; }
+
+@media (max-width: 760px) {
+  .dv-split { flex-direction: column; }
+  .dv-split__side, .dv-split__main { flex: 1 1 auto; width: 100%; }
+  .dv-rule { padding-left: var(--pp-space-5); padding-right: var(--pp-space-5); }
+  .dv-rule__acts { margin-left: 0; }
+}
