@@ -76,7 +76,10 @@ func (d Deps) device(w http.ResponseWriter, r *http.Request) (db.Device, bool) {
 	if err != nil {
 		// One answer for "no such token" and for "the token was revoked". A
 		// device that guesses tokens must learn nothing from the difference.
-		httpjson.Error(w, http.StatusUnauthorized, "this device token is not valid")
+		// The code says that the token itself is gone, so the device drops its
+		// pairing. A 401 with no code is a fault of something in between, and the
+		// device then keeps the pairing and waits (httpjson.TokenRevokedCode).
+		httpjson.Revoked(w, "this device token is not valid")
 		return db.Device{}, false
 	}
 	return dev, true

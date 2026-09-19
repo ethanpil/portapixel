@@ -39,7 +39,7 @@ func (d Deps) postEnroll(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, db.ErrBadToken):
 		d.Limiter.Fail(ip)
-		httpjson.Error(w, http.StatusUnauthorized, "this token is not valid")
+		httpjson.Revoked(w, "this token is not valid")
 		return
 	case errors.Is(err, db.ErrBadDeviceID):
 		d.Limiter.Fail(ip)

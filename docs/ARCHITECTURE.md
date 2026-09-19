@@ -35,7 +35,13 @@ cmd/portapixeld/          device entry point. Subcommands, flags, wiring only.
 cmd/portapixel-server/    server entry point. Flags and wiring only.
 web/embed.go              package web. go:embed of player, device-admin, server-admin, shared.
 
-internal/version          Version string, set with -ldflags. Embedded minisign public key.
+internal/version          Version string and minisign public key, both set with -ldflags.
+internal/rnd              Hex(n): the one random-text helper. Session tokens, the player
+                          secret, a staging directory name.
+internal/fleet            The rules of a device call to a fleet server: ResolveURL (a
+                          server-relative address becomes a whole address on the paired
+                          host), DropBearerOffHost, NewClient, ContextUntil. The sync
+                          client and the updater both import it.
 internal/fsutil           WriteFileAtomic (stage, fsync, rename, fsync dir). FreeBytes.
 internal/opslog           Bounded event log. 1200 lines trim to 1000.
 internal/config           portapixel.toml model, defaults, Validate, Render, Load with shadow.
@@ -148,7 +154,20 @@ type EnrollResponse struct {
 ```
 
 A pending device calls `enroll` again with the same `ClaimSecret` in `token` until the
-status is `paired`. The server keeps only the SHA-256 of that secret.
+status is `paired`. The server keeps only the SHA-256 of that secret. A `pending`
+answer with no `claim_secret` is a protocol fault: the device cannot poll with it.
+
+One 401 ends a pairing, and only that one: the answer of the fleet API for a token
+that this server does not hold, which carries `{"error":"...","code":"token-revoked"}`
+(`httpjson.Revoked`). The device drops its token for that answer alone. Any other 401,
+403 or 407 comes from something between the device and the server — a proxy, a captive
+portal, a web application firewall — and is a network fault: the device backs off, says
+so in `sync_error` and keeps the pairing.
+
+Every address that the manifest names (`media[].url`, `release.base_url`) is resolved
+by `fleet.ResolveURL` against the address of the pairing. The result must be on that
+scheme, host and port, and under its path, or the device leaves the object or the
+release out. A manifest is not trusted input, even from a paired server.
 
 Enrollment rules of the server (D25). A request that waits lives in its own table,
 so it can never change a screen that works:
@@ -298,11 +317,27 @@ gives the code to loopback callers only, which is the fallback screen (D46).
 `insecure` is true when the address is `http://` on a host that is not loopback and not a
 private network. The status then also carries the warning `server-insecure`.
 
-While the device is paired, these routes answer 403 `{"error":"managed by <server name>"}`:
+While the device is paired, these routes answer 403 with
+`{"error":"managed by <server name>","fields":[{"field":"...","message":"..."}]}`:
 playlist create, save, rename and delete; media upload and delete. `PUT /api/config`
-answers 403 for a change of `playback.*`, `schedule`, `display.on_time`,
-`display.off_time`, `display.power_days` or `updates.auto`, and 200 for every other field
-(D48). The boundary table is `internal/device/syncer.ManagedField`.
+answers the same 403 for a change of a managed field and 200 for every other field.
+
+The managed set is exactly what the manifest carries (D48):
+`playback.default_playlist`, `schedule`, `display.on_time`, `display.off_time`,
+`display.power_days`. `server.url` and `server.token` are refused as well while the
+device is paired: they change through `/api/pair` only. Everything else, including the
+other `[playback]` fields and `updates.auto`, stays with the local admin. The table is
+`internal/device/syncer.ManagedFields`, and `GET /api/pair` carries the same list in
+`managed_fields` while the device is paired, so the admin UI holds no copy of it.
+
+The refusal is in the mechanism and not only in the route: the write methods of
+`internal/device/library` answer `ErrManaged` while the device is paired, and a hand
+edit of `portapixel.toml` keeps the running value of a managed field and raises the
+status warning `config-managed-ignored`.
+
+`POST /api/pair` on a device that is already paired answers 409. The device token and
+the address it belongs to are written together and cleared together, so a token never
+travels to a server that did not give it.
 
 `blocked` in the check answer is the reason that this build can install nothing, for
 example a development build with no minisign public key. It is not an error: the route

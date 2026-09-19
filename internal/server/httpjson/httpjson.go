@@ -24,6 +24,10 @@ const MaxBody = 1 << 20
 // kilobyte over fifteen seconds is already a broken client.
 const bodyDeadline = 15 * time.Second
 
+// ContentType is the media type of every answer of this package. NotFoundJSON
+// reads it to tell an answer of a handler from the text page of the router.
+const ContentType = "application/json"
+
 // Write writes one JSON answer.
 func Write(w http.ResponseWriter, code int, body any) {
 	data, err := json.Marshal(body)
@@ -32,7 +36,7 @@ func Write(w http.ResponseWriter, code int, body any) {
 		data = []byte(`{"error":"the server could not build the answer"}`)
 		code = http.StatusInternalServerError
 	}
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", ContentType)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(code)
 	w.Write(data)
@@ -41,6 +45,24 @@ func Write(w http.ResponseWriter, code int, body any) {
 // Error writes {"error": "..."}.
 func Error(w http.ResponseWriter, code int, message string) {
 	Write(w, code, map[string]string{"error": message})
+}
+
+// TokenRevokedCode is the code of the one 401 that ends a pairing: the device token
+// or the claim secret of the caller is not a token of this server any more.
+//
+// The device needs the code, because any box between it and this server can answer
+// 401 as well: a proxy with basic authentication left on, a captive portal, a web
+// application firewall. Such an answer is a network fault, and a pairing that a
+// person made on two screens must not go away because of one.
+const TokenRevokedCode = "token-revoked"
+
+// Revoked writes the 401 that tells a device to forget its token:
+// {"error": "...", "code": "token-revoked"}.
+func Revoked(w http.ResponseWriter, message string) {
+	Write(w, http.StatusUnauthorized, map[string]string{
+		"error": message,
+		"code":  TokenRevokedCode,
+	})
 }
 
 // Fields writes the 422 answer: {"error": "...", "fields": [...]}.
@@ -139,6 +161,16 @@ func (j *jsonErrorWriter) WriteHeader(code int) {
 		return
 	}
 	j.done = true
+	// A handler that answered in JSON already said what it had to say. Only the
+	// text page of the router is replaced.
+	//
+	// Without this test, "the media store holds no file for this object" became
+	// "this server has no route with this path". The device then put that wrong
+	// sentence into sync_error and into the ops log of the operator.
+	if j.Header().Get("Content-Type") == ContentType {
+		j.ResponseWriter.WriteHeader(code)
+		return
+	}
 	switch code {
 	case http.StatusNotFound:
 		j.replaced = true
