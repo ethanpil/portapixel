@@ -45,7 +45,7 @@ func TestStatusKeys(t *testing.T) {
 		"media_free_bytes", "browser_state", "navigation_rung",
 		"display_connected", "screen_on", "paired", "server_url", "last_sync",
 		"last_sync_result", "clock_synced", "timezone", "warnings",
-		"config_from_shadow", "update",
+		"hardware_changed", "config_from_shadow", "update",
 	}
 	data, err := json.Marshal(Status{})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestStatusKeys(t *testing.T) {
 		}
 	}
 	// These keys must stay out of an empty Status.
-	for _, key := range []string{"now_playing", "pairing_code", "sync_error"} {
+	for _, key := range []string{"now_playing", "pairing_code", "sync_error", "codecs"} {
 		if _, ok := got[key]; ok {
 			t.Errorf("key %q must be left out when it is empty", key)
 		}
@@ -113,7 +113,7 @@ func TestRoundTrip(t *testing.T) {
 					DeviceID:   "px-12345678",
 					IPs:        []string{"192.168.1.5"},
 					LastSync:   time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC),
-					Warnings:   []string{"change the web password"},
+					Warnings:   []Warning{{Code: WarnWebPassword, Message: "change the web password"}},
 					NowPlaying: &NowPlaying{Playlist: "lobby", Index: 2, Item: "a.jpg", Kind: "image"},
 					Update:     UpdateState{State: "idle"},
 				},
