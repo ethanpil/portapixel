@@ -98,6 +98,14 @@ func (d Deps) putConfig(w http.ResponseWriter, r *http.Request) {
 	}
 	applied, saveErr := d.SaveConfig(incoming)
 	if err := saveErr; err != nil {
+		// A field that the fleet server owns while the device is paired (D48). The
+		// rest of the page stays open, so the answer names the boundary and not the
+		// whole route.
+		var managed ErrManaged
+		if errors.As(err, &managed) {
+			writeError(w, http.StatusForbidden, managed.Error())
+			return
+		}
 		var fields config.Errors
 		if errors.As(err, &fields) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{

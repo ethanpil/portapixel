@@ -16,6 +16,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
@@ -47,6 +48,17 @@ type fx struct {
 	// noSecret builds the handler with no player secret. A daemon that never
 	// made one must answer no player call at all.
 	noSecret bool
+
+	// The fleet client. fleet is nil for a build that carries none, and then the
+	// pairing routes answer 501. serverName is the name of the server that
+	// manages the device; an empty name means standalone (D48).
+	fleet      bool
+	serverName string
+	pairState  PairState
+	pairURL    string
+	pairToken  string
+	pairErr    error
+	unpaired   int
 }
 
 func newFx(t *testing.T) *fx {
@@ -73,6 +85,24 @@ func (f *fx) rebuild() {
 	if f.noSecret {
 		secret = ""
 	}
+	// The fleet client of the fixture. A nil set of functions is a build with no
+	// fleet client, and then every pairing route answers 501.
+	var pairState func() PairState
+	var pair func(context.Context, string, string) (PairState, error)
+	var unpair func() error
+	var managed func() (string, bool)
+	if f.fleet {
+		pairState = func() PairState { return f.pairState }
+		pair = func(_ context.Context, url, token string) (PairState, error) {
+			f.pairURL, f.pairToken = url, token
+			if f.pairErr != nil {
+				return PairState{}, f.pairErr
+			}
+			return f.pairState, nil
+		}
+		unpair = func() error { f.unpaired++; return nil }
+		managed = func() (string, bool) { return f.serverName, f.serverName != "" }
+	}
 	f.h = New(Deps{
 		MediaRoot:    f.media,
 		Log:          log,
@@ -95,6 +125,16 @@ func (f *fx) rebuild() {
 			merged := config.MergeMasked(f.cfg, incoming)
 			if errs := merged.Validate(); len(errs) > 0 {
 				return Applied{}, errs
+			}
+			// The same field guard that the daemon uses (D48). It is here, and not
+			// in the handler, because the daemon holds the configuration that runs
+			// and the handler holds no rule.
+			if f.serverName != "" {
+				for _, c := range config.ChangeClass(f.cfg, merged) {
+					if syncer.ManagedField(c.Field) {
+						return Applied{}, ErrManaged{Server: f.serverName}
+					}
+				}
 			}
 			f.cfg = merged
 			saved := merged
@@ -121,6 +161,10 @@ func (f *fx) rebuild() {
 		AdminURL:        func() string { return "http://lobby.local/" },
 		SetRootPassword: func(pw string) error { f.rootPW = pw; return nil },
 		SetCodecs:       func(r manifest.CodecReport) { f.codecs = r },
+		PairState:       pairState,
+		Pair:            pair,
+		Unpair:          unpair,
+		Managed:         managed,
 	})
 }
 

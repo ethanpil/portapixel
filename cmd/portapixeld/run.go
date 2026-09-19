@@ -34,6 +34,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/netcfg"
 	"github.com/ethanpil/portapixel/internal/device/power"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
+	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
@@ -93,6 +94,7 @@ type daemon struct {
 	announce *mdns.Announcer
 	update   *updater.Manager
 	install  *installer.Installer
+	sync     *syncer.Syncer
 	hub      *httpd.Hub
 	// installHub is the progress stream of an install onto a disk. It replays its
 	// last event, because the admin UI opens the stream after the POST answered.
@@ -296,7 +298,69 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		Run:       rootRunner{},
 		Log:       d.log,
 	})
+
+	// 12. The fleet client (D24, D25). Restore puts the schedule of the last
+	// manifest back before anything serves: a paired device must not use the rules
+	// of the TOML for the seconds between the start and its first poll, and a paired
+	// device with no network must not use them at all. Nothing else here talks to a
+	// network; the poll loop starts in serve.
+	d.sync = syncer.New(syncer.Options{
+		MediaRoot:       p.media,
+		Log:             d.log,
+		Now:             d.localNow,
+		Identity:        d.id,
+		Config:          d.config,
+		State:           d.deviceState,
+		SaveState:       d.updateState,
+		SaveServer:      d.saveServer,
+		Status:          func() manifest.Status { return d.status(false) },
+		SetFleetRules:   d.sched.SetFleetRules,
+		ClearFleetRules: d.sched.ClearFleetRules,
+		Rescan:          func() { d.lib.Rescan() },
+		Command:         d.command,
+		Update:          d.fleetUpdate,
+		CachedSHA:       d.lib.CachedSHA,
+		FindSHA:         d.lib.FindSHA,
+		NoteSHA:         d.lib.NoteSHA,
+	})
+	d.sync.Restore()
 	return d, nil
+}
+
+// updateState changes the device state and writes the file under one lock. The
+// fleet client and the updater both change it, so the read and the write of one
+// change must not be two steps that another goroutine can come between.
+func (d *daemon) updateState(change func(*identity.State)) error {
+	d.mu.Lock()
+	change(&d.state)
+	state := d.state
+	d.mu.Unlock()
+	return state.Save(d.paths.state)
+}
+
+// saveServer writes [server] url and token to portapixel.toml through the normal
+// save path. Pairing from the settings page and unpairing are the two explicit
+// saves that the fleet client makes (CONTEXT: never write the configuration of the
+// user except through an explicit save).
+func (d *daemon) saveServer(url, token string) error {
+	next := d.config()
+	if next.Server.URL == url && next.Server.Token == token {
+		return nil
+	}
+	next.Server.URL = url
+	next.Server.Token = token
+	_, err := d.saveConfig(next)
+	return err
+}
+
+// fleetUpdate is the work of the fleet "update" command: check the mirror of the
+// server and install what it offers (D28).
+func (d *daemon) fleetUpdate(ctx context.Context) error {
+	rel, err := d.update.Check(ctx, d.updateSource())
+	if err != nil {
+		return err
+	}
+	return d.update.Apply(ctx, rel)
 }
 
 // applyMinute gives the minute of the day at which an automatic update is applied.
@@ -376,7 +440,10 @@ func (d *daemon) serve(listen string) int {
 	// Nothing below may hold up the start. A device with no network plays what it
 	// has (plan 3.3).
 	start(func() { d.announce.Run(done) })
-	start(func() { d.update.Run(done, d.updateSource()) })
+	// RunSource and not Run: a paired device follows the release that its server
+	// approves, and that value changes while the daemon runs (D28).
+	start(func() { d.update.RunSource(done, d.updateSource) })
+	start(func() { d.sync.Run(done) })
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -438,6 +505,10 @@ func (d *daemon) deps() httpd.Deps {
 			return setRootPassword(d.paths.state, password)
 		},
 		SetCodecs:     d.setCodecs,
+		PairState:     d.sync.State,
+		Pair:          d.pair,
+		Unpair:        d.sync.Unpair,
+		Managed:       d.sync.Managed,
 		CheckUpdate:   d.checkUpdate,
 		ApplyUpdate:   d.applyUpdate,
 		Disks:         d.install.Disks,
@@ -447,17 +518,28 @@ func (d *daemon) deps() httpd.Deps {
 	}
 }
 
-// updateSource says where this device looks for a release. A paired device will
-// take the mirror of its fleet server; until the fleet client exists, every device
-// asks GitHub (D28).
+// updateSource says where this device looks for a release. A paired device takes
+// the mirror of its fleet server and nothing else; a standalone device asks GitHub
+// (D28).
 func (d *daemon) updateSource() updater.Source {
+	if src, ok := d.sync.UpdateSource(); ok {
+		return src
+	}
 	return updater.Source{Repo: GitHubRepo}
 }
 
 // checkUpdate asks the release source. The handler holds no rule: the updater owns
 // the refusals and the state.
+//
+// A paired device with no approved release has nothing to offer, and that is not a
+// fault: the GitHub source is off while a device is paired, so the About page says
+// "there is no newer release" and not an error about a source that is missing.
 func (d *daemon) checkUpdate(ctx context.Context) (updater.Release, error) {
-	return d.update.Check(ctx, d.updateSource())
+	src := d.updateSource()
+	if src.Repo == "" && src.BaseURL == "" {
+		return updater.Release{}, updater.ErrNoRelease
+	}
+	return d.update.Check(ctx, src)
 }
 
 // applyUpdate installs the release that the last check found.
@@ -481,6 +563,12 @@ func (d *daemon) applyUpdate(ctx context.Context) error {
 		d.update.Apply(work, *offered)
 	}()
 	return nil
+}
+
+// pair is POST /api/pair. The address and the token go into portapixel.toml,
+// because the person on the settings page asked for it (D25).
+func (d *daemon) pair(ctx context.Context, url, token string) (httpd.PairState, error) {
+	return d.sync.Pair(ctx, url, token, true)
 }
 
 // startInstall starts an install onto a disk (D54). Every refusal answers here, so
@@ -653,6 +741,8 @@ func (d *daemon) status(loopback bool) manifest.Status {
 	fromShadow, warning, code, codecs := d.fromShadow, d.cfgWarning, d.cfgCode, d.codecs
 	d.mu.Unlock()
 
+	fleet := d.sync.Report()
+
 	in := health.Inputs{
 		Config:            cfg,
 		ConfigFromShadow:  fromShadow,
@@ -667,13 +757,17 @@ func (d *daemon) status(loopback bool) manifest.Status {
 		// The power controller is what switched the display, so it is the truth
 		// about the screen. The browser is suspended as part of a transition, and
 		// nothing else suspends it.
-		ScreenOn:    d.screen.ScreenOn(),
-		NowPlaying:  browserState.NowPlaying,
-		Paired:      state.Paired(),
-		ServerURL:   cfg.Server.URL,
-		ClockSynced: d.clockSynced(),
-		Problems:    problems,
-		Update:      d.update.State(),
+		ScreenOn:       d.screen.ScreenOn(),
+		NowPlaying:     browserState.NowPlaying,
+		Paired:         fleet.Paired,
+		ServerURL:      fleet.ServerURL,
+		LastSync:       fleet.LastSync,
+		LastSyncResult: fleet.LastResult,
+		SyncError:      fleet.SyncError,
+		ServerInsecure: syncer.InsecureURL(fleet.ServerURL),
+		ClockSynced:    d.clockSynced(),
+		Problems:       problems,
+		Update:         d.update.State(),
 	}
 	if loopback {
 		in.PairingCode = state.PairingCode
@@ -789,12 +883,25 @@ func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
 	if errs := next.Validate(); len(errs) > 0 {
 		return httpd.Applied{}, errs
 	}
+
+	// The settings boundary of D48. The fleet server owns the playlists, the
+	// schedules, the screen times and the updates while the device is paired. The
+	// rotation, the audio, the network, the name, the time zone and the passwords
+	// stay with the local admin, so the refusal is per field and not per route.
+	changes := config.ChangeClass(old, next)
+	if name, paired := d.sync.Managed(); paired {
+		for _, c := range changes {
+			if syncer.ManagedField(c.Field) {
+				return httpd.Applied{}, httpd.ErrManaged{Server: name}
+			}
+		}
+	}
+
 	if err := config.Save(d.paths.media, d.paths.state, next); err != nil {
 		d.log.Log("config.save.fail", err.Error())
 		return httpd.Applied{}, err
 	}
 
-	changes := config.ChangeClass(old, next)
 	d.adopt(next, false, "", "")
 	d.applyChanges(changes)
 	d.log.Log("config.save", fmt.Sprintf("%d changes", len(changes)))

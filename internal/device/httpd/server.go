@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/browser"
@@ -96,6 +97,18 @@ type Deps struct {
 	// heartbeat (D12).
 	SetCodecs func(manifest.CodecReport)
 
+	// PairState gives the pairing state of GET /api/pair.
+	PairState func() PairState
+	// Pair starts a pairing with a server address and a token. An empty token
+	// starts the code pairing (D25).
+	Pair func(ctx context.Context, url, token string) (PairState, error)
+	// Unpair forgets the fleet server and keeps the cached objects.
+	Unpair func() error
+	// Managed gives the name of the fleet server that owns the content of this
+	// device. paired is false for a standalone device, and then nothing is locked
+	// (D48).
+	Managed func() (name string, paired bool)
+
 	// CheckUpdate asks the release source for a newer release.
 	CheckUpdate func(ctx context.Context) (updater.Release, error)
 	// ApplyUpdate installs the release that the last check found.
@@ -151,16 +164,23 @@ func New(d Deps) http.Handler {
 	auth := func(pattern string, h http.HandlerFunc) {
 		mux.Handle(pattern, d.Sessions.Require(h))
 	}
+	// fleet locks a route that the fleet server owns while the device is paired
+	// (D48). PUT /api/config is not locked as a route: the local admin keeps the
+	// rotation, the audio, the network and the passwords there, so that refusal is
+	// per field and lives in the configuration save.
+	fleet := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, d.Sessions.Require(d.fleetGuard(h)))
+	}
 	auth("GET /api/config", d.getConfig)
 	auth("PUT /api/config", d.putConfig)
 	auth("GET /api/playlists", d.getPlaylists)
-	auth("POST /api/playlists", d.postPlaylist)
-	auth("PUT /api/playlists/{name}", d.putPlaylist)
-	auth("POST /api/playlists/{name}/rename", d.renamePlaylist)
-	auth("DELETE /api/playlists/{name}", d.deletePlaylist)
+	fleet("POST /api/playlists", d.postPlaylist)
+	fleet("PUT /api/playlists/{name}", d.putPlaylist)
+	fleet("POST /api/playlists/{name}/rename", d.renamePlaylist)
+	fleet("DELETE /api/playlists/{name}", d.deletePlaylist)
 	auth("GET /api/media/{playlist}", d.getMedia)
-	auth("POST /api/media/{playlist}", d.postMedia)
-	auth("DELETE /api/media/{playlist}/{file}", d.deleteMedia)
+	fleet("POST /api/media/{playlist}", d.postMedia)
+	fleet("DELETE /api/media/{playlist}/{file}", d.deleteMedia)
 	auth("POST /api/rescan", d.postRescan)
 	auth("POST /api/commands/{name}", d.postCommand)
 	auth("GET /api/opslog", d.getOpslog)
@@ -175,15 +195,12 @@ func New(d Deps) http.Handler {
 	// About page opens it in a second tab (D33).
 	mux.HandleFunc("GET /licenses", d.getLicenses)
 
-	// The routes of the fleet milestone. They answer 501 so that the admin UI can
-	// be written against the whole route table now (plan section 8). GET is in the
-	// list too: without it the request falls through to the file server and gets an
-	// HTML 404, which no caller of a JSON API can read.
-	for _, pattern := range []string{
-		"GET /api/pair", "POST /api/pair", "DELETE /api/pair",
-	} {
-		auth(pattern, notImplemented)
-	}
+	// Pairing (D25). GET is in the list too: without it the request would fall
+	// through to the file server and get an HTML 404, which no caller of a JSON API
+	// can read.
+	auth("GET /api/pair", d.getPair)
+	auth("POST /api/pair", d.postPair)
+	auth("DELETE /api/pair", d.deletePair)
 
 	// The player API: the device itself, with the boot secret.
 	player := func(pattern string, h http.HandlerFunc) {
@@ -196,10 +213,74 @@ func New(d Deps) http.Handler {
 	player("POST /api/player/ready", d.postPlayerReady)
 	player("GET /api/player/qr.svg", d.getQR)
 
-	var h http.Handler = mux
+	var h http.Handler = notFoundJSON(mux)
 	h = httpguard.RequireHeader(h)
 	h = httpguard.HostAllowlist(d.Hosts)(h)
 	return h
+}
+
+// notFoundJSON turns the 404 and the 405 of the router into JSON under /api/.
+//
+// web/shared/api.js reads {"error": "..."} from every failure. The text page of
+// http.ServeMux gives it nothing to parse, so a route name with a spelling mistake
+// looked like a broken build and not like a wrong path. The fleet server holds the
+// same rule in internal/server/httpjson; a device must not import the server
+// packages, so the rule is here in its own words.
+func notFoundJSON(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.URL.Path, "/api/") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		next.ServeHTTP(&jsonErrorWriter{ResponseWriter: w}, r)
+	})
+}
+
+// jsonErrorWriter replaces the body of a 404 and a 405 with JSON. Every other
+// answer goes through as it is.
+type jsonErrorWriter struct {
+	http.ResponseWriter
+	replaced bool
+	done     bool
+}
+
+func (j *jsonErrorWriter) WriteHeader(code int) {
+	if j.done {
+		return
+	}
+	j.done = true
+	switch code {
+	case http.StatusNotFound:
+		j.replaced = true
+		writeError(j.ResponseWriter, code, "this device has no route with this path")
+	case http.StatusMethodNotAllowed:
+		j.replaced = true
+		writeError(j.ResponseWriter, code, "this route does not take this method")
+	default:
+		j.ResponseWriter.WriteHeader(code)
+	}
+}
+
+func (j *jsonErrorWriter) Write(b []byte) (int, error) {
+	if !j.done {
+		j.WriteHeader(http.StatusOK)
+	}
+	if j.replaced {
+		// The body of the answer that we replaced goes nowhere.
+		return len(b), nil
+	}
+	return j.ResponseWriter.Write(b)
+}
+
+// Unwrap gives the writer below, so http.NewResponseController reaches the real
+// connection.
+func (j *jsonErrorWriter) Unwrap() http.ResponseWriter { return j.ResponseWriter }
+
+// Flush keeps the SSE streams working. They are under /api/, so they get this
+// wrapper, and a type assertion on http.Flusher does not see through a wrapper. The
+// response controller follows Unwrap, so the bytes reach the connection.
+func (j *jsonErrorWriter) Flush() {
+	http.NewResponseController(j.ResponseWriter).Flush()
 }
 
 // requireSecret checks the boot secret of the player endpoints (D46). The secret

@@ -2,7 +2,6 @@ package httpd
 
 import (
 	"io/fs"
-	"mime"
 	"net/http"
 	"os"
 	"path"
@@ -13,35 +12,21 @@ import (
 	"github.com/ethanpil/portapixel/web"
 )
 
-// The web assets have no build step, so the media types come from the file
-// extensions. A Windows development machine reads them from the registry and can
-// answer "text/plain" for a JavaScript module, which a browser then refuses to
-// run. These lines make the answer the same on every machine.
-func init() {
-	for ext, kind := range map[string]string{
-		".js":    "text/javascript; charset=utf-8",
-		".mjs":   "text/javascript; charset=utf-8",
-		".css":   "text/css; charset=utf-8",
-		".html":  "text/html; charset=utf-8",
-		".json":  "application/json",
-		".svg":   "image/svg+xml",
-		".woff2": "font/woff2",
-	} {
-		mime.AddExtensionType(ext, kind)
-	}
-}
-
 // PlayerIndex is the file that the browser opens at /player.
 const PlayerIndex = "index.html"
 
+// The media type registration and the directory rule live in package web, because
+// the daemon and the fleet server serve the same file tree. This package had copies
+// of both, and two copies of one rule drift.
+
 // adminUI serves the device admin UI at /.
 func (d Deps) adminUI() http.Handler {
-	return noListing(http.FileServerFS(web.DeviceAdmin))
+	return web.NoListing(http.FileServerFS(web.DeviceAdmin))
 }
 
 // sharedAssets serves the shared stylesheet, fonts and modules at /shared/.
 func (d Deps) sharedAssets() http.Handler {
-	return http.StripPrefix("/shared/", noListing(http.FileServerFS(web.Shared)))
+	return http.StripPrefix("/shared/", web.NoListing(http.FileServerFS(web.Shared)))
 }
 
 // playerIndex serves the player SPA at /player. The browser opens
@@ -66,7 +51,7 @@ func (d Deps) playerIndex() http.Handler {
 
 // playerAssets serves the files of the player at /player/.
 func (d Deps) playerAssets() http.Handler {
-	return http.StripPrefix("/player/", noListing(http.FileServerFS(web.Player)))
+	return http.StripPrefix("/player/", web.NoListing(http.FileServerFS(web.Player)))
 }
 
 // serveMedia serves the files of the media root at /media/.
@@ -178,22 +163,4 @@ func cleanRelative(rel string) (string, bool) {
 		}
 	}
 	return cleaned, true
-}
-
-// noListing answers 404 for a request that asks for a directory. An index of our
-// own asset directories helps nobody and tells a reader what is in the binary.
-//
-// The one exception is the root of the admin UI, which must serve its index.html.
-// A path that StripPrefix left empty is the root of that sub-tree, so it is a
-// directory too.
-func noListing(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/":
-		case r.URL.Path == "" || strings.HasSuffix(r.URL.Path, "/"):
-			http.NotFound(w, r)
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
 }
