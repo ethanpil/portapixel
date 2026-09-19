@@ -15,6 +15,8 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -26,15 +28,31 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/health"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
 	"github.com/ethanpil/portapixel/internal/device/identity"
+	"github.com/ethanpil/portapixel/internal/device/installer"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/device/mdns"
 	"github.com/ethanpil/portapixel/internal/device/netcfg"
+	"github.com/ethanpil/portapixel/internal/device/power"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
 	"github.com/ethanpil/portapixel/internal/playlist"
+	"github.com/ethanpil/portapixel/internal/updater"
 	"github.com/ethanpil/portapixel/internal/version"
 )
+
+// GitHubRepo is the repository that a standalone device asks for a release (D28).
+// The check is unauthenticated, so the repository must be public (D34).
+const GitHubRepo = "ethanpil/portapixel"
+
+// updateDir is the directory on the media partition that holds a sideloaded
+// release bundle (D52).
+const updateDir = "_update"
+
+// shareRoot holds the licence list and the package manifest of the image (D33,
+// D50).
+const shareRoot = "/usr/share/portapixel"
 
 // opsLogName is the name of the event log in the state directory
 // (ARCHITECTURE section 3). The opslog package takes a path, not a directory.
@@ -47,6 +65,11 @@ const configPoll = 5 * time.Second
 
 // shutdownGrace is how long the HTTP server may take to finish its requests.
 const shutdownGrace = 5 * time.Second
+
+// updateApplyLimit is the longest that one update may take. A release of 25 MB on a
+// slow link needs minutes; a download that never ends must not hold a goroutine for
+// ever.
+const updateApplyLimit = 20 * time.Minute
 
 // clockPoll is how often the daemon asks the kernel if the clock has a source.
 // Nothing in the path of an HTTP request may make a system call that can wait. So
@@ -66,17 +89,28 @@ type daemon struct {
 	lib      *library.Library
 	sched    *scheduler.Scheduler
 	sup      *browser.Supervisor
+	screen   *power.Controller
+	announce *mdns.Announcer
+	update   *updater.Manager
+	install  *installer.Installer
 	hub      *httpd.Hub
-	reporter *health.Reporter
+	// installHub is the progress stream of an install onto a disk. It replays its
+	// last event, because the admin UI opens the stream after the POST answered.
+	installHub *httpd.Hub
+	reporter   *health.Reporter
 
 	secret string
 	port   int
 
-	mu           sync.Mutex
-	cfg          config.Config
-	fromShadow   bool
-	cfgWarning   string
-	cfgModified  time.Time
+	mu          sync.Mutex
+	cfg         config.Config
+	fromShadow  bool
+	cfgWarning  string
+	cfgCode     string
+	cfgModified time.Time
+	// codecs is what the player found out about the video formats of this device.
+	// It arrives with the first heartbeat and it does not change (D12).
+	codecs       manifest.CodecReport
 	lastManifest library.PlayerManifest
 	shuffleSeed  uint64
 	// hostList is the Host header allowlist. It is built from the network
@@ -127,10 +161,11 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 	}
 
 	d := &daemon{
-		paths:  p,
-		log:    opslog.New(filepath.Join(p.state, opsLogName)),
-		hub:    httpd.NewHub(),
-		secret: httpd.NewSecret(),
+		paths:      p,
+		log:        opslog.New(filepath.Join(p.state, opsLogName)),
+		hub:        httpd.NewHub(),
+		installHub: httpd.NewReplayHub(),
+		secret:     httpd.NewSecret(),
 	}
 
 	// 1. The identity comes from the hardware at each boot (D21).
@@ -149,6 +184,10 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 	d.cfgWarning = result.Warning
 	d.cfgModified = configMTime(p.media)
 	if result.Warning != "" {
+		// Load repairs a bad value to its default and keeps the rest of the file
+		// (D38). The dashboard needs the code to tell that fault from a hand edit
+		// that the daemon refused.
+		d.cfgCode = manifest.WarnConfigRepaired
 		d.log.Log("config.warning", result.Warning)
 	}
 
@@ -181,13 +220,14 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 	d.reporter = health.New(health.Sources{MediaRoot: p.media, StateDir: p.state})
 
 	// 6. The browser.
+	command := browser.CommandConfig{
+		Override:   browserCmd,
+		KioskUser:  kioskUser,
+		CacheDir:   kioskCache,
+		RuntimeDir: runtimeDir(kioskUser),
+	}
 	d.sup = browser.New(browser.Options{
-		Command: browser.CommandConfig{
-			Override:   browserCmd,
-			KioskUser:  kioskUser,
-			CacheDir:   kioskCache,
-			RuntimeDir: runtimeDir(kioskUser),
-		},
+		Command:         command,
 		Log:             d.log,
 		Now:             d.localNow,
 		PlayerURL:       d.playerURL,
@@ -200,7 +240,18 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		DRMRoot:         drmRoot,
 	})
 
-	// 7. The listen port. The flag wins, so that a development machine can use a
+	// 7. The screen power (D31). The off order is the display first and the browser
+	// second, which is why one package owns both.
+	d.screen = power.New(power.Options{
+		Method:     func() string { return d.config().Display.PowerMethod },
+		ShouldBeOn: d.sched.ScreenShouldBeOn,
+		Now:        d.localNow,
+		Run:        powerRunner{kiosk: kioskRunner{cmd: command}},
+		Browser:    d.sup,
+		Log:        d.log,
+	})
+
+	// 8. The listen port. The flag wins, so that a development machine can use a
 	// port that needs no rights.
 	d.port = d.config().Web.Port
 	if listen != "" {
@@ -211,7 +262,65 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		}
 	}
 	d.refreshHosts()
+
+	// 9. The mDNS announcement (D20). It needs the port, so it comes after it.
+	d.announce = mdns.New(mdns.Options{
+		Name: func() string { return netcfg.MDNSName(d.config(), d.id.DeviceID) },
+		IPs:  health.LocalIPs,
+		Port: d.port,
+		Log:  d.log,
+	})
+
+	// 10. The updater. CheckRollback runs now, before anything serves: the health
+	// gate has already put the old release back, and the bad release must go in
+	// state.json before the first status call (plan section 15).
+	d.update = updater.New(updater.Options{
+		Root:           p.releases,
+		BinaryName:     "portapixeld",
+		SideloadDir:    filepath.Join(p.media, updateDir),
+		IsBadRelease:   d.isBadRelease,
+		MarkBadRelease: d.markBadRelease,
+		Restart:        restartService,
+		Log:            updater.Logger(d.log),
+		Now:            d.localNow,
+		Auto:           func() bool { return d.config().Updates.Auto },
+		ApplyMinute:    d.applyMinute,
+	})
+	d.update.CheckRollback()
+
+	// 11. install-to-disk (D54).
+	d.install = installer.New(installer.Options{
+		MediaRoot: p.media,
+		MountRoot: p.run,
+		Arch:      version.Arch(),
+		Run:       rootRunner{},
+		Log:       d.log,
+	})
 	return d, nil
+}
+
+// applyMinute gives the minute of the day at which an automatic update is applied.
+// It is the nightly restart time: the device restarts then anyway (D28, D30).
+func (d *daemon) applyMinute() (int, bool) {
+	return config.ParseClock(d.config().Playback.NightlyRestart)
+}
+
+// isBadRelease reports if a release failed its health gate before.
+func (d *daemon) isBadRelease(v string) bool {
+	return slices.Contains(d.deviceState().BadReleases, v)
+}
+
+// markBadRelease records a release that failed its health gate, so that the updater
+// never installs it again (plan section 15).
+func (d *daemon) markBadRelease(v string) {
+	d.mu.Lock()
+	d.state.MarkBadRelease(v)
+	state := d.state
+	d.mu.Unlock()
+
+	if err := state.Save(d.paths.state); err != nil {
+		d.log.Log("update.badlist.write.fail", err.Error())
+	}
 }
 
 // serve starts the HTTP server and the goroutines, and waits for a signal.
@@ -260,6 +369,14 @@ func (d *daemon) serve(listen string) int {
 	start(func() { d.watchConfig(done) })
 	start(func() { d.watchClock(done) })
 	start(func() { d.writeHealthMarker(done) })
+	// The screen schedule. Start() first, so that a device that boots inside its
+	// night hours does not show a picture for the rest of the night.
+	d.screen.Start()
+	start(func() { d.screen.Run(done) })
+	// Nothing below may hold up the start. A device with no network plays what it
+	// has (plan 3.3).
+	start(func() { d.announce.Run(done) })
+	start(func() { d.update.Run(done, d.updateSource()) })
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -315,10 +432,89 @@ func (d *daemon) deps() httpd.Deps {
 		URLItem:        d.urlItem,
 		PlayerReady:    d.sup.Ready,
 		Command:        d.command,
+		Rescan:         d.rescan,
 		AdminURL:       d.adminURL,
 		SetRootPassword: func(password string) error {
 			return setRootPassword(d.paths.state, password)
 		},
+		SetCodecs:     d.setCodecs,
+		CheckUpdate:   d.checkUpdate,
+		ApplyUpdate:   d.applyUpdate,
+		Disks:         d.install.Disks,
+		StartInstall:  d.startInstall,
+		InstallEvents: d.installHub,
+		ShareRoot:     shareRoot,
+	}
+}
+
+// updateSource says where this device looks for a release. A paired device will
+// take the mirror of its fleet server; until the fleet client exists, every device
+// asks GitHub (D28).
+func (d *daemon) updateSource() updater.Source {
+	return updater.Source{Repo: GitHubRepo}
+}
+
+// checkUpdate asks the release source. The handler holds no rule: the updater owns
+// the refusals and the state.
+func (d *daemon) checkUpdate(ctx context.Context) (updater.Release, error) {
+	return d.update.Check(ctx, d.updateSource())
+}
+
+// applyUpdate installs the release that the last check found.
+//
+// The work goes into a goroutine: a download and a signature check take minutes, and
+// the browser of the person must not wait. The state is in /api/status, which the
+// About page polls.
+func (d *daemon) applyUpdate(ctx context.Context) error {
+	offered := d.update.Offered()
+	if offered == nil {
+		return errors.New("check for an update first; this device knows of no release to install")
+	}
+	if d.update.State().State == manifest.UpdateApplying {
+		return updater.ErrBusy
+	}
+	go func() {
+		// A context of its own: the request that started the update is over long
+		// before the download ends.
+		work, cancel := context.WithTimeout(context.Background(), updateApplyLimit)
+		defer cancel()
+		d.update.Apply(work, *offered)
+	}()
+	return nil
+}
+
+// startInstall starts an install onto a disk (D54). Every refusal answers here, so
+// the progress stream opens only for an install that runs.
+func (d *daemon) startInstall(device, confirm string) error {
+	if d.install.Busy() {
+		return installer.ErrBusy
+	}
+	if _, _, err := d.install.Check(device, confirm); err != nil {
+		return err
+	}
+	go d.install.Run(context.Background(), device, confirm, d.installHub.Send)
+	return nil
+}
+
+// setCodecs takes the codec report of the player (D12). It arrives with the first
+// heartbeat and it does not change while the daemon runs.
+func (d *daemon) setCodecs(report manifest.CodecReport) {
+	clean := health.CleanCodecs(report)
+	if clean == nil {
+		return
+	}
+	d.mu.Lock()
+	first := d.codecs == nil
+	d.codecs = clean
+	d.mu.Unlock()
+
+	if first {
+		names := make([]string, 0, len(clean))
+		for name := range clean {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		d.log.Log("player.codecs", "the player reports "+strings.Join(names, " "))
 	}
 }
 
@@ -454,23 +650,30 @@ func (d *daemon) status(loopback bool) manifest.Status {
 	}
 
 	d.mu.Lock()
-	fromShadow, warning := d.fromShadow, d.cfgWarning
+	fromShadow, warning, code, codecs := d.fromShadow, d.cfgWarning, d.cfgCode, d.codecs
 	d.mu.Unlock()
 
 	in := health.Inputs{
-		Config:           cfg,
-		ConfigFromShadow: fromShadow,
-		ConfigWarning:    warning,
-		DeviceID:         d.id.DeviceID,
-		BrowserState:     browserState.Browser,
-		NavigationRung:   browserState.Rung,
-		DisplayConnected: browserState.DisplayConnected,
-		ScreenOn:         !browserState.Suspended,
-		NowPlaying:       browserState.NowPlaying,
-		Paired:           state.Paired(),
-		ServerURL:        cfg.Server.URL,
-		ClockSynced:      d.clockSynced(),
-		Problems:         problems,
+		Config:            cfg,
+		ConfigFromShadow:  fromShadow,
+		ConfigWarning:     warning,
+		ConfigWarningCode: code,
+		DeviceID:          d.id.DeviceID,
+		HardwareChanged:   state.HardwareChanged,
+		Codecs:            codecs,
+		BrowserState:      browserState.Browser,
+		NavigationRung:    browserState.Rung,
+		DisplayConnected:  browserState.DisplayConnected,
+		// The power controller is what switched the display, so it is the truth
+		// about the screen. The browser is suspended as part of a transition, and
+		// nothing else suspends it.
+		ScreenOn:    d.screen.ScreenOn(),
+		NowPlaying:  browserState.NowPlaying,
+		Paired:      state.Paired(),
+		ServerURL:   cfg.Server.URL,
+		ClockSynced: d.clockSynced(),
+		Problems:    problems,
+		Update:      d.update.State(),
 	}
 	if loopback {
 		in.PairingCode = state.PairingCode
@@ -592,7 +795,7 @@ func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
 	}
 
 	changes := config.ChangeClass(old, next)
-	d.adopt(next, false, "")
+	d.adopt(next, false, "", "")
 	d.applyChanges(changes)
 	d.log.Log("config.save", fmt.Sprintf("%d changes", len(changes)))
 	return httpd.Applied{Applied: highestClass(changes), Changes: changes}, nil
@@ -659,12 +862,13 @@ func (d *daemon) reloadConfig(modified time.Time) {
 		d.log.Log("config.reload.bad", err.Error())
 		d.mu.Lock()
 		d.cfgWarning = warning
+		d.cfgCode = manifest.WarnConfigBadEdit
 		d.mu.Unlock()
 		return
 	}
 
 	changes := config.ChangeClass(old, next)
-	d.adopt(next, false, "")
+	d.adopt(next, false, "", "")
 	d.refreshHosts()
 	if len(changes) == 0 {
 		return
@@ -682,12 +886,14 @@ func firstLine(text string) string {
 	return text
 }
 
-// adopt takes a new configuration into the daemon.
-func (d *daemon) adopt(cfg config.Config, fromShadow bool, warning string) {
+// adopt takes a new configuration into the daemon. code is the warning code of
+// manifest, or "" when there is no warning.
+func (d *daemon) adopt(cfg config.Config, fromShadow bool, warning, code string) {
 	d.mu.Lock()
 	d.cfg = cfg
 	d.fromShadow = fromShadow
 	d.cfgWarning = warning
+	d.cfgCode = code
 	d.cfgModified = configMTime(d.paths.media)
 	d.mu.Unlock()
 }
@@ -738,7 +944,7 @@ func (d *daemon) playlistRenamed(old, next string) {
 		d.log.Log("playlist.rename.refs.fail", err.Error())
 		return
 	}
-	d.adopt(updated, false, "")
+	d.adopt(updated, false, "", "")
 	d.log.Log("playlist.rename.refs", fmt.Sprintf("%d references in portapixel.toml now name %s", count, next))
 	d.sched.Evaluate()
 	d.sup.PlaylistChanged()
@@ -804,17 +1010,35 @@ func (d *daemon) command(name string) error {
 	case "restart-browser":
 		return d.sup.Restart("the admin asked for a browser restart")
 	case "screen-on":
-		return d.sup.Resume()
+		// The power controller owns the order and the manual override: the command
+		// holds until the next edge of the screen schedule (D31).
+		return d.screen.Set(true, "the admin asked for the screen on")
 	case "screen-off":
-		return d.sup.Suspend()
+		return d.screen.Set(false, "the admin asked for the screen off")
 	case "rescan":
-		// The explicit rescan is synchronous: the answer must mean that the scan
-		// happened. Rescan calls OnChange, which sends the playlist event.
-		d.lib.Rescan()
+		d.rescan()
 	default:
 		return fmt.Errorf("%q is not a command that this device knows", name)
 	}
 	return nil
+}
+
+// rescan reads the media root again and looks for a sideloaded release bundle.
+//
+// The scan is synchronous: the answer of POST /api/rescan must mean that the scan
+// happened. An upload that reports success, beside a playlist list with no file in
+// it, is a fault that a person sees.
+//
+// The look for a bundle is not synchronous. An update takes minutes, and a rescan
+// must answer at once (D52).
+func (d *daemon) rescan() library.Snapshot {
+	snap := d.lib.Rescan()
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), updateApplyLimit)
+		defer cancel()
+		d.update.Sideload(ctx)
+	}()
+	return snap
 }
 
 // reboot reboots the device. The watchdog ladder and the admin UI both call it.

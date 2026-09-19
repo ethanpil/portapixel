@@ -65,10 +65,7 @@ func main() {
 	case "provision":
 		os.Exit(provisionCommand(args))
 	case "install-to-disk":
-		// D54, v0.2. It answers like the API route: the name exists, the work
-		// does not.
-		fmt.Fprintln(os.Stderr, "portapixeld install-to-disk: not implemented yet")
-		os.Exit(2)
+		os.Exit(installToDiskCommand(args))
 	case "version":
 		fmt.Printf("portapixeld %s %s\n", version.Version, version.Arch())
 		os.Exit(0)
@@ -90,7 +87,7 @@ Usage:
   portapixeld selftest            check the embedded assets and the templates
   portapixeld render-net [flags]  write the network files from portapixel.toml
   portapixeld provision [flags]   the first boot steps that own TOML
-  portapixeld install-to-disk DEV clone the running system to a disk (v0.2)
+  portapixeld install-to-disk DEV clone the running system to a disk (D54)
   portapixeld version
 
 Run "portapixeld <subcommand> -h" for the flags of a subcommand.
