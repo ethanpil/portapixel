@@ -37,6 +37,7 @@ type Hub struct {
 	mu     sync.Mutex
 	subs   map[int]chan sseEvent
 	nextID int
+	closed chan struct{}
 }
 
 type sseEvent struct {
@@ -46,7 +47,26 @@ type sseEvent struct {
 
 // NewHub makes an empty hub.
 func NewHub() *Hub {
-	return &Hub{subs: make(map[int]chan sseEvent)}
+	return &Hub{subs: make(map[int]chan sseEvent), closed: make(chan struct{})}
+}
+
+// Close ends every open stream. The daemon calls it before it drains the HTTP
+// server.
+//
+// http.Server.Shutdown waits for each request to end and does not cancel a
+// request context. The stream of the player never ends by itself, so without this
+// every stop of the daemon — a service restart, an update, a reboot — cost the
+// full shutdown grace.
+func (h *Hub) Close() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	select {
+	case <-h.closed:
+		return // Close twice must be safe: a stop can come from two paths.
+	default:
+	}
+	close(h.closed)
 }
 
 // Send gives one event to every player that listens. data may be nil.
@@ -98,6 +118,18 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	ch, cancel := h.subscribe()
 	defer cancel()
 
+	h.mu.Lock()
+	closed := h.closed
+	h.mu.Unlock()
+	select {
+	case <-closed:
+		// The daemon is stopping. A stream that opens now would hold the
+		// shutdown for the whole grace time.
+		writeError(w, http.StatusServiceUnavailable, "the daemon is stopping")
+		return
+	default:
+	}
+
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "keep-alive")
@@ -113,6 +145,8 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-closed:
 			return
 		case <-tick.C:
 			if _, err := w.Write([]byte(": keep alive\n\n")); err != nil {

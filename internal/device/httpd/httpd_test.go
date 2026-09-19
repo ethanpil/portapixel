@@ -31,16 +31,20 @@ type fx struct {
 	state string
 	hub   *Hub
 
-	cfg       config.Config
-	saved     *config.Config
-	applied   Applied
-	commands  []string
-	rootPW    string
-	beats     []browser.Heartbeat
-	urlSkip   bool
-	urlIndex  int
-	readyHits int
-	cookie    *http.Cookie
+	cfg        config.Config
+	saved      *config.Config
+	applied    Applied
+	commands   []string
+	rootPW     string
+	beats      []browser.Heartbeat
+	urlSkip    bool
+	urlIndex   int
+	readyHits  int
+	cookie     *http.Cookie
+	commandErr error
+	// noSecret builds the handler with no player secret. A daemon that never
+	// made one must answer no player call at all.
+	noSecret bool
 }
 
 func newFx(t *testing.T) *fx {
@@ -51,10 +55,22 @@ func newFx(t *testing.T) *fx {
 	f.cfg.Network.WifiSSID = "Office"
 	f.cfg.Network.WifiPSK = "a secret"
 
+	f.rebuild()
+	return f
+}
+
+// rebuild makes the handler again from the flags of the fixture.
+func (f *fx) rebuild() {
+	t := f.t
+	t.Helper()
 	log := opslog.New(filepath.Join(f.state, "ops.log"))
 	lib := library.New(library.Options{MediaRoot: f.media, StateDir: f.state, Log: log})
 	lib.Rescan()
 
+	secret := testSecret
+	if f.noSecret {
+		secret = ""
+	}
 	f.h = New(Deps{
 		MediaRoot:    f.media,
 		Log:          log,
@@ -62,7 +78,7 @@ func newFx(t *testing.T) *fx {
 		Sessions:     httpguard.NewSessions(),
 		Limiter:      httpguard.NewLimiter(),
 		Hub:          f.hub,
-		PlayerSecret: testSecret,
+		PlayerSecret: secret,
 		Hosts:        func() []string { return []string{"localhost", "127.0.0.1", "lobby.local"} },
 		Password:     func() string { return f.cfg.Web.Password },
 		Status: func(loopback bool) manifest.Status {
@@ -95,12 +111,11 @@ func newFx(t *testing.T) *fx {
 		PlayerReady: func() { f.readyHits++ },
 		Command: func(name string) error {
 			f.commands = append(f.commands, name)
-			return nil
+			return f.commandErr
 		},
 		AdminURL:        func() string { return "http://lobby.local/" },
 		SetRootPassword: func(pw string) error { f.rootPW = pw; return nil },
 	})
-	return f
 }
 
 // request holds the parts of a test request that a test wants to change.
@@ -113,6 +128,9 @@ type request struct {
 	rawBody    io.Reader
 	noCookie   bool
 	rangeBytes string
+	// contentLength sets r.ContentLength, which the upload route reads to refuse
+	// a file that cannot fit.
+	contentLength int64
 }
 
 // do sends a request through the whole middleware chain.
@@ -136,6 +154,9 @@ func (f *fx) do(method, target string, body any, opts ...func(*request)) *httpte
 	}
 
 	r := httptest.NewRequest(method, target, reader)
+	if req.contentLength != 0 {
+		r.ContentLength = req.contentLength
+	}
 	r.Host = req.host
 	r.RemoteAddr = req.remote
 	if method != http.MethodGet && method != http.MethodHead && !req.noCSRF {
@@ -869,4 +890,190 @@ func TestCleanRelative(t *testing.T) {
 			t.Errorf("cleanRelative(%q) accepted a bad path", in)
 		}
 	}
+}
+
+// A link on the media partition must never reach a file outside it. Every laptop
+// can write to that partition, and the daemon runs as root: /etc/shadow and the
+// state directory with the device token are one link away.
+func TestMediaDoesNotFollowALinkOutOfTheRoot(t *testing.T) {
+	f := newFx(t)
+	secret := filepath.Join(f.state, "secret.jpg")
+	if err := os.WriteFile(secret, []byte("the root password hash"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(f.media, "lobby"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(f.media, "lobby", "notes.jpg")
+	if err := os.Symlink(secret, link); err != nil {
+		t.Skipf("this machine cannot make a symbolic link: %v", err)
+	}
+	w := f.do(http.MethodGet, "/media/lobby/notes.jpg", nil)
+	if w.Code == http.StatusOK {
+		t.Fatalf("a link out of the media root was served: %s", w.Body)
+	}
+
+	// A link that stays inside the root is content and is served.
+	real := filepath.Join(f.media, "lobby", "real.jpg")
+	if err := os.WriteFile(real, []byte("picture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_ = real
+	inside := filepath.Join(f.media, "lobby", "alias.jpg")
+	if err := os.Symlink("real.jpg", inside); err != nil {
+		t.Skipf("this machine cannot make a symbolic link: %v", err)
+	}
+	if w := f.do(http.MethodGet, "/media/lobby/alias.jpg", nil); w.Code != http.StatusOK {
+		t.Errorf("a link inside the media root gave %d", w.Code)
+	}
+}
+
+// /media/ serves pictures and videos and nothing else. A denylist of names was
+// wrong: an atomic write stages portapixel.toml under a name of its own, and a
+// power cut leaves that file on the partition with the admin password, the WiFi
+// key and the fleet token in it.
+func TestMediaServesOnlyPicturesAndVideos(t *testing.T) {
+	f := newFx(t)
+	if err := os.MkdirAll(filepath.Join(f.media, "lobby"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"portapixel.toml":           "[web]\npassword = \"letmein\"\n",
+		"portapixel.toml.tmp123456": "[web]\npassword = \"letmein\"\n",
+		".hidden.jpg":               "picture",
+		"lobby/playlist.toml":       "[[item]]\n",
+		"lobby/notes.txt":           "text",
+		"lobby/good.jpg":            "picture",
+		"lobby/clip.mp4":            "video",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(f.media, filepath.FromSlash(name)), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	served := map[string]bool{"lobby/good.jpg": true, "lobby/clip.mp4": true}
+	for name := range files {
+		w := f.do(http.MethodGet, "/media/"+name, nil)
+		if served[name] {
+			if w.Code != http.StatusOK {
+				t.Errorf("/media/%s gave %d, want 200", name, w.Code)
+			}
+			continue
+		}
+		if w.Code == http.StatusOK {
+			t.Errorf("/media/%s was served: %s", name, w.Body)
+		}
+	}
+}
+
+// An upload that cannot fit must be refused before it is written. One upload that
+// fills PPMEDIA is a device that can save no configuration and no playlist.
+func TestUploadRefusesAFileThatDoesNotFit(t *testing.T) {
+	f := newFx(t)
+	f.login()
+	if w := f.do(http.MethodPost, "/api/playlists", map[string]string{"title": "Lobby"}); w.Code != http.StatusOK {
+		t.Fatalf("create gave %d", w.Code)
+	}
+	w := f.do(http.MethodPost, "/api/media/lobby", nil, func(r *request) {
+		r.rawBody = strings.NewReader("x")
+		r.headers = map[string]string{"X-Filename": "huge.mp4", "Content-Length": "1152921504606846976"}
+		r.contentLength = 1 << 60
+	})
+	if w.Code != http.StatusInsufficientStorage {
+		t.Fatalf("an upload of 1 EB gave %d: %s", w.Code, w.Body)
+	}
+	mustJSON(t, w)
+}
+
+// A PUT that is refused must change nothing. encoding/json writes into the
+// elements of a slice that is already there, so a body that held a schedule
+// changed the rules of the running configuration under the scheduler goroutine,
+// and it did that even when the body was refused with 422.
+func TestPutConfigDoesNotTouchTheRunningConfig(t *testing.T) {
+	f := newFx(t)
+	f.login()
+	f.cfg.Schedule = []config.Rule{{Playlist: "lobby", Days: []string{"mon", "tue"}, Start: "08:00", End: "18:00"}}
+	before, err := json.Marshal(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	w := f.do(http.MethodPut, "/api/config", map[string]any{
+		"schedule": []map[string]any{{"playlist": "other", "days": []string{}, "start": "99:99", "end": "18:00"}},
+	})
+	if w.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("a bad schedule gave %d: %s", w.Code, w.Body)
+	}
+	after, err := json.Marshal(f.cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(before) != string(after) {
+		t.Fatalf("the refused PUT changed the running configuration:\nbefore %s\nafter  %s", before, after)
+	}
+}
+
+// A command that the browser could not take must not answer "done". The person
+// looks at the screen and waits for something that will never happen.
+func TestCommandReportsABusyBrowser(t *testing.T) {
+	f := newFx(t)
+	f.login()
+	f.commandErr = browser.ErrBusy
+	w := f.do(http.MethodPost, "/api/commands/restart-browser", nil)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("a busy browser gave %d: %s", w.Code, w.Body)
+	}
+	mustJSON(t, w)
+
+	f.commandErr = nil
+	if w := f.do(http.MethodPost, "/api/commands/restart-browser", nil); w.Code != http.StatusOK {
+		t.Fatalf("a command that worked gave %d", w.Code)
+	}
+}
+
+// A daemon with no player secret must answer no player call at all. Two empty
+// values are equal to a plain constant-time compare, so a secret that never got
+// made would have opened every player endpoint.
+func TestPlayerSecretIsNeverEmpty(t *testing.T) {
+	if len(NewSecret()) != SecretBytes*2 {
+		t.Fatalf("the player secret is %d characters, want %d", len(NewSecret()), SecretBytes*2)
+	}
+	if NewSecret() == NewSecret() {
+		t.Fatal("two secrets are the same")
+	}
+
+	f := newFx(t)
+	f.noSecret = true
+	f.rebuild()
+	w := f.do(http.MethodGet, "/api/player/manifest", nil, func(r *request) { r.secret = "" })
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("a call with no secret against a daemon with no secret gave %d", w.Code)
+	}
+}
+
+// The stream of the player never ends by itself, and Shutdown does not cancel a
+// request context, so every stop of the daemon cost the whole grace time.
+func TestHubCloseEndsTheStreams(t *testing.T) {
+	h := NewHub()
+	done := make(chan struct{})
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/player/events", nil)
+	go func() {
+		h.serve(w, r)
+		close(done)
+	}()
+	for i := 0; i < 500 && h.Listeners() == 0; i++ {
+		time.Sleep(time.Millisecond)
+	}
+	if h.Listeners() != 1 {
+		t.Fatal("the stream did not open")
+	}
+
+	h.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not end the stream")
+	}
+	h.Close() // twice must be safe: a stop can come from two paths
 }

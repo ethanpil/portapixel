@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"encoding/json"
 	"errors"
 	"net"
 	"net/http"
@@ -9,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/config"
+	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/playlist"
@@ -26,7 +28,7 @@ const defaultOpslogLines = 200
 // No session: the fallback screen on the device and a person with a browser both
 // read it. The pairing code goes to the device itself only (D46).
 func (d Deps) getStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.Status(isLoopback(r)))
+	writeJSON(w, http.StatusOK, d.Status(httpguard.IsLoopback(r.RemoteAddr)))
 }
 
 // POST /api/login {"password": "..."}
@@ -75,12 +77,27 @@ func (d Deps) getConfig(w http.ResponseWriter, r *http.Request) {
 func (d Deps) putConfig(w http.ResponseWriter, r *http.Request) {
 	// Start from the current values, so that a body that leaves a key out does
 	// not reset that key.
-	incoming := d.Config().Config
+	//
+	// The value must share no memory with the configuration that runs.
+	// encoding/json writes into the elements of a slice that is already there. A
+	// body with a schedule in it then changes the rules under the scheduler
+	// goroutine. It does that even when the handler refuses the body with 422. A
+	// round trip through JSON is the copy that this package can make on its own.
+	base, err := json.Marshal(d.Config().Config)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "the device could not read its own configuration")
+		return
+	}
+	var incoming config.Config
+	if err := json.Unmarshal(base, &incoming); err != nil {
+		writeError(w, http.StatusInternalServerError, "the device could not read its own configuration")
+		return
+	}
 	if !readJSON(w, r, &incoming) {
 		return
 	}
-	applied, err := d.SaveConfig(incoming)
-	if err != nil {
+	applied, saveErr := d.SaveConfig(incoming)
+	if err := saveErr; err != nil {
 		var fields config.Errors
 		if errors.As(err, &fields) {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
@@ -175,17 +192,25 @@ func (d Deps) deletePlaylist(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/media/{playlist} takes the file as the raw body. The name comes in
 // X-Filename, so neither end needs a multipart parser.
+//
+// The header is escaped with encodeURIComponent, so it is unescaped as a path and
+// not as a query. url.QueryUnescape turns a plus sign into a space, and
+// "C++ intro.mp4" is a name that a person gives a file.
+//
+// The library caps the stream at the free space of the partition and answers 507
+// when it does not fit. One upload must never fill PPMEDIA: every save of the
+// device writes there.
 func (d Deps) postMedia(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 	name := r.Header.Get("X-Filename")
-	if unescaped, err := url.QueryUnescape(name); err == nil {
+	if unescaped, err := url.PathUnescape(name); err == nil {
 		name = unescaped
 	}
 	if strings.TrimSpace(name) == "" {
 		writeError(w, http.StatusBadRequest, "the X-Filename header must carry the name of the file")
 		return
 	}
-	saved, size, err := d.Library.AddMedia(r.PathValue("playlist"), name, r.Body)
+	saved, size, err := d.Library.AddMedia(r.PathValue("playlist"), name, r.Body, r.ContentLength)
 	if err != nil {
 		writeLibraryError(w, err)
 		return
@@ -213,9 +238,16 @@ func (d Deps) postRescan(w http.ResponseWriter, r *http.Request) {
 }
 
 // POST /api/commands/{name}
+//
+// A browser that is busy answers 503. A command that reports success and then
+// does nothing is worse than an error: the person looks at the screen and waits.
 func (d Deps) postCommand(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := d.Command(name); err != nil {
+		if errors.Is(err, browser.ErrBusy) {
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -282,23 +314,21 @@ func writeLibraryError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, library.ErrManaged):
 		writeError(w, http.StatusForbidden, err.Error())
+	case errors.Is(err, library.ErrNoSpace):
+		writeError(w, http.StatusInsufficientStorage, err.Error())
 	default:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	}
 }
 
-// isLoopback reports if the request comes from the device itself.
-func isLoopback(r *http.Request) bool {
-	ip := net.ParseIP(hostOf(r.RemoteAddr))
-	return ip != nil && ip.IsLoopback()
-}
-
-// hostOf gives the address without the port.
+// hostOf gives the address without the port. It is for a log line only. The
+// loopback test is httpguard.IsLoopback: the host allowlist, the login limiter and
+// this package must all cut an address the same way.
 func hostOf(remoteAddr string) string {
 	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
 		return strings.Trim(host, "[]")
 	}
-	return remoteAddr
+	return strings.Trim(remoteAddr, "[]")
 }
 
 // emptyIfNil makes a nil slice into an empty list, so that the JSON holds [] and

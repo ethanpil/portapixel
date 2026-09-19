@@ -2,7 +2,6 @@ package httpd
 
 import (
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
@@ -88,10 +87,20 @@ type Deps struct {
 	SetRootPassword func(password string) error
 }
 
+// SecretBytes is the length of the boot secret before it becomes hexadecimal. It
+// is the length that httpguard gives a session token: the player secret opens the
+// same kind of door, so it gets the same strength.
+const SecretBytes = 32
+
 // NewSecret makes the boot secret of the player endpoints.
 func NewSecret() string {
-	var b [16]byte
-	rand.Read(b[:])
+	var b [SecretBytes]byte
+	if _, err := rand.Read(b[:]); err != nil {
+		// crypto/rand does not fail on any system that we run on. A secret from a
+		// source that failed would be a secret of zeros, so the daemon must not
+		// start with one.
+		panic("httpd: the system gave no random bytes for the player secret: " + err.Error())
+	}
 	return hex.EncodeToString(b[:])
 }
 
@@ -160,13 +169,17 @@ func New(d Deps) http.Handler {
 
 // requireSecret checks the boot secret of the player endpoints (D46). The secret
 // comes in the header, or in ?k= for the SSE stream, which cannot set a header.
+//
+// httpguard.PasswordEqual does the comparison: it takes constant time and it
+// refuses an empty value on either side. One helper owns that rule, so a second
+// copy of it cannot drift.
 func (d Deps) requireSecret(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		given := r.Header.Get(PlayerHeader)
 		if given == "" {
 			given = r.URL.Query().Get("k")
 		}
-		if d.PlayerSecret == "" || subtle.ConstantTimeCompare([]byte(given), []byte(d.PlayerSecret)) != 1 {
+		if !httpguard.PasswordEqual(given, d.PlayerSecret) {
 			writeError(w, http.StatusForbidden, "this endpoint needs the player secret")
 			return
 		}

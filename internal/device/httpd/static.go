@@ -6,9 +6,10 @@ import (
 	"net/http"
 	"os"
 	"path"
-	"path/filepath"
+	"runtime"
 	"strings"
 
+	"github.com/ethanpil/portapixel/internal/playlist"
 	"github.com/ethanpil/portapixel/web"
 )
 
@@ -74,6 +75,11 @@ func (d Deps) playerAssets() http.Handler {
 // a fleet client can continue a download (D24). There are no directory listings:
 // the media partition is the user's own content, and the API is how a program
 // looks at it.
+//
+// os.OpenRoot holds every open inside the media root, links included. The media
+// partition comes from removable storage, and every laptop can write to it. A link
+// in it must never reach /etc/shadow or the state directory. The daemon runs as
+// root, and this is the door that must not open.
 func (d Deps) serveMedia(w http.ResponseWriter, r *http.Request) {
 	rel, ok := cleanRelative(strings.TrimPrefix(r.URL.Path, "/media/"))
 	if !ok {
@@ -84,9 +90,15 @@ func (d Deps) serveMedia(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "there is no file with this name")
 		return
 	}
-	full := filepath.Join(d.MediaRoot, filepath.FromSlash(rel))
 
-	f, err := os.Open(full)
+	root, err := os.OpenRoot(d.MediaRoot)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "there is no file with this name")
+		return
+	}
+	defer root.Close()
+
+	f, err := root.Open(rel)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "there is no file with this name")
 		return
@@ -103,39 +115,67 @@ func (d Deps) serveMedia(w http.ResponseWriter, r *http.Request) {
 
 // servableMedia says which files under the media root /media/ may serve.
 //
-// The media root holds content, and it also holds portapixel.toml, which carries
-// the admin password, the WiFi key and the fleet token. That file must never leave
-// the device over HTTP, so no TOML file is served: the API is how a program reads
-// a configuration or a playlist. The _update directory holds release bundles,
-// which are for the updater and not for the network.
+// It is an allowlist. A denylist was wrong. The media root holds portapixel.toml,
+// which carries the admin password, the WiFi key and the fleet token. An atomic
+// write of that file stages it under a temporary name of its own. One name that
+// the denylist did not know gives the secrets of the device to the network, with
+// no session at all.
+//
+// So /media/ serves a picture and a video and nothing else. The player needs
+// nothing else, and the API is how a program reads a configuration or a playlist.
+// The one reserved directory that may serve is _fleet/media/, which holds the
+// objects of the fleet server.
 func servableMedia(rel string) bool {
-	lower := strings.ToLower(rel)
-	if strings.HasSuffix(lower, ".toml") {
+	parts := strings.Split(rel, "/")
+	for i, p := range parts {
+		if p == "" || strings.HasPrefix(p, ".") {
+			return false // a dotfile, and a name that a person cannot see
+		}
+		if !strings.HasPrefix(p, "_") {
+			continue
+		}
+		// A reserved directory. Only the objects of the fleet server may serve.
+		if i == 0 && p == "_fleet" && len(parts) > 2 && parts[1] == "media" {
+			continue
+		}
 		return false
 	}
-	if lower == "_update" || strings.HasPrefix(lower, "_update/") {
+	switch playlist.Kind(playlist.Item{File: parts[len(parts)-1]}) {
+	case playlist.KindImage, playlist.KindVideo:
+		return true
+	default:
 		return false
 	}
-	return true
 }
 
-// cleanRelative checks a path from a URL. It refuses an empty path, an absolute
-// path and every path that goes up a directory: the daemon runs as root, so this
-// is the door that must not open.
+// cleanRelative checks a path from a URL and gives the path under the media root.
+//
+// The test is about path steps, not about characters. A file that a person
+// sideloaded can hold a colon or a backslash in its name. Both are legal on the
+// ext4 media directory of an on-box install. The scan then calls the file healthy
+// while /media/ answers 400, so the file can never play and nothing says why.
+// os.OpenRoot in serveMedia is what holds the request inside the root.
+//
+// On a Windows development machine the two characters still go. A colon there is
+// a drive letter or a stream name, and a backslash is a path separator.
 func cleanRelative(rel string) (string, bool) {
 	if rel == "" || strings.Contains(rel, "\x00") {
 		return "", false
 	}
-	if strings.HasPrefix(rel, "/") || strings.Contains(rel, `\`) {
+	if strings.HasPrefix(rel, "/") {
+		return "", false
+	}
+	if runtime.GOOS == "windows" && (strings.Contains(rel, `\`) || strings.Contains(rel, ":")) {
 		return "", false
 	}
 	cleaned := path.Clean(rel)
-	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || strings.HasPrefix(cleaned, "/") {
 		return "", false
 	}
-	// A Windows drive letter or a stream name.
-	if strings.Contains(cleaned, ":") {
-		return "", false
+	for _, p := range strings.Split(cleaned, "/") {
+		if p == ".." {
+			return "", false
+		}
 	}
 	return cleaned, true
 }
