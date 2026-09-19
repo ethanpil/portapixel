@@ -15,8 +15,18 @@ import (
 	"io/fs"
 )
 
-//go:embed all:player all:shared all:device-admin all:server-admin
+//go:embed all:player all:shared all:device-admin all:server-admin LICENSES-THIRD-PARTY.md
 var files embed.FS
+
+// LicensesName is the file that GET /licenses serves (D33). The copy in this
+// directory is the copy that ships in the binary; the same file is at the root of
+// the repository and at /usr/share/portapixel on a device. A test keeps the two
+// copies in the repository identical, because a licence list that drifts is worse
+// than no list.
+const LicensesName = "LICENSES-THIRD-PARTY.md"
+
+// Licenses gives the embedded licence list.
+func Licenses() ([]byte, error) { return files.ReadFile(LicensesName) }
 
 // The four sub-trees. Each one is the root of the URL space that serves it:
 // Player answers /player, Shared answers /shared, DeviceAdmin answers / on a
