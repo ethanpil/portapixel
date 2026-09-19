@@ -57,28 +57,29 @@ func hostAllowed(host string, allowed []string) bool {
 	if full == "" {
 		return false
 	}
-	bare := stripPort(full)
+	bare := HostOf(full)
 	for _, a := range allowed {
 		a = strings.ToLower(strings.TrimSpace(a))
 		if a == "" {
 			continue
 		}
-		if a == full || a == bare || stripPort(a) == bare {
+		if a == full || a == bare || HostOf(a) == bare {
 			return true
 		}
 	}
 	return false
 }
 
-// stripPort removes the port from a host value and the brackets from an IPv6
-// address. It is the one helper of its kind in this package: the host
-// allowlist, the loopback check and the login limiter must all cut an address
-// the same way, or one of them would count "[::1]" and "::1" as two addresses.
-func stripPort(host string) string {
-	if h, _, err := net.SplitHostPort(host); err == nil {
+// HostOf removes the port from a host value and the brackets from an IPv6
+// address. It is the one helper of its kind: the host allowlist, the loopback
+// check, the login limiter and the route packages of the server must all cut an
+// address the same way, or one of them would count "[::1]" and "::1" as two
+// addresses.
+func HostOf(addr string) string {
+	if h, _, err := net.SplitHostPort(addr); err == nil {
 		return h
 	}
-	return strings.Trim(host, "[]")
+	return strings.Trim(addr, "[]")
 }
 
 // RequireHeader rejects a request that changes state and does not carry
@@ -115,7 +116,7 @@ func LoopbackOnly(next http.Handler) http.Handler {
 // no port ("127.0.0.1", "::1", "[::1]"). A name, an empty value and an address
 // of any other kind all give false.
 func IsLoopback(addr string) bool {
-	ip := net.ParseIP(stripPort(addr))
+	ip := net.ParseIP(HostOf(addr))
 	return ip != nil && ip.IsLoopback()
 }
 

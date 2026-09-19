@@ -17,10 +17,24 @@ const (
 // address, and it runs once in maxWrites records, so the cost stays small.
 const maxWrites = 1024
 
+// The limits of the pending-enrollment limiter: five new screens from one address
+// in one hour. An open route that makes a row must have a limit of its own, and a
+// batch of cards behind one address still gets five new screens an hour, which is
+// a rate that a person can follow.
+const (
+	maxPending    = 5
+	pendingWindow = time.Hour
+)
+
 // Limiter counts failed logins for each remote address. It makes a password
 // guess attack slow without a lock-out that an attacker could use to keep the
 // true admin out for a long time.
 type Limiter struct {
+	// max is the number of records that close the address, and window is how long
+	// a record counts.
+	max    int
+	window time.Duration
+
 	mu       sync.Mutex
 	failures map[string][]time.Time
 	// open holds the attempts that Allow permitted and that did not end yet. An
@@ -32,9 +46,17 @@ type Limiter struct {
 	now    func() time.Time
 }
 
-// NewLimiter makes an empty limiter.
-func NewLimiter() *Limiter {
+// NewLimiter makes an empty limiter with the login limits: five records a minute.
+func NewLimiter() *Limiter { return newLimiter(maxFailures, failWindow) }
+
+// NewPendingLimiter makes a limiter for the enroll requests that make a row in the
+// pending list: five an hour from one address.
+func NewPendingLimiter() *Limiter { return newLimiter(maxPending, pendingWindow) }
+
+func newLimiter(max int, window time.Duration) *Limiter {
 	return &Limiter{
+		max:      max,
+		window:   window,
 		failures: make(map[string][]time.Time),
 		open:     make(map[string][]time.Time),
 		now:      time.Now,
@@ -50,7 +72,7 @@ func (l *Limiter) Allow(remoteAddr string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if len(l.recent(l.failures, key))+len(l.recent(l.open, key)) >= maxFailures {
+	if len(l.recent(l.failures, key))+len(l.recent(l.open, key)) >= l.max {
 		return false
 	}
 	l.open[key] = append(l.open[key], l.now())
@@ -86,7 +108,7 @@ func (l *Limiter) Reset(remoteAddr string) {
 // recent gives the times of key in m that are inside the window and drops the
 // older ones. The caller holds the lock.
 func (l *Limiter) recent(m map[string][]time.Time, key string) []time.Time {
-	cut := l.now().Add(-failWindow)
+	cut := l.now().Add(-l.window)
 	kept := m[key][:0]
 	for _, t := range m[key] {
 		if t.After(cut) {
@@ -137,4 +159,4 @@ func (l *Limiter) sweep() {
 // limiterKey gives the address without the port, because the port changes with
 // each connection. It uses the one helper of the package, so that the limiter
 // and the host allowlist never disagree about what one address is.
-func limiterKey(remoteAddr string) string { return stripPort(remoteAddr) }
+func limiterKey(remoteAddr string) string { return HostOf(remoteAddr) }

@@ -33,6 +33,12 @@ type session struct {
 // everybody out, which is correct for an appliance: there is one admin user and
 // no state worth keeping.
 type Sessions struct {
+	// Secure says if the cookie takes the Secure attribute. It is a function of
+	// the request, because a TLS-terminating proxy makes the answer depend on a
+	// header and not on r.TLS. The device daemon leaves it nil: the local API is
+	// plain HTTP by design (D22), and a Secure cookie would never come back.
+	Secure func(*http.Request) bool
+
 	mu       sync.Mutex
 	sessions map[string]session
 	now      func() time.Time
@@ -44,8 +50,9 @@ func NewSessions() *Sessions {
 }
 
 // Login makes a session and sets the cookie. The caller checks the password
-// first.
-func (s *Sessions) Login(w http.ResponseWriter) {
+// first. It gives the token of the new session, so that a caller can drop the
+// other sessions of the same admin.
+func (s *Sessions) Login(w http.ResponseWriter, r *http.Request) string {
 	token := randomToken()
 
 	s.mu.Lock()
@@ -53,21 +60,28 @@ func (s *Sessions) Login(w http.ResponseWriter) {
 	s.sessions[token] = session{expires: now.Add(sessionLife), issued: now}
 	s.mu.Unlock()
 
-	setSessionCookie(w, token)
+	s.setSessionCookie(w, r, token)
+	return token
 }
 
 // setSessionCookie writes the session cookie. MaxAge is the life of a session,
 // and Require writes the cookie again while the session is in use, so the life
 // in the browser and the life on the server stay together.
-func setSessionCookie(w http.ResponseWriter, token string) {
+func (s *Sessions) setSessionCookie(w http.ResponseWriter, r *http.Request, token string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     CookieName,
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.secureFor(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   int(sessionLife / time.Second),
 	})
+}
+
+// secureFor answers if the cookie of this request takes the Secure attribute.
+func (s *Sessions) secureFor(r *http.Request) bool {
+	return s.Secure != nil && r != nil && s.Secure(r)
 }
 
 // Logout removes the session of this request and clears the cookie.
@@ -82,9 +96,23 @@ func (s *Sessions) Logout(w http.ResponseWriter, r *http.Request) {
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
+		Secure:   s.secureFor(r),
 		SameSite: http.SameSiteStrictMode,
 		MaxAge:   -1,
 	})
+}
+
+// DropAllExcept ends every session but one. The password route calls it: a
+// person who changes the password wants the other browsers out, because "change
+// the password" is what somebody does after a stolen laptop.
+func (s *Sessions) DropAllExcept(keep string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for token := range s.sessions {
+		if token != keep {
+			delete(s.sessions, token)
+		}
+	}
 }
 
 // Valid reports if the request carries a live session. It also moves the expiry
@@ -131,7 +159,7 @@ func (s *Sessions) Require(next http.Handler) http.Handler {
 			return
 		}
 		if s.cookieIsOld(token) {
-			setSessionCookie(w, token)
+			s.setSessionCookie(w, r, token)
 		}
 		next.ServeHTTP(w, r)
 	})

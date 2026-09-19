@@ -11,7 +11,7 @@ import (
 func login(t *testing.T, s *Sessions) *http.Cookie {
 	t.Helper()
 	w := httptest.NewRecorder()
-	s.Login(w)
+	s.Login(w, httptest.NewRequest(http.MethodPost, "/api/admin/login", nil))
 	cookies := w.Result().Cookies()
 	if len(cookies) != 1 {
 		t.Fatalf("Login set %d cookies, want 1", len(cookies))

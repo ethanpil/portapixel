@@ -189,8 +189,8 @@ func TestStripPortIsTheOneHelper(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := stripPort(tt.addr); got != tt.want {
-				t.Fatalf("stripPort(%q) = %q, want %q", tt.addr, got, tt.want)
+			if got := HostOf(tt.addr); got != tt.want {
+				t.Fatalf("HostOf(%q) = %q, want %q", tt.addr, got, tt.want)
 			}
 			if got := limiterKey(tt.addr); got != tt.want {
 				t.Fatalf("limiterKey(%q) = %q, want %q", tt.addr, got, tt.want)
