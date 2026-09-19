@@ -230,6 +230,9 @@
 
 * { box-sizing: border-box; }
 
+/* A class that sets display is stronger than the browser rule for [hidden]. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   font-family: var(--pp-font);
