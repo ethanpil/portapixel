@@ -231,10 +231,18 @@ sd_mod
 nvme
 mmc_block|sdhci
 ahci|libahci
-virtio_blk
-virtio_pci
 ext4
 xhci-hcd|xhci_hcd'
+# The virtio disk is a QEMU bus. Only the x86_64 image boots in QEMU, and the
+# smoke test attaches its disk on that bus (plan section 17 item 4). The aarch64
+# kernel is linux-rpi, which has no virtio at all: it boots from the Raspberry Pi
+# firmware, and QEMU cannot boot that path (item 5). Asking for virtio there made
+# the first aarch64 build fail for a driver that the image must never need.
+if [ "$ARCH" = x86_64 ]; then
+	REQUIRED="$REQUIRED
+virtio_blk
+virtio_pci"
+fi
 # A driver that the kernel holds INSIDE itself needs no file in the initramfs.
 # The Raspberry Pi kernel is built that way for usb-storage and for others, and
 # the first aarch64 build in CI stopped here for that reason. What D53 asks is

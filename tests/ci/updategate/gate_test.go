@@ -326,14 +326,21 @@ func TestSwapAndHealthGate(t *testing.T) {
 			t.Fatalf("the pending marker holds %q, want %q", pending, newVersion)
 		}
 
-		// The daemon of the new release and the gate run AT THE SAME TIME, the
-		// way the OpenRC service starts them. The gate removes a marker of an
-		// earlier install before it waits, so a marker that is already there
-		// proves nothing: the new binary has to write it again.
+		// The gate goes FIRST and the daemon second, the way the OpenRC service
+		// orders them: the gate arms itself in start_pre. The gate also removes a
+		// marker of an earlier install of the same version before it waits, so a
+		// marker that was already there proves nothing.
+		gate, gateLog := prepareHealthGate(t, root, 90)
+		if err := gate.Start(); err != nil {
+			t.Fatalf("start the health gate: %v", err)
+		}
+		time.Sleep(3 * time.Second)
 		stop := startDaemon(t, filepath.Join(root, updater.ReleasesDir, newVersion, "portapixeld"), root)
 		defer stop()
 
-		rc, log := runHealthGate(t, root, 60)
+		rc := waitGate(t, gate)
+		log := gateLog()
+		t.Logf("the gate answered %d:\n%s", rc, log)
 		if rc != 0 {
 			t.Fatalf("the health gate answered %d while the new daemon was up:\n%s", rc, log)
 		}
@@ -362,7 +369,12 @@ func TestSwapAndHealthGate(t *testing.T) {
 			t.Fatalf("Apply: %v", err)
 		}
 		// Nothing writes a health marker: this is a release that does not come up.
-		rc, log := runHealthGate(t, root, 4)
+		gate, gateLog := prepareHealthGate(t, root, 4)
+		if err := gate.Start(); err != nil {
+			t.Fatalf("start the health gate: %v", err)
+		}
+		rc := waitGate(t, gate)
+		log := gateLog()
 		t.Logf("the gate answered %d:\n%s", rc, log)
 		if got, want := currentTarget(t, root), updater.ReleasesDir+"/"+oldVersion; got != want {
 			t.Fatalf("current is %q after the rollback, want %q", got, want)
@@ -494,13 +506,14 @@ func startDaemon(t *testing.T, binary, root string) func() {
 	}
 }
 
-// runHealthGate runs the real os/overlay health-gate.sh against a release root.
-// It gives the exit code and the ops log.
+// prepareHealthGate builds the command that runs the real os/overlay
+// health-gate.sh against a release root. The caller starts it, because the gate
+// and the daemon run at the same time on a device.
 //
 // The script calls "rc-service portapixeld restart" after a rollback. The test
 // puts a stand-in for that command first in PATH, so the restart is recorded and
-// not attempted.
-func runHealthGate(t *testing.T, root string, timeout int) (int, string) {
+// not attempted. The second value reads the ops log that the gate wrote.
+func prepareHealthGate(t *testing.T, root string, timeout int) (*exec.Cmd, func() string) {
 	t.Helper()
 	repo := repoRoot(t)
 	script := filepath.Join(repo, "os", "overlay", "usr", "libexec", "portapixel", "health-gate.sh")
@@ -527,14 +540,26 @@ func runHealthGate(t *testing.T, root string, timeout int) (int, string) {
 		"PP_RUN="+filepath.Join(root, "run"),
 		fmt.Sprintf("PP_HEALTH_TIMEOUT=%d", timeout),
 	)
-	out, err := cmd.CombinedOutput()
-	rc := 0
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	return cmd, func() string {
+		log, _ := os.ReadFile(filepath.Join(state, "ops.log"))
+		return out.String() + string(log)
+	}
+}
+
+// waitGate waits for the health gate and gives its exit code.
+func waitGate(t *testing.T, cmd *exec.Cmd) int {
+	t.Helper()
+	err := cmd.Wait()
+	if err == nil {
+		return 0
+	}
 	var exit *exec.ExitError
 	if errors.As(err, &exit) {
-		rc = exit.ExitCode()
-	} else if err != nil {
-		t.Fatalf("run the health gate: %v", err)
+		return exit.ExitCode()
 	}
-	log, _ := os.ReadFile(filepath.Join(state, "ops.log"))
-	return rc, string(out) + string(log)
+	t.Fatalf("run the health gate: %v", err)
+	return -1
 }
