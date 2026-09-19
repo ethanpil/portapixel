@@ -1,0 +1,165 @@
+#!/usr/bin/expect -f
+# boot-smoke.exp -- drive the serial console of a PortaPixel image in QEMU.
+# boot-smoke.sh calls this file. Do not run it by hand.
+#
+# Expect pitfall handled here: the guest terminal ECHOES every character we
+# type, so a marker sent as part of a command matches its own echo before the
+# command has even run. Markers are therefore SPLIT with quotes when sent
+# (LOGIN"-OK") and matched UNSPLIT (LOGIN-OK). Only the OUTPUT of the command
+# can make the unsplit string (mountnas technique).
+
+set image  [lindex $argv 0]
+set port   [lindex $argv 1]
+set mem    [lindex $argv 2]
+set scale  [lindex $argv 3]
+set accel  [lindex $argv 4]
+set bios   [lindex $argv 5]
+set gpu    [lindex $argv 6]
+
+# Strip terminal escape sequences from captured output. Bracketed paste toggles
+# (\033[?2004h) land at the FRONT of the capture, so a plain trim does not
+# remove them. Covers CSI, OSC and the two byte Fe escapes.
+proc strip_ansi {s} {
+	regsub -all {\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07]*\x07|[@-Z\\-_])} $s "" s
+	return $s
+}
+
+proc die {msg} {
+	send_user "\nFAIL: $msg\n"
+	exit 1
+}
+
+# Per phase deadlines, scaled for TCG. Never one global timeout.
+set t_boot  [expr {120 * $scale}]
+set t_shell [expr {30 * $scale}]
+set t_api   [expr {180 * $scale}]
+
+# $gpu gives the guest a real DRM device, so cage has a /dev/dri/card0 to take.
+# Without it there is no display at all and the browser check fails for a reason
+# that has nothing to do with the image. boot-smoke.sh picks the device.
+set cmd "qemu-system-x86_64 $accel $bios -m $mem -nographic \
+ $gpu \
+ -drive file=$image,format=qcow2,if=virtio,discard=unmap,detect-zeroes=unmap \
+ -netdev user,id=n0,hostfwd=tcp:127.0.0.1:$port-:80 \
+ -device virtio-net-pci,netdev=n0"
+
+send_user "==> $cmd\n"
+eval spawn $cmd
+set qemu_id $spawn_id
+
+# ------------------------------------------------------------------ 1. the boot
+set timeout $t_boot
+expect {
+	-re {login: *$}       { send_user "\n==> login prompt\n" }
+	"Kernel panic"        { die "kernel panic" }
+	"not a bootable disk" { die "the BIOS boot chain is broken: no syslinux VBR" }
+	"Booting from Hard Disk" {
+		# SeaBIOS says this and then hangs when the legacy bootable GPT
+		# attribute or gptmbr.bin is missing. Keep waiting; the login prompt
+		# below decides.
+		exp_continue
+	}
+	timeout { die "no login prompt in ${t_boot}s" }
+	eof     { die "QEMU stopped before the login prompt" }
+}
+
+# ----------------------------------------------------------------- 2. the login
+set timeout $t_shell
+send "root\r"
+expect {
+	-re {[Pp]assword: *$} { send "portapixel\r" }
+	-re {~# *$}           { send_user "\n==> no password asked\n" }
+	timeout               { die "no password prompt" }
+}
+# Unanchored on purpose. The prompt carries a trailing cursor position query
+# escape ([6n), so a regex anchored with $ never matches.
+expect {
+	-re {[#$] } { }
+	timeout     { die "no shell prompt after the login" }
+}
+
+send "echo LOGIN\"-OK\"\r"
+expect {
+	"LOGIN-OK" { send_user "\n==> shell works\n" }
+	timeout    { die "the shell gave no output" }
+}
+
+# --------------------------------------------------- 3. the services and the log
+send "rc-service portapixeld status; echo DSTAT\"=\"$?\r"
+expect {
+	-re {DSTAT=(\d+)} {
+		set rc $expect_out(1,string)
+		send_user "\n==> portapixeld status rc=$rc\n"
+	}
+	timeout { die "rc-service gave no answer" }
+}
+
+# Read the version back through a marker, not by printing the whole capture
+# buffer: the buffer holds the echo of our own command as well, so it is not a
+# clean value. "V""ER=" in the sent text echoes with the quotes in it and cannot
+# match the bare VER= that the shell prints. Keep the line short: the console is
+# 80 columns and a wrap puts a newline inside the value.
+send ". /etc/portapixel-release; echo \"V\"\"ER=\$PORTAPIXEL_VERSION\"\r"
+expect {
+	-re {VER=(\S+)} {
+		send_user "\n==> image version [strip_ansi $expect_out(1,string)]\n"
+	}
+	timeout { die "no /etc/portapixel-release" }
+}
+
+# ------------------------------------------------------------- 4. the HTTP check
+# From the HOST, through the forwarded port. This is the check that matters: a
+# browser on the LAN reaches the box the same way.
+send_user "\n==> poll http://127.0.0.1:$port/api/status\n"
+set deadline [expr {[clock seconds] + $t_api}]
+set ok 0
+while {[clock seconds] < $deadline} {
+	if {[catch {exec curl -sS -m 5 "http://127.0.0.1:$port/api/status"} out] == 0} {
+		if {[string match {*device_id*} $out] || [string match "*\{*" $out]} {
+			send_user "==> /api/status answered: $out\n"
+			set ok 1
+			break
+		}
+	}
+	after 3000
+}
+
+# ---------------------------------------------------------- 5. the browser check
+# The daemon must have a DRM device and must have started the cage session with
+# Chromium in it (plan section 17 item 4). Report the DRM device separately, so
+# "QEMU gave us no graphics card" never reads as "the browser crashed".
+set browser 0
+# ANY card, not card0. Under UEFI the firmware framebuffer driver takes card0 and
+# virtio_gpu becomes card1, so a test for card0 alone reports "no display" on a
+# machine that has one. The daemon must not assume card0 either.
+send "ls /dev/dri 2>/dev/null | grep -q \"^card\" && echo DRI\"-YES\" || echo DRI\"-NO\"\r"
+expect {
+	"DRI-YES" { send_user "\n==> a DRM card is there\n" }
+	"DRI-NO"  { send_user "\n==> NO DRM device: QEMU gave the guest no usable card\n" }
+	timeout   { die "cannot look at /dev/dri" }
+}
+send "pgrep -f chromium >/dev/null && echo BROWSER\"-UP\" || echo BROWSER\"-DOWN\"\r"
+expect {
+	"BROWSER-UP"   { set browser 1; send_user "\n==> the browser runs\n" }
+	"BROWSER-DOWN" { send_user "\n==> the browser is NOT running\n" }
+	timeout        { die "pgrep gave no answer" }
+}
+
+# --------------------------------------------------------------- 6. shut it down
+set spawn_id $qemu_id
+set timeout $t_shell
+send "poweroff\r"
+expect {
+	eof     { }
+	timeout { }
+}
+catch {exec kill -TERM [exp_pid -i $qemu_id]}
+
+if {$ok == 0} {
+	die "/api/status did not answer in ${t_api}s on port $port"
+}
+if {$browser == 0} {
+	die "the daemon did not start the browser in the cage session"
+}
+send_user "\nPASS: the image boots, /api/status answers, the browser runs\n"
+exit 0

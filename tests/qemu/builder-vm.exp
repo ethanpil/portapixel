@@ -1,0 +1,86 @@
+#!/usr/bin/expect -f
+# builder-vm.exp -- drive the throwaway Alpine builder VM.
+# builder-vm.sh calls this file. Do not run it by hand.
+#
+# Markers are split with quotes when sent and matched unsplit, so the terminal
+# echo of our own command line cannot satisfy the match (mountnas technique).
+
+set iso     [lindex $argv 0]
+set scratch [lindex $argv 1]
+set repo    [lindex $argv 2]
+set work    [lindex $argv 3]
+set mem     [lindex $argv 4]
+set cpus    [lindex $argv 5]
+set arch    [lindex $argv 6]
+set version [lindex $argv 7]
+set release [lindex $argv 8]
+set binname [lindex $argv 9]
+
+proc die {msg} {
+	send_user "\nFAIL: $msg\n"
+	exit 1
+}
+
+set cmd "qemu-system-x86_64 -accel kvm -cpu host -smp $cpus -m $mem -nographic \
+ -cdrom $iso -boot d \
+ -drive file=$scratch,format=qcow2,if=virtio \
+ -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+ -virtfs local,path=$repo,mount_tag=repo,security_model=none,id=repo \
+ -virtfs local,path=$work,mount_tag=work,security_model=none,id=work"
+
+send_user "==> $cmd\n"
+eval spawn $cmd
+
+# The Alpine live image logs in as root with no password.
+set timeout 300
+expect {
+	-re {localhost login: *$} { send "root\r" }
+	timeout { die "the builder VM did not reach its login prompt" }
+	eof     { die "QEMU stopped early" }
+}
+# Unanchored on purpose. The prompt is followed by a cursor position query
+# escape ([6n), so a regex anchored with $ never matches.
+expect {
+	-re {[#$] } { }
+	timeout { die "no shell in the builder VM" }
+}
+send "echo VM\"-UP\"\r"
+expect {
+	"VM-UP" { send_user "\n==> the builder VM is up\n" }
+	timeout { die "the builder VM shell gave no output" }
+}
+
+# 9p needs its module before the mount. The virt kernel has it in the modloop.
+send "modprobe 9pnet_virtio; mkdir -p /mnt/repo /mnt/work; echo MOD\"-OK\"\r"
+expect {
+	"MOD-OK" { }
+	timeout  { die "modprobe 9pnet_virtio did not finish" }
+}
+send "mount -t 9p -o trans=virtio,version=9p2000.L repo /mnt/repo && mount -t 9p -o trans=virtio,version=9p2000.L work /mnt/work && echo NINEP\"-OK\"\r"
+expect {
+	"NINEP-OK" { send_user "\n==> the 9p shares are mounted\n" }
+	timeout    { die "cannot mount the 9p shares" }
+}
+
+# The build itself: packages, partitions, apk --root of the whole package set,
+# the initramfs and gzip. An hour is generous but a cold apk cache is slow.
+set timeout 3600
+send "sh /mnt/repo/tests/qemu/builder-guest.sh $arch $version $release $binname; echo BUILD\"=\"\$?\r"
+expect {
+	-re {BUILD=(\d+)} {
+		set rc $expect_out(1,string)
+		if {$rc != 0} { die "builder-guest.sh returned $rc" }
+		send_user "\n==> the build finished\n"
+	}
+	timeout { die "the build did not finish in one hour" }
+	eof     { die "the builder VM died during the build" }
+}
+
+send "sync; poweroff\r"
+set timeout 120
+expect {
+	eof     { }
+	timeout { }
+}
+send_user "\nPASS: the builder VM made the image\n"
+exit 0
