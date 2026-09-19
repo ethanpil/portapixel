@@ -259,10 +259,14 @@ for f in "$ROOT"/etc/init.d/portapixel* "$ROOT"/usr/libexec/portapixel/*.sh; do
 	[ -f "$f" ] && chmod 0755 "$f" || :
 done
 
-# Default media for the first boot (D37).
+# Default media for the first boot (D37). Only the files at the top level: the
+# directory also holds gen/, which is the generator of the slides, and the image
+# has no use for Go source.
 if [ -d "$SRC/default-media" ]; then
 	mkdir -p "$ROOT$RELEASE_ROOT/default-media"
-	cp -a "$SRC/default-media/." "$ROOT$RELEASE_ROOT/default-media/"
+	for f in "$SRC"/default-media/*; do
+		[ -f "$f" ] && cp -a "$f" "$ROOT$RELEASE_ROOT/default-media/" || :
+	done
 fi
 
 # Licence text in the image (D33).
