@@ -4,6 +4,8 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Add `portapixel-server`: database, media store, release mirror, device API, admin API, route tests and deployment files.
+- Add the fleet server: `cmd/portapixel-server`, `internal/server/{db,api,admin,media,releases}` and `deploy/`. Three pairing flows, manifest resolution, release mirroring with signature checks, and the admin API for the server UI.
 - Fix 29 code review findings in the daemon and the player (8f4431f to b25a1cb). `/media/` does not follow a link out of the media root and serves only image and video files.
 - Add the device admin UI and its development server.
 - Add the QEMU boot test and the builder VM.
