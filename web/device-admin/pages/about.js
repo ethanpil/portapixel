@@ -67,7 +67,7 @@ export function mount(main, ctx) {
   const licences = card({
     title: 'Open source',
     body: [
-      h('div', { text: 'PortaPixel is MIT licensed. It is built on Alpine Linux, WPE WebKit and GStreamer, all used as they ship.' }),
+      h('div', { text: 'PortaPixel is MIT licensed. It is built on Alpine Linux, Chromium and cage, all used as they ship.' }),
       h('div', { class: 'pp-btns', style: { 'margin-top': '12px' } },
         h('a', { class: 'pp-btn', href: '/licenses', target: '_blank', rel: 'noopener', text: 'Licences of everything included' })),
       h('div', { class: 'pp-help' },
@@ -142,11 +142,14 @@ export function mount(main, ctx) {
       case 'verifying':
         setText(updateText, `Getting ${u.available || 'the new version'} ready. The screen keeps playing.`);
         break;
-      case 'staged':
-        setText(updateText, `${u.available} is ready and starts at the next reboot.`);
-        break;
       case 'applying':
         setText(updateText, 'Putting the new version in place.');
+        break;
+      case 'restarting':
+        setText(updateText, `${u.available} is in place. The device restarts now and has two minutes to come up; it puts ${status.version} back by itself if it does not.`);
+        break;
+      case 'rolled-back':
+        setText(updateText, u.error || `An update did not come up, so the device went back to ${status.version}. It never tries that release again.`);
         break;
       case 'failed':
         setText(updateText, `The last update did not work: ${u.error || 'no reason was given'}. The device stayed on ${status.version}.`);
@@ -168,14 +171,26 @@ export function mount(main, ctx) {
     try {
       const out = await api('POST', '/api/update/check');
       offered = out;
-      fill(updateNote, out.available
-        ? banner({
+      let note;
+      if (out.available) {
+        note = banner({
           kind: 'info',
           title: `${out.available} is available`,
           body: h('div', null, out.notes || 'No release note came with it.',
             out.source ? h('div', { class: 'pp-small pp-muted', style: { 'margin-top': '6px' }, text: `from the ${out.source} release page` }) : null),
-        })
-        : h('div', { class: 'pp-help', text: `${out.current} is the newest release. Last checked just now.` }));
+        });
+      } else if (out.blocked) {
+        /* A build with no signing key can never install a release, so it never
+           offers one. A development build is in that state. */
+        note = banner({
+          kind: 'warn',
+          title: 'This build cannot install updates',
+          body: out.blocked,
+        });
+      } else {
+        note = h('div', { class: 'pp-help', text: `${out.current} is the newest release. Last checked just now.` });
+      }
+      fill(updateNote, note);
       if (ctx.store.status) renderUpdate(ctx.store.status);
       ctx.store.refresh();
     } catch (err) {
@@ -216,7 +231,9 @@ export function mount(main, ctx) {
       const disks = out.disks || [];
       fill(diskList, disks.length
         ? disks.map((d) => diskRow(d))
-        : h('div', { class: 'pp-help', text: 'No other disk is in this machine. Nothing to install onto.' }));
+        : h('div', { class: 'pp-help', text: out.error
+          ? `This machine cannot install onto a disk: ${out.error}`
+          : 'No other disk is in this machine. Nothing to install onto.' }));
     } catch (err) {
       fill(diskList);
       fill(diskNote, notInThisBuild(err) ? notYet('Installing onto a disk') : banner({ kind: 'danger', title: 'The disks did not load', body: errorText(err) }));
@@ -262,7 +279,9 @@ export function mount(main, ctx) {
     diskBtn.disabled = true;
 
     try {
-      await api('POST', '/api/install-to-disk', { device: d.device, confirm: true });
+      // The device path, character for character. The device checks it again, so
+      // a request from a script passes the same test as a person (D54).
+      await api('POST', '/api/install-to-disk', { device: d.device, confirm: d.device });
     } catch (err) {
       setShown(jobPhase, false);
       setShown(jobWrap, false);

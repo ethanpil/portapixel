@@ -180,6 +180,37 @@ export function mount(main, ctx) {
       'aria-label': `${label} of rule ${i + 1}`, disabled: paired,
       onInput: (e) => { rule[key] = e.target.value; touch(); },
     });
+    const startIn = time('start', 'Start');
+    const endIn = time('end', 'End');
+
+    /* A rule with no times at all covers the whole day. It is how "weekends:
+       this playlist" is written, and the two times are both-or-neither: one time
+       on its own is an error that the device refuses. */
+    const allDay = h('input', {
+      type: 'checkbox', checked: !rule.start && !rule.end, disabled: paired,
+      'aria-label': `Rule ${i + 1} covers the whole day`,
+      onChange: () => {
+        if (allDay.checked) {
+          rule.start = '';
+          rule.end = '';
+        } else {
+          rule.start = '08:00';
+          rule.end = '18:00';
+        }
+        startIn.value = rule.start;
+        endIn.value = rule.end;
+        applyAllDay();
+        touch();
+      },
+    });
+    function applyAllDay() {
+      const on = allDay.checked;
+      startIn.disabled = paired || on;
+      endIn.disabled = paired || on;
+      startIn.hidden = on;
+      endIn.hidden = on;
+    }
+    applyAllDay();
 
     const move = (to) => {
       if (to < 0 || to >= rules.length) return;
@@ -195,7 +226,9 @@ export function mount(main, ctx) {
       h('div', { class: 'dv-rule__when' }, h('div', { class: 'pp-label', text: 'On these days' }),
         h('div', { style: { 'margin-top': '5px' } }, chips)),
       h('div', null, h('div', { class: 'pp-label', text: 'Between' }),
-        h('div', { class: 'dv-rule__times', style: { 'margin-top': '5px' } }, time('start', 'Start'), time('end', 'End'))),
+        h('div', { class: 'dv-rule__times', style: { 'margin-top': '5px' } },
+          startIn, endIn,
+          h('label', { class: 'pp-status pp-small', style: { gap: '5px' } }, allDay, 'All day'))),
       h('div', { class: 'dv-rule__acts' },
         h('button', {
           type: 'button', class: 'pp-btn pp-btn--icon', 'aria-label': `Move rule ${i + 1} up`,
@@ -244,7 +277,8 @@ export function mount(main, ctx) {
       return;
     }
     const r = rules[hit];
-    setText(nowLine, `Right now rule ${hit + 1} matches: ${titleOf(r.playlist)}, ${daysInWords(r.days)} from ${r.start} to ${r.end}.`);
+    const when = !r.start && !r.end ? 'all day' : `from ${r.start} to ${r.end}`;
+    setText(nowLine, `Right now rule ${hit + 1} matches: ${titleOf(r.playlist)}, ${daysInWords(r.days)} ${when}.`);
   }
 
   /* Seven rows of twenty-four cells. A cell is green when a rule covers the
@@ -303,9 +337,14 @@ export function mount(main, ctx) {
   }
 
   async function save() {
-    const bad = rules.findIndex((r) => !r.playlist || !r.start || !r.end);
+    // A rule needs a playlist, and the two times are both-or-neither: both empty
+    // is the whole day, and one on its own is a half-written rule.
+    const bad = rules.findIndex((r) => !r.playlist || (!r.start !== !r.end));
     if (bad >= 0) {
-      showErrors([{ field: `schedule[${bad}].start`, message: 'a rule needs a playlist, a start time and an end time' }]);
+      showErrors([{
+        field: `schedule[${bad}].start`,
+        message: 'a rule needs a playlist, and a start time with an end time or neither of them',
+      }]);
       return;
     }
     saveBtn.disabled = true;

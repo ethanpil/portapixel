@@ -156,6 +156,10 @@ export function mount(main, ctx) {
   const cDNS = text({ mono: true, placeholder: '192.168.1.1, 1.1.1.1' });
   const cSSID = text({ maxlength: '32', autocomplete: 'off' });
   const cPSK = secret({ placeholder: 'the WiFi key' });
+  /* A free text field and not a list of countries. The value is a two-letter
+     regulatory domain, the device checks it, and a list of 250 countries in a
+     form of twenty fields is a list that nobody reads. */
+  const cCountry = text({ maxlength: '2', autocomplete: 'off', placeholder: 'US', style: { 'max-width': '90px', 'text-transform': 'uppercase' } });
   const staticBlock = h('div');
   const wifiHelp = h('div', { class: 'pp-help' });
 
@@ -286,6 +290,8 @@ export function mount(main, ctx) {
           staticBlock,
           field('network.wifi_ssid', 'WiFi network name', cSSID, 'Leave it empty when the device is on ethernet.'),
           field('network.wifi_psk', 'WiFi password', cPSK, wifiHelp),
+          field('network.wifi_country', 'WiFi country', cCountry,
+            'Two letters, for example US or DE. Leave it empty and some radios show fewer channels, so a 5 GHz network can be invisible.'),
         ],
       }),
       card({
@@ -371,6 +377,7 @@ export function mount(main, ctx) {
     cDNS.value = (cfg.network.dns || []).join(', ');
     cSSID.value = cfg.network.wifi_ssid || '';
     cPSK.value = cfg.network.wifi_psk || '';
+    cCountry.value = cfg.network.wifi_country || '';
 
     cRotation.value = String(cfg.display.rotation || 0);
     cVideoMode.value = cfg.display.video_mode || '';
@@ -430,6 +437,7 @@ export function mount(main, ctx) {
     next.network.dns = cDNS.value.split(',').map((s) => s.trim()).filter(Boolean);
     next.network.wifi_ssid = cSSID.value.trim();
     next.network.wifi_psk = cPSK.value;
+    next.network.wifi_country = cCountry.value.trim().toUpperCase();
 
     next.display.rotation = Number(cRotation.value);
     next.display.video_mode = cVideoMode.value.trim();

@@ -14,18 +14,23 @@ import {
 import { api } from '/shared/api.js';
 import { card, pageHead, setText, setShown, errorText, fmtTemp, deviceTime } from '../util.js';
 
-/* The two nags that only the warning list can tell us about. Every other nag
-   comes from a field of the report. */
-const WEB_PASSWORD_WARNING = 'The web password is still the default one';
-const ROOT_PASSWORD_WARNING = 'The root password is still the default one';
+/* status.warnings is a list of {code, message}. The codes are the contract with
+   the daemon (internal/manifest/status.go). This page matched the first words of
+   the message before the codes existed, and one better sentence broke a banner. */
+const CODE = {
+  web: 'default-web-password',
+  root: 'default-root-password',
+  timezone: 'timezone-utc',
+  clock: 'clock-unsynced',
+  shadow: 'config-shadow',
+  playlist: 'playlist-problem',
+};
 
-/* The warnings that a card of this page already says in its own words. They are
+/* The codes that a card of this page already says in its own words. They are
    dropped from the list of other warnings so that nothing is said twice. */
-const SAID_ELSEWHERE = [
-  WEB_PASSWORD_WARNING, ROOT_PASSWORD_WARNING,
-  'The time zone is UTC', 'The clock is not synchronised yet',
-  'portapixel.toml on the media partition is missing or bad',
-];
+const SAID_ELSEWHERE = new Set([
+  CODE.web, CODE.root, CODE.timezone, CODE.clock, CODE.shadow, CODE.playlist,
+]);
 
 const BROWSER_STATE = {
   running: 'playing',
@@ -212,15 +217,18 @@ export function mount(main, ctx) {
   function renderNags(status) {
     const warnings = status.warnings || [];
     const problems = (snap && snap.problems) || [];
+    const hasCode = (code) => warnings.some((w) => w && w.code === code);
     const has = {
-      web: warnings.some((w) => w.startsWith(WEB_PASSWORD_WARNING)),
-      root: warnings.some((w) => w.startsWith(ROOT_PASSWORD_WARNING)),
+      web: hasCode(CODE.web),
+      root: hasCode(CODE.root),
       shadow: !!status.config_from_shadow,
       timezone: (status.timezone || 'UTC') === 'UTC',
       clock: status.clock_synced === false,
       problems: problems.length,
     };
-    const others = warnings.filter((w) => !SAID_ELSEWHERE.some((s) => w.startsWith(s)) && !isProblem(w));
+    const others = warnings
+      .filter((w) => w && !SAID_ELSEWHERE.has(w.code))
+      .map((w) => w.message);
 
     // Rebuild only when the set of nags changes: the root password field must
     // keep what the user typed while the poller runs.
@@ -267,10 +275,6 @@ export function mount(main, ctx) {
         title: 'The device reports this',
         body: h('ul', { style: { margin: '4px 0 0', 'padding-left': '18px' } }, others.map((w) => h('li', { text: w }))),
       }) : null);
-  }
-
-  function isProblem(warning) {
-    return warning.startsWith('The playlist "') || warning.startsWith('Cannot read the media directory');
   }
 
   /* The root password is not in portapixel.toml, so it has its own route and

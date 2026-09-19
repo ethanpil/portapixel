@@ -1,15 +1,22 @@
 package main
 
-// The fake routes. They stand in for the parts of the API that v0.1 answers
-// with "not implemented yet", so that the admin UI can be driven through the
-// pairing flow, an update and an install onto a disk without waiting for the
-// daemon to grow them.
+// The fake routes. They stand in for what a Windows development machine cannot
+// do for itself.
+//
+// /api/pair is still "not implemented yet" in the daemon: the fleet client
+// arrives in v0.3, and the fake drives the three pairing flows now.
+//
+// The update, disks and install-to-disk routes ARE in the daemon (v0.2). The
+// fake keeps its own copies of them so that the UI can be driven on a machine
+// with no second disk and with no signing key: the real routes then answer "this
+// build cannot install updates" and an empty disk list, which is right and is
+// also untestable.
 //
 // It also adds the root password warning to /api/status, because a Windows
 // development machine has no /etc/shadow and can never raise that nag itself.
 //
-// Nothing here is a specification. It answers the shapes that the route table
-// in docs names, and no more.
+// Nothing here is a specification. It answers the shapes that the daemon
+// answers, and no more.
 
 import (
 	"encoding/json"
@@ -66,10 +73,7 @@ func (f *fake) handle(w http.ResponseWriter, r *http.Request, daemon string) boo
 			{"device": "/dev/sdb", "model": "Generic Flash Disk", "size_bytes": 4005527552, "removable": true, "too_small": true},
 		}})
 	case r.URL.Path == "/api/install-to-disk":
-		f.mu.Lock()
-		f.installing = true
-		f.mu.Unlock()
-		writeJSON(w, map[string]any{"ok": true})
+		f.startInstall(w, r)
 	case r.URL.Path == "/api/install-to-disk/events":
 		f.installEvents(w, r)
 	default:
@@ -95,8 +99,12 @@ func (f *fake) status(w http.ResponseWriter, r *http.Request, daemon string) {
 		return
 	}
 
+	// status.warnings is a list of {code, message} (internal/manifest/status.go).
 	warnings, _ := out["warnings"].([]any)
-	out["warnings"] = append(warnings, "The root password is still the default one. Change it on the Settings page.")
+	out["warnings"] = append(warnings, map[string]any{
+		"code":    "default-root-password",
+		"message": "The root password is still the default one. Change it on the Settings page.",
+	})
 
 	// A development machine runs with --browser-cmd none, so nothing ever
 	// plays. Pretend that the first playlist is on the screen and that its
@@ -156,6 +164,27 @@ func (f *fake) startPairing(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"status": "pending", "pairing_code": f.code})
 }
 
+// startInstall checks the confirmation the same way that the daemon does: the
+// device path, character for character (D54).
+func (f *fake) startInstall(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Device  string `json:"device"`
+		Confirm string `json:"confirm"`
+	}
+	json.NewDecoder(r.Body).Decode(&body)
+	if body.Confirm != body.Device || body.Device == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, map[string]any{
+			"error": "type the name of the disk, " + body.Device + ", to confirm",
+		})
+		return
+	}
+	f.mu.Lock()
+	f.installing = true
+	f.mu.Unlock()
+	writeJSON(w, map[string]any{"ok": true})
+}
+
 // installEvents is the progress stream of an install onto a disk.
 func (f *fake) installEvents(w http.ResponseWriter, r *http.Request) {
 	flusher, ok := w.(http.Flusher)
@@ -188,7 +217,11 @@ func (f *fake) installEvents(w http.ResponseWriter, r *http.Request) {
 		case <-time.After(1500 * time.Millisecond):
 		}
 	}
-	event(w, "done", map[string]any{"ok": true})
+	event(w, "done", map[string]any{
+		"ok": true,
+		"instruction": "Power the machine off. Take the USB stick out. " +
+			"Start the machine again and let it boot from the disk.",
+	})
 	flusher.Flush()
 
 	f.mu.Lock()

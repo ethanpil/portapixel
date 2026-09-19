@@ -39,7 +39,7 @@ func main() {
 	addr := flag.String("addr", "127.0.0.1:8099", "the address to serve on")
 	daemon := flag.String("daemon", "http://127.0.0.1:8098", "the address of the running portapixeld")
 	root := flag.String("web", "web", "the web directory of the repository")
-	withFake := flag.Bool("fake", false, "answer the routes that v0.1 has not got yet: pairing, updates and install-to-disk")
+	withFake := flag.Bool("fake", false, "answer pairing, updates and install-to-disk from a fake, for a machine with no second disk and no signing key")
 	flag.Parse()
 
 	// A Windows machine reads the media types from the registry and can answer

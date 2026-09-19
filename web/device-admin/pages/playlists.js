@@ -41,15 +41,25 @@ export function mount(main, ctx) {
 
   const unsubscribe = ctx.store.subscribe((status) => {
     if (!status || gone) return;
+    // The device report arrives with the first player heartbeat, which can be
+    // after this page opened. Take it then and build the warnings again.
+    if (status.codecs && (!caps || caps.source !== 'device')) {
+      probeCapabilities(status).then((c) => {
+        if (gone) return;
+        caps = c;
+        openPicked();
+      });
+    }
     if (status.paired === paired && caps) return;
     paired = !!status.paired;
     if (caps) { renderBanners(); openPicked(); }
   });
 
-  /* The capability probe looks at this browser, not at the screen. The device
-     does not report its own codec findings yet, so this is the fallback that
-     item-warnings.js documents, and the warnings say "this browser". */
-  probeCapabilities().catch(() => null).then((c) => {
+  /* What the screen decodes (D12). The device reports its own findings in
+     status.codecs, which the player measured on the screen itself, so that answer
+     always wins. The probe of this browser is the fallback for a screen that has
+     not checked in yet, and the warnings then say "this browser". */
+  probeCapabilities(ctx.store.status).catch(() => null).then((c) => {
     if (gone) return;
     caps = c;
     load({ reopen: true });
@@ -178,7 +188,6 @@ export function mount(main, ctx) {
         readOnly ? null : h('div', { class: 'pp-btns' },
           h('button', { type: 'button', class: 'pp-btn pp-btn--sm', text: 'Rename', onClick: () => renamePlaylist(p) }),
           h('button', { type: 'button', class: 'pp-btn pp-btn--sm pp-btn--danger-outline', text: 'Delete', onClick: () => deletePlaylist(p) }))),
-      fileWarnings(p),
       slot);
 
     /* The name field of the editor is the title that people read. The folder
@@ -198,9 +207,23 @@ export function mount(main, ctx) {
         folder: p.name,
         tier: (ctx.store.status && ctx.store.status.tier) || null,
         decode: caps,
+        // What the device found out about one item: a file that is not on the
+        // stick, or a kind that the player does not know. Only the device knows
+        // it, so the editor asks for it per item.
+        itemWarnings: (item) => deviceWarnings(p, item),
+        libraryLabel: 'Add files from the stick',
+        libraryEmpty: `The folder ${p.name} holds no images or videos yet. Upload some, or pull the stick and copy them in from any computer.`,
       },
       mediaSource: {
         thumbUrl: (it) => (it.kind === 'image' && it.src ? it.src : null),
+        // The files that are in the folder on the stick. A person who copied a
+        // folder of pictures in from a laptop has files that no playlist names
+        // yet, and this is how they get into one.
+        list: () => api('GET', `/api/media/${encodeURIComponent(p.name)}`)
+          .then((out) => (out.files || []).map((f) => ({
+            file: f.name, name: f.name, kind: f.kind, size: f.size, src: f.src,
+            inPlaylist: f.in_playlist,
+          }))),
         upload: (file, onProgress) => upload(`/api/media/${encodeURIComponent(p.name)}`, file, onProgress)
           .then((r) => ({
             file: r.name, name: r.name, kind: guessKind(r.name),
@@ -209,6 +232,15 @@ export function mount(main, ctx) {
       },
       onSave: (edited) => save(p, edited),
     });
+  }
+
+  /* The warning that the device wrote for one item of this playlist. The editor
+     asks for it per item; the device sends it in the playlist list. */
+  function deviceWarnings(p, item) {
+    const key = item.file || item.url;
+    if (!key) return [];
+    const found = p.items.find((it) => (it.file || it.url) === key);
+    return found && found.warning ? [found.warning] : [];
   }
 
   function forEditor(it) {
@@ -260,19 +292,6 @@ export function mount(main, ctx) {
     toast('Playlist saved — the screen picks it up on the next item');
     await load();          // new titles and sizes, without taking the editor away
     ctx.store.refresh();
-  }
-
-  /* Warnings that the device itself found: a missing file, or a kind that the
-     player does not know. They belong to the playlist, not to one field. */
-  function fileWarnings(p) {
-    const bad = p.items.filter((it) => it.warning);
-    if (!bad.length) return null;
-    return banner({
-      kind: 'warn',
-      title: bad.length === 1 ? 'One item needs a look' : `${bad.length} items need a look`,
-      body: h('ul', { style: { margin: '4px 0 0', 'padding-left': '18px' } },
-        bad.map((it) => h('li', null, h('span', { class: 'pp-mono', text: it.name }), ' — ', it.warning))),
-    });
   }
 
   /* -------------------------------------------------------- make and remove */

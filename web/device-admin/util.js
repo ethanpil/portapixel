@@ -118,9 +118,11 @@ export function toMinutes(value) {
 }
 
 /** Does a rule cover this moment? This is the same rule that the scheduler
-    keeps: a window that ends before it starts goes past midnight, and then the
-    hours after midnight belong to the day before. */
+    keeps (internal/device/scheduler): both times empty is the whole day, and a
+    window that ends before it starts goes past midnight, and then the hours
+    after midnight belong to the day before. */
 export function inWindow(start, end, minute, weekday, days) {
+  if (!start && !end) return dayPermitted(days, weekday);
   const s = toMinutes(start);
   const e = toMinutes(end);
   if (s === null || e === null || s === e) return false;
