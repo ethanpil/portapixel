@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/ethanpil/portapixel/internal/config"
@@ -34,6 +35,20 @@ func renderNetCommand(args []string) int {
 		return fail("the configuration is not correct, so the network files are not written: %v", errs)
 	}
 
+	log := opslog.New(filepath.Join(p.state, opsLogName))
+
+	// A card with no readable configuration must never take the device off the
+	// network (D38). The factory defaults are DHCP. A write of DHCP over the static
+	// address of a site makes the device unreachable, and no person is there to plug
+	// a keyboard in. Keep the files of the last good render and say why. The exit
+	// code is 0: this must never stop the boot.
+	if result.FromDefault && !*dry && renderedFilesExist(*root) {
+		log.Log("net.render.kept",
+			"portapixel.toml gave no settings, so the network files of the last good render stay: "+result.Warning)
+		fmt.Fprintln(os.Stderr, "portapixeld: portapixel.toml gave no settings; the network files are left as they are")
+		return 0
+	}
+
 	if *dry {
 		fmt.Printf("--- %s\n%s\n", netcfg.InterfacesPath, netcfg.Interfaces(cfg))
 		fmt.Printf("--- %s\n%s\n", netcfg.WPAPath, netcfg.WPASupplicant(cfg))
@@ -48,7 +63,6 @@ func renderNetCommand(args []string) int {
 		return fail("%v", err)
 	}
 
-	log := opslog.New(filepath.Join(p.state, opsLogName))
 	details := "mode=" + cfg.Network.Mode
 	if cfg.Network.WifiSSID != "" {
 		details += " wifi=yes"
@@ -58,4 +72,11 @@ func renderNetCommand(args []string) int {
 	}
 	log.Log("net.render", details)
 	return 0
+}
+
+// renderedFilesExist reports if a render already put the interfaces file under
+// root. That file is the sign of a device that is on the network now.
+func renderedFilesExist(root string) bool {
+	_, err := os.Stat(filepath.Join(root, netcfg.InterfacesPath))
+	return err == nil
 }

@@ -66,7 +66,7 @@ func provisionCommand(args []string) int {
 	} else {
 		// The file is the user's. Only the reference copy of the ID is ours, and a
 		// wrong one confuses a person who reads the card (D21).
-		if err := refreshConfigID(p.media, p.state, id.DeviceID); err != nil {
+		if err := refreshConfigID(p.media, p.state, id.DeviceID, log); err != nil {
 			log.Log("provision.config.id.fail", err.Error())
 		}
 		fmt.Printf("%s is there already\n", configPath)
@@ -86,16 +86,35 @@ func provisionCommand(args []string) int {
 
 // refreshConfigID writes the derived ID into the configuration file when the file
 // holds another one. It changes nothing else.
-func refreshConfigID(mediaRoot, stateDir, deviceID string) error {
+//
+// It never writes a configuration that config.Load did not read whole. Load always
+// gives a configuration that works. It falls back to the shadow copy and to the
+// factory defaults. It also puts a default value in each field that breaks a rule.
+// A write of that result over the file of the user loses the WiFi key and the
+// password. One character that the parser did not like must not cost them.
+//
+// The id in the TOML is a reference copy for a person who reads the card. The true
+// id comes from the hardware and lives in state.json (D21), so leaving the file as
+// it is costs nothing.
+func refreshConfigID(mediaRoot, stateDir, deviceID string, log *opslog.Log) error {
 	result := config.Load(mediaRoot, stateDir)
+	switch {
+	case result.FromShadow:
+		log.Log("provision.config.kept", "portapixel.toml on the media partition is not readable; the file is left as it is")
+		return nil
+	case result.FromDefault:
+		log.Log("provision.config.kept", "portapixel.toml gave no settings; the file is left as it is")
+		return nil
+	case len(result.Repaired) > 0:
+		log.Log("provision.config.kept",
+			"portapixel.toml has a fault, so the file is left as it is: "+config.Errors(result.Repaired).Error())
+		return nil
+	}
 	if result.Config.Device.ID == deviceID {
 		return nil
 	}
 	cfg := result.Config
 	cfg.Device.ID = deviceID
-	if errs := cfg.Validate(); len(errs) > 0 {
-		return fmt.Errorf("the configuration is not correct, so the device id is not written: %w", errs)
-	}
 	return config.Save(mediaRoot, stateDir, cfg)
 }
 

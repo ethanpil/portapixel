@@ -27,6 +27,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/httpd"
 	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/device/netcfg"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
@@ -46,6 +47,12 @@ const configPoll = 5 * time.Second
 
 // shutdownGrace is how long the HTTP server may take to finish its requests.
 const shutdownGrace = 5 * time.Second
+
+// clockPoll is how often the daemon asks the kernel if the clock has a source.
+// Nothing in the path of an HTTP request may make a system call that can wait. So
+// the daemon samples the answer here. It hands the answer to the report and to the
+// scheduler (D40).
+const clockPoll = 30 * time.Second
 
 // daemon holds everything that the device runs. It is the wiring: each field is a
 // package that owns its own rules.
@@ -72,6 +79,14 @@ type daemon struct {
 	cfgModified  time.Time
 	lastManifest library.PlayerManifest
 	shuffleSeed  uint64
+	// hostList is the Host header allowlist. It is built from the network
+	// interfaces, so it is cached: every request would otherwise ask the kernel
+	// for the interface list.
+	hostList []string
+	// clockOK is the last answer of the clock probe.
+	clockOK bool
+	// markerDone is true after the health marker of this release was written.
+	markerDone bool
 }
 
 // runCommand is the "run" subcommand: the daemon.
@@ -147,14 +162,16 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		Log:       d.log,
 		Paired:    func() bool { return d.deviceState().Paired() },
 		OnChange:  d.libraryChanged,
+		OnRename:  d.playlistRenamed,
 	})
 	d.lib.Rescan()
 
 	// 4. The scheduler. It reads the configuration at each evaluation.
+	d.clockOK = scheduler.ClockSynced(time.Now)
 	d.sched = scheduler.New(scheduler.Options{
 		Config: d.config,
 		Now:    d.localNow,
-		Synced: func() bool { return scheduler.ClockSynced(time.Now) },
+		Synced: d.clockSynced,
 		Log:    d.log,
 	})
 	d.newSeed()
@@ -193,6 +210,7 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 			}
 		}
 	}
+	d.refreshHosts()
 	return d, nil
 }
 
@@ -219,10 +237,11 @@ func (d *daemon) serve(listen string) int {
 	}
 	d.log.Log("httpd.listen", address)
 	slog.Info("portapixeld is up", "address", address, "device", d.id.DeviceID, "version", version.Version)
-	// The player URL carries the boot secret. A developer who works with
-	// --browser-cmd needs it to open the player by hand; the browser gets it on
-	// its command line. This log goes to /var/log, which is RAM and root only.
-	slog.Info("the player is at", "url", d.playerURL(-1))
+	// The address of the player, with the boot secret taken out. The secret gates
+	// the whole player API (D46), and a log line is a line that a person copies
+	// into a support message. A developer who needs the true URL reads it from the
+	// browser command line.
+	slog.Info("the player is at", "url", browser.RedactURL(d.playerURL(-1)))
 
 	done := make(chan struct{})
 	var group sync.WaitGroup
@@ -239,6 +258,7 @@ func (d *daemon) serve(listen string) int {
 	start(func() { d.lib.HashInBackground(done) })
 	start(func() { d.watchSchedule(done) })
 	start(func() { d.watchConfig(done) })
+	start(func() { d.watchClock(done) })
 	start(func() { d.writeHealthMarker(done) })
 
 	serveErr := make(chan error, 1)
@@ -258,10 +278,18 @@ func (d *daemon) serve(listen string) int {
 		}
 	}
 
-	close(done)
+	// The order matters. The HTTP server drains first, so that no handler can call
+	// a worker that has already gone. A POST /api/commands/restart-browser after the
+	// supervisor stopped reports success and does nothing.
+	//
+	// The SSE stream of the player never ends by itself, and Shutdown does not
+	// cancel a request context, so the hub ends its streams first. Without that
+	// every stop of the daemon cost the whole grace time.
+	d.hub.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	server.Shutdown(ctx)
+	close(done)
 	group.Wait()
 	return code
 }
@@ -310,16 +338,44 @@ func (d *daemon) deviceState() identity.State {
 
 // localNow gives the time in the time zone of the device. The schedules and the
 // nightly restart are local times (D40).
+//
+// scheduler.Location caches the zone object. The browser supervisor asks for the
+// time once a second for months, and time.LoadLocation reads files.
 func (d *daemon) localNow() time.Time {
-	name := d.config().Device.Timezone
-	if name == "" {
-		return time.Now()
+	return time.Now().In(scheduler.Location(d.config().Device.Timezone))
+}
+
+// clockSynced gives the last answer of the clock probe.
+func (d *daemon) clockSynced() bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.clockOK
+}
+
+// watchClock samples the clock probe. It is not in the path of a request: a probe
+// there would be a system call, or once a subprocess, on every call of
+// /api/status.
+func (d *daemon) watchClock(done <-chan struct{}) {
+	t := time.NewTicker(clockPoll)
+	defer t.Stop()
+
+	for {
+		select {
+		case <-done:
+			return
+		case <-t.C:
+			synced := scheduler.ClockSynced(time.Now)
+			d.mu.Lock()
+			changed := synced != d.clockOK
+			d.clockOK = synced
+			d.mu.Unlock()
+			if changed {
+				// The scheduler keeps the rules inert until the clock is true, so
+				// it must learn about the change at once and not in 20 seconds.
+				d.sched.Evaluate()
+			}
+		}
 	}
-	loc, err := time.LoadLocation(name)
-	if err != nil {
-		return time.Now()
-	}
-	return time.Now().In(loc)
 }
 
 func (d *daemon) configView() httpd.ConfigView {
@@ -332,9 +388,22 @@ func (d *daemon) configView() httpd.ConfigView {
 	}
 }
 
-// hosts gives the Host header allowlist (D46).
+// hosts gives the Host header allowlist (D46). It is the cached list: the list is
+// built from the network interfaces, and every request would otherwise ask the
+// kernel for them.
 func (d *daemon) hosts() []string {
-	return health.Hosts(d.config(), d.id.DeviceID, d.port)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.hostList
+}
+
+// refreshHosts builds the allowlist again. The configuration watcher calls it, so
+// a new device name or a new address is in the list within configPoll.
+func (d *daemon) refreshHosts() {
+	list := health.Hosts(d.config(), d.id.DeviceID, d.port)
+	d.mu.Lock()
+	d.hostList = list
+	d.mu.Unlock()
 }
 
 // adminURL is the address that a person types, and the QR code on the fallback
@@ -342,7 +411,7 @@ func (d *daemon) hosts() []string {
 // the network.
 func (d *daemon) adminURL() string {
 	cfg := d.config()
-	host := d.reporter.Status(health.Inputs{Config: cfg, DeviceID: d.id.DeviceID}).MDNSName
+	host := netcfg.MDNSName(cfg, d.id.DeviceID)
 	if ips := health.LocalIPs(); host == "" && len(ips) > 0 {
 		host = ips[0]
 	}
@@ -400,7 +469,7 @@ func (d *daemon) status(loopback bool) manifest.Status {
 		NowPlaying:       browserState.NowPlaying,
 		Paired:           state.Paired(),
 		ServerURL:        cfg.Server.URL,
-		ClockSynced:      scheduler.ClockSynced(time.Now),
+		ClockSynced:      d.clockSynced(),
 		Problems:         problems,
 	}
 	if loopback {
@@ -546,6 +615,11 @@ func (d *daemon) watchConfig(done <-chan struct{}) {
 			same := modified.Equal(d.cfgModified)
 			d.mu.Unlock()
 			if same {
+				// The addresses of the device change without a config edit: a DHCP
+				// lease or a cable that a person plugged in. The allowlist is built
+				// from the interfaces, so it is built again here and not in every
+				// request (D46).
+				d.refreshHosts()
 				continue
 			}
 			d.reloadConfig(modified)
@@ -554,32 +628,58 @@ func (d *daemon) watchConfig(done <-chan struct{}) {
 }
 
 // reloadConfig reads the file again and applies the changes.
+//
+// A live reload is not a start. config.Load falls back to the shadow copy and to
+// the factory defaults. That is right at boot (D38) and wrong here: one bad
+// character takes the device back to the settings of last week, or to DHCP. So the
+// reload reads the file on PPMEDIA and nothing else. A file that does not parse
+// keeps the configuration that runs. A file that breaks a rule does the same. The
+// person then gets a warning that names the field.
 func (d *daemon) reloadConfig(modified time.Time) {
 	old := d.config()
-	result := config.Load(d.paths.media, d.paths.state)
-	next := result.Config
-	next.Device.ID = d.id.DeviceID
 
 	d.mu.Lock()
 	d.cfgModified = modified
 	d.mu.Unlock()
 
-	if errs := next.Validate(); len(errs) > 0 {
-		// A bad hand edit keeps the values that run. The UI shows the reason.
-		d.log.Log("config.reload.bad", errs.Error())
+	var next config.Config
+	data, err := os.ReadFile(config.MediaPath(d.paths.media))
+	if err == nil {
+		next, err = config.Parse(data)
+	}
+	if err == nil {
+		next.Device.ID = d.id.DeviceID
+		if errs := next.Validate(); len(errs) > 0 {
+			err = errs
+		}
+	}
+	if err != nil {
+		warning := "portapixel.toml has an error: " + firstLine(err.Error()) +
+			"; the device still uses the last good settings"
+		d.log.Log("config.reload.bad", err.Error())
 		d.mu.Lock()
-		d.cfgWarning = errs.Error()
+		d.cfgWarning = warning
 		d.mu.Unlock()
 		return
 	}
 
 	changes := config.ChangeClass(old, next)
-	d.adopt(next, result.FromShadow, result.Warning)
+	d.adopt(next, false, "")
+	d.refreshHosts()
 	if len(changes) == 0 {
 		return
 	}
 	d.applyChanges(changes)
 	d.log.Log("config.reload", fmt.Sprintf("%d changes from a hand edit", len(changes)))
+}
+
+// firstLine keeps the first message of a list of field faults. The warning goes on
+// a dashboard card, not in a log.
+func firstLine(text string) string {
+	if at := strings.IndexAny(text, ";\n"); at > 0 {
+		return text[:at]
+	}
+	return text
 }
 
 // adopt takes a new configuration into the daemon.
@@ -594,8 +694,13 @@ func (d *daemon) adopt(cfg config.Config, fromShadow bool, warning string) {
 
 // applyChanges does the work of a change that takes effect at once, and restarts
 // the browser for a change that it takes on its command line.
+//
+// One playlist event for the whole apply. A change of two playback fields sent
+// two events. Two events that arrive together made the player start two play
+// loops: double speed and two video decoders.
 func (d *daemon) applyChanges(changes []config.Change) {
 	browserRestart := false
+	tellPlayer := false
 	for _, c := range changes {
 		switch c.Class {
 		case config.Browser:
@@ -604,14 +709,61 @@ func (d *daemon) applyChanges(changes []config.Change) {
 			// The scheduler and the library read the configuration themselves.
 			// Only the player needs to be told.
 			if strings.HasPrefix(c.Field, "playback.") || c.Field == "schedule" {
-				d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": d.sched.Active()})
+				tellPlayer = true
 			}
 		}
 	}
 	d.sched.Evaluate()
+	if tellPlayer {
+		d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": d.sched.Active()})
+	}
 	if browserRestart {
 		d.sup.DisplayChanged()
 	}
+}
+
+// playlistRenamed corrects the references to a playlist that took a new name.
+//
+// The schedule rules and playback.default_playlist name a playlist by its
+// directory name. Without this, a rename left every rule with the name of a
+// directory that is not there. The rule then matched nothing, the default playlist
+// was gone, and the screen showed the fallback picture.
+func (d *daemon) playlistRenamed(old, next string) {
+	cfg := d.config()
+	updated, count := renamePlaylistRefs(cfg, old, next)
+	if count == 0 {
+		return
+	}
+	if err := config.Save(d.paths.media, d.paths.state, updated); err != nil {
+		d.log.Log("playlist.rename.refs.fail", err.Error())
+		return
+	}
+	d.adopt(updated, false, "")
+	d.log.Log("playlist.rename.refs", fmt.Sprintf("%d references in portapixel.toml now name %s", count, next))
+	d.sched.Evaluate()
+	d.sup.PlaylistChanged()
+}
+
+// renamePlaylistRefs puts the new name in every place that names the old one. It
+// gives the changed configuration and how many references it changed.
+func renamePlaylistRefs(cfg config.Config, old, next string) (config.Config, int) {
+	count := 0
+	if cfg.Playback.DefaultPlaylist == old {
+		cfg.Playback.DefaultPlaylist = next
+		count++
+	}
+	// The rules are copied, because the value that came in shares its array with
+	// the configuration that runs.
+	rules := make([]config.Rule, len(cfg.Schedule))
+	copy(rules, cfg.Schedule)
+	for i := range rules {
+		if rules[i].Playlist == old {
+			rules[i].Playlist = next
+			count++
+		}
+	}
+	cfg.Schedule = rules
+	return cfg, count
 }
 
 // highestClass gives the class that the UI must report: a reboot beats a browser
@@ -641,19 +793,24 @@ func configMTime(mediaRoot string) time.Time {
 // ---------------------------------------------------------------- commands
 
 // command runs a device command from the API or from the fleet queue.
+//
+// A command that the browser could not take gives browser.ErrBusy, and the API
+// answers 503. A command that says "done" and does nothing is worse than an error:
+// the person looks at the screen and waits.
 func (d *daemon) command(name string) error {
 	switch name {
 	case "reboot":
 		go d.reboot("the admin asked for a reboot")
 	case "restart-browser":
-		d.sup.Restart("the admin asked for a browser restart")
+		return d.sup.Restart("the admin asked for a browser restart")
 	case "screen-on":
-		d.sup.Resume()
+		return d.sup.Resume()
 	case "screen-off":
-		d.sup.Suspend()
+		return d.sup.Suspend()
 	case "rescan":
+		// The explicit rescan is synchronous: the answer must mean that the scan
+		// happened. Rescan calls OnChange, which sends the playlist event.
 		d.lib.Rescan()
-		d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": d.sched.Active()})
 	default:
 		return fmt.Errorf("%q is not a command that this device knows", name)
 	}
@@ -696,10 +853,15 @@ func setRootPassword(stateDir, password string) error {
 //
 // "Up" is the HTTP server and the browser. A device that waits for a display is
 // up: a headless boot with the television off must not roll an update back.
+//
+// A write that fails is tried again at the next tick. One try was wrong. A moment
+// of no space, or a partition that is still read-only, leaves no marker. The
+// update gate then rolls back a release that works.
 func (d *daemon) writeHealthMarker(done <-chan struct{}) {
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
+	said := false
 	for {
 		select {
 		case <-done:
@@ -709,10 +871,18 @@ func (d *daemon) writeHealthMarker(done <-chan struct{}) {
 				continue
 			}
 			path := filepath.Join(d.paths.releases, "health", version.Version+".ok")
-			if err := os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644); err != nil {
-				d.log.Log("health.marker.fail", err.Error())
+			err := os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
+			if err == nil {
+				d.mu.Lock()
+				d.markerDone = true
+				d.mu.Unlock()
+				return
 			}
-			return
+			if !said {
+				// Once. A line at every second for an hour would empty the log.
+				said = true
+				d.log.Log("health.marker.fail", err.Error()+"; the daemon tries again every second")
+			}
 		}
 	}
 }
