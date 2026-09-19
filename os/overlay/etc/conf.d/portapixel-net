@@ -1,0 +1,2 @@
+# portapixel-net uses the same paths as the daemon. install.sh writes them.
+. /etc/conf.d/portapixeld

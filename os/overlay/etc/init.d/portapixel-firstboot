@@ -1,0 +1,22 @@
+#!/sbin/openrc-run
+# First boot work (plan section 14). It runs once. Every step is marker gated,
+# so a power cut in the middle is safe: the next boot continues.
+
+description="PortaPixel first boot"
+
+depend() {
+	# PPMEDIA must be mounted: the partition grows and the default content goes
+	# there. localmount also gives us a writable /var/lib for the markers.
+	need localmount
+	before portapixeld
+}
+
+start() {
+	ebegin "PortaPixel first boot"
+	/usr/libexec/portapixel/firstboot.sh
+	eend $?
+}
+
+stop() {
+	return 0
+}

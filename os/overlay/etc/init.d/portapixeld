@@ -1,0 +1,53 @@
+#!/sbin/openrc-run
+# The PortaPixel device daemon. It serves the web UI, the player, the API, and
+# it supervises the browser (plan section 8).
+
+description="PortaPixel device daemon"
+# The daemon starts the browser itself, as the kiosk user:
+#   cage -s -- chromium --kiosk --ozone-platform=wayland ...
+# This service only has to make the run time directories that session needs.
+
+# supervise-daemon restarts the daemon when it crashes (plan 3.3). The daemon
+# then supervises the browser. Nothing else supervises anything.
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0          # 0 = no limit. A signage box must always come back.
+
+command="/opt/portapixel/current/portapixeld"
+command_args="run --media ${PP_MEDIA} --state ${PP_STATE} --run ${PP_RUN} --releases ${PP_RELEASES}"
+command_background=false
+pidfile="/run/portapixeld.pid"
+output_log="/var/log/portapixeld.log"
+error_log="/var/log/portapixeld.log"
+
+depend() {
+	# The media partition holds the config and the playlists.
+	need localmount
+	after portapixel-firstboot portapixel-net
+	# "use", never "need": the network must never stall playback (plan 3.3).
+	# A box with no cable plays what it has. seatd is the same: without it there
+	# is no picture, but the web UI must still come up and report the problem.
+	use net dbus seatd
+}
+
+start_pre() {
+	checkpath -d -m 0755 "${PP_RUN}"
+	checkpath -d -m 0755 "${PP_RELEASES}/health"
+	checkpath -d -m 0755 "${PP_STATE}"
+	# The tmpfs for the browser profile and cache starts empty on every boot
+	# (D39), so the directories are made again here.
+	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/profile"
+	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/cache"
+	# XDG_RUNTIME_DIR for the cage session. /run is a tmpfs: it is empty now.
+	# The mode must be 0700 or Wayland refuses to use it.
+	checkpath -d -m 0755 /run/user
+	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_RUNTIME}"
+}
+
+start_post() {
+	# Watch the health marker of a pending release and roll back when it does
+	# not appear (plan section 15). The gate detaches, so it cannot hold up the
+	# boot, and it does nothing at all when no update is pending.
+	start-stop-daemon --start --background \
+		--exec /usr/libexec/portapixel/health-gate.sh
+}

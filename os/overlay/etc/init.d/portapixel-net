@@ -1,0 +1,33 @@
+#!/sbin/openrc-run
+# Render /etc/network/interfaces and wpa_supplicant.conf from portapixel.toml
+# before the network starts (plan section 7).
+#
+# portapixel.toml is on PPMEDIA, so this service needs localmount. Shell never
+# parses TOML: the daemon does all of it (ARCHITECTURE section 4).
+
+description="Render the PortaPixel network configuration"
+
+depend() {
+	need localmount
+	before networking wpa_supplicant
+}
+
+start() {
+	ebegin "Render the PortaPixel network configuration"
+	if [ ! -x /opt/portapixel/current/portapixeld ]; then
+		ewarn "no daemon binary yet; keep the network files as they are"
+		eend 0
+		return 0
+	fi
+	# A failure here must never stop the boot. The box keeps the files of the
+	# last good render and stays reachable (plan 3.3).
+	if ! /opt/portapixel/current/portapixeld render-net \
+		--media "${PP_MEDIA}" --state "${PP_STATE}"; then
+		ewarn "render-net failed; keep the network files as they are"
+	fi
+	eend 0
+}
+
+stop() {
+	return 0
+}
