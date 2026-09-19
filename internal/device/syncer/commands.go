@@ -32,6 +32,9 @@ const (
 //
 // rebooting is true when a reboot command ran. The caller then stops: the
 // acknowledgement went out already, and the machine is going down.
+//
+// A command that can end this process is acknowledged before it runs. See
+// endsTheProcess.
 func (s *Syncer) runCommands(ctx context.Context, base, token string, commands []manifest.Command) (acks []int64, rebooting bool) {
 	for _, c := range commands {
 		if s.opt.State().RanCommand(c.ID) {
@@ -40,20 +43,29 @@ func (s *Syncer) runCommands(ctx context.Context, base, token string, commands [
 			continue
 		}
 
-		if c.Type == CmdReboot {
-			// The ID and the acknowledgement go out before the machine goes down.
-			// Without that the server sends the command again and the screen
-			// reboots three times.
+		// A command whose work can end this process is recorded and acknowledged
+		// BEFORE it runs. A reboot goes down; an update restarts the service. An ID
+		// that was not written is an ID that the server sends again, up to three
+		// times. The screen then reboots three times, or it attempts a release that
+		// already failed.
+		if endsTheProcess(c.Type) {
 			s.markCommand(c.ID)
 			ackCtx, cancel := context.WithTimeout(context.Background(), ackTimeout)
 			err := s.heartbeat(ackCtx, base, token, append(acks, c.ID))
 			cancel()
 			if err != nil {
-				s.log("sync.command.ack.fail", "the reboot goes on without an acknowledgement: "+err.Error())
+				s.log("sync.command.ack.fail", c.Type+" goes on without an acknowledgement: "+err.Error())
 			}
-			s.log("sync.command", "reboot")
-			s.runLocal(CmdReboot)
-			return append(acks, c.ID), true
+			acks = append(acks, c.ID)
+			if c.Type == CmdReboot {
+				s.log("sync.command", CmdReboot)
+				s.runLocal(CmdReboot)
+				return acks, true
+			}
+			// An update that installs restarts the service, and one that finds
+			// nothing lets the round go on to the next command.
+			s.execute(ctx, c)
+			continue
 		}
 
 		s.execute(ctx, c)
@@ -62,6 +74,10 @@ func (s *Syncer) runCommands(ctx context.Context, base, token string, commands [
 	}
 	return acks, false
 }
+
+// endsTheProcess reports if the work of a command can stop this process before it
+// can write anything. Such a command is acknowledged first.
+func endsTheProcess(kind string) bool { return kind == CmdReboot || kind == CmdUpdate }
 
 // execute does the work of one command. An unknown type is acknowledged with an
 // ops log line: a server that knows a command that this release does not must never

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
@@ -428,8 +429,8 @@ func TestAManifestWithBadReferencesIsSafe(t *testing.T) {
 	// Every file that the manifest made is under _fleet, and no path step of a name
 	// made a directory of its own.
 	for name := range treeTimes(t, d.media) {
-		if !strings.HasPrefix(name, FleetDir+"/") {
-			t.Errorf("the manifest wrote %s, which is outside %s", name, FleetDir)
+		if !strings.HasPrefix(name, library.FleetDir+"/") {
+			t.Errorf("the manifest wrote %s, which is outside %s", name, library.FleetDir)
 		}
 		if strings.Contains(name, "etc/") {
 			t.Errorf("a name of the manifest made the path %s", name)

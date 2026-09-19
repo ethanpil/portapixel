@@ -3,8 +3,6 @@ package syncer
 import (
 	"bytes"
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -13,22 +11,21 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/device/identity"
+	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/playlist"
+	"github.com/ethanpil/portapixel/internal/rnd"
 	"github.com/ethanpil/portapixel/internal/slug"
 	"github.com/ethanpil/portapixel/internal/store"
 )
 
-// The names under the media root. The library reads the same names, so each of
-// them is a constant of one package and a copy of no other (ARCHITECTURE 3).
+// The names of the two directories of a swap. A name that starts with a full stop
+// is not a playlist and not content, so the library and the scheduler pass over it.
+//
+// The names of the fleet tree itself are library.FleetDir and library.FleetMediaDir:
+// the library reads that tree, so it owns the names.
 const (
-	// FleetDir holds the fleet playlists and the object store.
-	FleetDir = "_fleet"
-	// MediaDir holds the objects: _fleet/media/<sha8>-<safe name>.
-	MediaDir = "media"
-	// stagingPrefix and trashPrefix name the two directories of a swap. A name
-	// that starts with a full stop is not a playlist and not content.
 	stagingPrefix = ".staging-"
 	trashPrefix   = ".trash-"
 	// partSuffix is the extension of a download that did not finish.
@@ -40,10 +37,6 @@ const (
 // ops log mirror and the objects. A partition that one sync filled is a device that
 // can save nothing at all (D41).
 const SpaceReserve = 64 << 20
-
-// FleetRef is the one shape of a file reference in a fleet playlist. exFAT has no
-// hard links, so the playlist names the object by a path.
-const FleetRef = "../" + MediaDir + "/"
 
 // object is one entry of the manifest media list, after the checks.
 type object struct {
@@ -60,71 +53,88 @@ type object struct {
 //
 // The steps, in this order and for these reasons:
 //
-//  1. Plan. An object with a bad hash, or an address that is not on the server, is
-//     left out with an ops log line. A manifest is not trusted input.
-//  2. Compare. A manifest that is the same as the last one ends here. The steady
-//     state of a paired device writes nothing to the flash medium.
-//  3. Space (D41). When the objects cannot fit, the objects that no item names go
+//  1. Sweep. A staging or a trash directory that a power cut left is invisible to
+//     the library and to the free space arithmetic, and a trash directory holds a
+//     whole set of playlists.
+//  2. Plan. An object with a bad hash, a size that is not a size, or an address that
+//     is not on the server, is left out. A manifest is not trusted input.
+//  3. Compare, in two halves. The content (the playlists and the objects) decides
+//     if anything is written to the card. The rules (the default playlist, the
+//     schedule and the screen times) only go to the scheduler. A schedule edit must
+//     not make every device write every playlist again.
+//  4. Space (D41). When the objects cannot fit, the objects that no item names go
 //     first, oldest first, and only as many as the round needs. When they still
-//     cannot fit, the sync fails before it downloads one byte: the device keeps
-//     the playlists that it has and reports "needs X GB, has Y GB".
-//  4. Objects. One at a time, with resume and a hash check. A failure ends the
+//     cannot fit, the sync fails before it downloads one byte: the device keeps the
+//     playlists that it has and reports "needs X GB, has Y GB".
+//  5. Objects. One at a time, with resume and a hash check. A failure ends the
 //     round and keeps the part file and the old playlists.
-//  5. Playlists. They go into a staging directory and a rename puts them in place,
-//     so a reader never sees half a set.
-//  6. The schedule, one rescan and one player event.
+//  6. Playlists. Only the ones that differ from the card are rendered into a
+//     staging directory, and a rename puts the whole set in place, so a reader never
+//     sees half a set.
+//  7. The state, the schedule, one rescan and one player event.
 func (s *Syncer) applyManifest(ctx context.Context, base, token string, m manifest.Manifest) error {
-	fleetRoot := filepath.Join(s.opt.MediaRoot, FleetDir)
-	mediaDir := filepath.Join(fleetRoot, MediaDir)
+	gen := s.generation()
+	fleetRoot := filepath.Join(s.opt.MediaRoot, library.FleetDir)
+	mediaDir := filepath.Join(fleetRoot, library.FleetMediaDir)
 
-	objects := s.planObjects(base, m)
+	s.sweepLeftovers()
 
-	// 2. Nothing changed. No write, no rescan, no player event.
-	want := canonical(&m)
 	s.mu.Lock()
 	applied := s.applied
+	sameContent := applied && s.contentKey == contentKey(&m)
+	sameRules := applied && s.rulesKey == rulesKey(&m)
 	s.mu.Unlock()
-	if applied && bytes.Equal(want, canonical(s.opt.State().Fleet)) {
-		return nil
+
+	// The plan is silent when the content did not change. Its only use then is the
+	// presence check below, and one ops log line for each skipped object at every
+	// poll would be a write to the card every minute.
+	objects := s.planObjects(base, m, !sameContent)
+
+	// The content of the card is checked on every poll, and not only when the
+	// manifest changed. A file that somebody deleted from the card with a laptop
+	// would otherwise never come back, not even after a reboot.
+	need := s.missing(mediaDir, objects)
+	playlistsOK := s.playlistsPresent(fleetRoot, m)
+
+	if sameContent && len(need) == 0 && playlistsOK {
+		if sameRules {
+			return nil // the steady state of a paired device writes nothing at all
+		}
+		// Only the rules changed. No render, no swap, no rescan: the scheduler takes
+		// the new rules and the state file records them.
+		return s.applyRules(gen, m, true)
 	}
 
 	if err := os.MkdirAll(mediaDir, 0o755); err != nil {
 		return fmt.Errorf("make %s: %w", mediaDir, err)
 	}
 
-	// 3. What is missing, and does it fit?
-	need := s.missing(mediaDir, objects)
 	if err := s.makeRoom(mediaDir, objects, need); err != nil {
+		// The manifest does not fit (D41). The device keeps the playlists that it
+		// has. The rules of the new manifest still go to the scheduler when every
+		// playlist that they name is already on the card: a screen that must show
+		// another playlist at 09:00 must not wait for a card that has room.
+		if s.rulesFit(fleetRoot, m) {
+			s.applyRules(gen, m, false)
+		}
 		return err
 	}
 
-	// 4. The objects.
 	for _, o := range need {
 		if err := s.fetch(ctx, mediaDir, token, o); err != nil {
 			return err
 		}
 	}
 
-	// 5. The playlists.
-	names, err := s.writePlaylists(fleetRoot, objects, m)
+	names, changed, err := s.writePlaylists(fleetRoot, objects, m)
 	if err != nil {
 		return err
 	}
 
-	// 6. The state, then the schedule and one message to the player.
-	kept := m
-	kept.Commands = nil
-	if err := s.opt.SaveState(func(st *identity.State) { st.Fleet = &kept }); err != nil {
+	if err := s.applyRules(gen, m, false); err != nil {
 		return err
 	}
-	s.mu.Lock()
-	s.applied = true
-	s.mu.Unlock()
-
-	if s.opt.SetFleetRules != nil {
-		s.opt.SetFleetRules(m.DefaultPlaylist, m.Schedule, m.Screen)
-	}
-	if s.opt.Rescan != nil {
+	if changed && s.opt.Rescan != nil {
 		s.opt.Rescan()
 	}
 	s.log("sync.apply", fmt.Sprintf("%d playlists, %d objects, %d downloaded",
@@ -132,26 +142,78 @@ func (s *Syncer) applyManifest(ctx context.Context, base, token string, m manife
 	return nil
 }
 
+// applyRules records the manifest and hands its rules to the scheduler.
+//
+// rulesOnly is true for the pass that changed no file on the card. The state file is
+// still written, because the state is what the next start restores.
+func (s *Syncer) applyRules(gen uint64, m manifest.Manifest, rulesOnly bool) error {
+	// An Unpair that landed while the round ran. Writing now would give the device
+	// the fleet state of a server that it left, and the scheduler would then name a
+	// playlist that nothing serves.
+	if s.stale(gen) {
+		return nil
+	}
+
+	kept := m
+	kept.Commands = nil
+	if err := s.opt.SaveState(func(st *identity.State) {
+		if st.Paired() {
+			st.Fleet = &kept
+		}
+	}); err != nil {
+		return err
+	}
+	if s.stale(gen) {
+		return nil
+	}
+
+	s.mu.Lock()
+	s.applied = true
+	s.contentKey = contentKey(&m)
+	s.rulesKey = rulesKey(&m)
+	s.mu.Unlock()
+
+	if s.opt.SetFleetRules != nil {
+		s.opt.SetFleetRules(m.DefaultPlaylist, m.Schedule, m.Screen)
+	}
+	if rulesOnly {
+		s.log("sync.rules", "the schedule and the screen times of the server changed; no file on the card changed")
+	}
+	return nil
+}
+
 // planObjects turns the media list into the objects that this device must hold.
 //
-// An entry that names a hash which is not a hash, or an address that is not on the
-// server, is left out. store.ObjectName refuses a value such as "../../x", so a
-// manifest can never write a file outside the object store.
-func (s *Syncer) planObjects(base string, m manifest.Manifest) map[string]object {
+// An entry that names a hash which is not a hash, a size of zero or below, or an
+// address that is not on the server, is left out. store.ObjectName refuses a value
+// such as "../../x", so a manifest can never write a file outside the object store.
+//
+// noise is false for a poll that changed nothing. The skips are then not written to
+// the ops log, which is a file on the same flash card.
+func (s *Syncer) planObjects(base string, m manifest.Manifest, noise bool) map[string]object {
+	skip := func(text string) {
+		if noise {
+			s.log("sync.object.skipped", text)
+		}
+	}
 	out := make(map[string]object, len(m.Media))
 	for _, ref := range m.Media {
 		name, err := store.ObjectName(ref.SHA256, ref.Name)
 		if err != nil {
-			s.log("sync.object.skipped", err.Error())
+			skip(err.Error())
 			continue
 		}
 		address, err := objectURL(base, ref.URL)
 		if err != nil {
-			s.log("sync.object.skipped", ref.SHA256[:min(8, len(ref.SHA256))]+": "+err.Error())
+			skip(name + ": " + err.Error())
 			continue
 		}
-		if ref.Size < 0 {
-			s.log("sync.object.skipped", name+": the manifest gives a size below zero")
+		// A size of zero is not a size. It would take the space check of D41 out of
+		// the round for that object, and the download would run with no limit at
+		// all: one manifest could then fill the card, and a device with a full card
+		// can write no configuration and no state.
+		if ref.Size <= 0 {
+			skip(name + ": the manifest gives no size for this object")
 			continue
 		}
 		out[ref.SHA256] = object{sha: ref.SHA256, name: name, size: ref.Size, url: address}
@@ -191,8 +253,7 @@ func (s *Syncer) present(dest string, o object) bool {
 	if o.size > 0 && info.Size() != o.size {
 		return false
 	}
-	rel := s.rel(dest)
-	if sha, ok := s.opt.CachedSHA(rel, info.Size(), info.ModTime().UnixNano()); ok {
+	if sha, ok := s.opt.CachedSHA(dest, info.Size(), info.ModTime().UnixNano()); ok {
 		return strings.EqualFold(sha, o.sha)
 	}
 	// The cache does not know this file. Read it one time and record the answer, so
@@ -208,6 +269,46 @@ func (s *Syncer) present(dest string, o object) bool {
 	return true
 }
 
+// playlistsPresent reports if every fleet playlist of the manifest has its
+// playlist.toml on the card, and that no directory of an older manifest is left.
+//
+// It is a stat for each playlist on every poll. Without it a directory that
+// somebody removed with a laptop never came back, because the manifest had not
+// changed and the compare ended the round.
+func (s *Syncer) playlistsPresent(fleetRoot string, m manifest.Manifest) bool {
+	want := make(map[string]bool, len(m.Playlists))
+	for _, p := range m.Playlists {
+		if p.Name == "" || p.Name != slug.Make(p.Name) {
+			continue // the render leaves it out as well
+		}
+		want[p.Name] = true
+		if _, err := os.Stat(filepath.Join(fleetRoot, p.Name, playlist.FileName)); err != nil {
+			return false
+		}
+	}
+	stale, err := s.stalePlaylists(fleetRoot, keys(want))
+	return err == nil && len(stale) == 0
+}
+
+// rulesFit reports if every playlist that the rules of this manifest name is on the
+// card already. A rule that names a playlist which is not there leaves the screen on
+// the fallback picture, so the rules wait for the content in that case.
+func (s *Syncer) rulesFit(fleetRoot string, m manifest.Manifest) bool {
+	names := []string{m.DefaultPlaylist}
+	for _, r := range m.Schedule {
+		names = append(names, r.Playlist)
+	}
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(fleetRoot, name, playlist.FileName)); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 // makeRoom is the space rule of D41.
 //
 // It gives an error before anything is downloaded when the objects cannot fit. The
@@ -217,6 +318,15 @@ func (s *Syncer) present(dest string, o object) bool {
 func (s *Syncer) makeRoom(mediaDir string, objects map[string]object, need []object) error {
 	var want int64
 	for _, o := range need {
+		if o.copyFrom != "" {
+			// A copy of bytes that the card already holds. It is a copy and not a
+			// rename, even inside the store: the playlists that play now name the old
+			// file, and a rename before the swap would leave them pointing at a name
+			// that is gone. So the space is really needed, and the old name goes at
+			// the next eviction.
+			want += o.size
+			continue
+		}
 		want += o.size - partBytes(filepath.Join(mediaDir, o.name))
 	}
 	if want <= 0 {
@@ -232,7 +342,7 @@ func (s *Syncer) makeRoom(mediaDir string, objects map[string]object, need []obj
 	if want <= room {
 		return nil
 	}
-	room += s.evict(mediaDir, objects, want-room)
+	room += s.evict(mediaDir, objects, need, want-room)
 	if want <= room {
 		return nil
 	}
@@ -263,12 +373,19 @@ type evictable struct {
 // as the round needs. It gives the number of bytes that it freed.
 //
 // The part file of a needed object stays: it is the resume of a download that a
-// dropped connection stopped (D24).
-func (s *Syncer) evict(mediaDir string, objects map[string]object, want int64) int64 {
-	keep := make(map[string]bool, len(objects)*2)
+// dropped connection stopped (D24). A file that this round will copy from stays as
+// well: it holds the bytes of an object of this manifest under an older name. Remove
+// it, and the copy fails and the object is on the card under no name at all.
+func (s *Syncer) evict(mediaDir string, objects map[string]object, need []object, want int64) int64 {
+	keep := make(map[string]bool, len(objects)*2+len(need))
 	for _, o := range objects {
 		keep[o.name] = true
 		keep[o.name+partSuffix] = true
+	}
+	for _, o := range need {
+		if o.copyFrom != "" && filepath.Dir(o.copyFrom) == mediaDir {
+			keep[filepath.Base(o.copyFrom)] = true
+		}
 	}
 
 	entries, err := os.ReadDir(mediaDir)
@@ -314,9 +431,10 @@ func (s *Syncer) evict(mediaDir string, objects map[string]object, want int64) i
 func (s *Syncer) fetch(ctx context.Context, mediaDir, token string, o object) error {
 	dest := filepath.Join(mediaDir, o.name)
 	if o.copyFrom != "" {
-		if err := s.take(o.copyFrom, dest, mediaDir); err != nil {
+		if err := fsutil.CopyFileSync(o.copyFrom, dest); err != nil {
 			return fmt.Errorf("copy %s: %w", o.name, err)
 		}
+		fsutil.SyncDir(mediaDir)
 		s.opt.NoteSHA(dest, o.sha)
 		s.log("sync.object.reused", o.name+" came from a file that is already on the card")
 		return nil
@@ -329,60 +447,69 @@ func (s *Syncer) fetch(ctx context.Context, mediaDir, token string, o object) er
 	return nil
 }
 
-// take gets the bytes of a file that the card already holds.
+// writePlaylists renders the fleet playlists and swaps them into place. It gives the
+// names that the manifest holds and whether anything on the card changed.
 //
-// A file inside the object store is moved: it is the same object under an older
-// name, and a copy would need the space twice. A file of a local playlist is
-// copied, because the playlist of the person must keep it.
-func (s *Syncer) take(from, dest, mediaDir string) error {
-	if filepath.Dir(from) == mediaDir {
-		if err := s.opt.Rename(from, dest); err != nil {
-			return err
-		}
-		fsutil.SyncDir(mediaDir)
-		return nil
-	}
-	return fsutil.CopyFileSync(from, dest)
-}
-
-// writePlaylists renders the fleet playlists into a staging directory and swaps
-// them into place. It gives the names that the manifest holds.
-func (s *Syncer) writePlaylists(fleetRoot string, objects map[string]object, m manifest.Manifest) ([]string, error) {
-	staging := filepath.Join(fleetRoot, stagingPrefix+randomSuffix())
-	if err := os.MkdirAll(staging, 0o755); err != nil {
-		return nil, fmt.Errorf("make %s: %w", staging, err)
-	}
-	defer os.RemoveAll(staging)
-
-	var names []string
+// A playlist whose rendered bytes are the bytes that the card already holds is not
+// written. When no file differs and no directory is stale, the whole swap is skipped:
+// the never-a-mixture rule is kept by doing nothing at all, and a card that changes
+// nothing costs no flash write and no rescan.
+func (s *Syncer) writePlaylists(fleetRoot string, objects map[string]object, m manifest.Manifest) (names []string, changed bool, err error) {
+	rendered := make(map[string][]byte, len(m.Playlists))
 	for _, p := range m.Playlists {
 		name := p.Name
 		if name == "" || name != slug.Make(name) {
 			s.log("sync.playlist.skipped", fmt.Sprintf("%q is not a directory name that this device accepts", p.Name))
 			continue
 		}
-		rendered, ok := s.renderPlaylist(objects, p)
+		body, ok := s.renderPlaylist(objects, p)
 		if !ok {
 			continue
 		}
-		dir := filepath.Join(staging, name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, fmt.Errorf("make %s: %w", dir, err)
-		}
-		if err := fsutil.WriteFileAtomic(filepath.Join(dir, playlist.FileName), rendered, 0o644); err != nil {
-			return nil, err
-		}
+		rendered[name] = body
 		names = append(names, name)
 	}
+	sort.Strings(names)
 
 	stale, err := s.stalePlaylists(fleetRoot, names)
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if len(stale) == 0 && !s.anyPlaylistDiffers(fleetRoot, rendered) {
+		return names, false, nil
+	}
+
+	staging := filepath.Join(fleetRoot, stagingPrefix+rnd.Hex(6))
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		return nil, false, fmt.Errorf("make %s: %w", staging, err)
+	}
+	defer os.RemoveAll(staging)
+
+	for _, name := range names {
+		dir := filepath.Join(staging, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, false, fmt.Errorf("make %s: %w", dir, err)
+		}
+		if err := fsutil.WriteFileAtomic(filepath.Join(dir, playlist.FileName), rendered[name], 0o644); err != nil {
+			return nil, false, err
+		}
 	}
 	if err := s.swap(fleetRoot, staging, names, stale); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return names, nil
+	return names, true, nil
+}
+
+// anyPlaylistDiffers reports if one of the rendered playlists is not the file that
+// the card holds now.
+func (s *Syncer) anyPlaylistDiffers(fleetRoot string, rendered map[string][]byte) bool {
+	for name, body := range rendered {
+		have, err := os.ReadFile(filepath.Join(fleetRoot, name, playlist.FileName))
+		if err != nil || !bytes.Equal(have, body) {
+			return true
+		}
+	}
+	return false
 }
 
 // renderPlaylist turns one manifest playlist into the bytes of a playlist.toml.
@@ -415,7 +542,7 @@ func (s *Syncer) renderPlaylist(objects map[string]object, p manifest.Playlist) 
 				continue
 			}
 			out.Items = append(out.Items, playlist.Item{
-				File:        FleetRef + o.name,
+				File:        playlist.FleetRef(o.name),
 				Duration:    it.Duration,
 				Mute:        it.Mute,
 				MaxDuration: it.MaxDuration,
@@ -446,7 +573,7 @@ func (s *Syncer) stalePlaylists(fleetRoot string, names []string) ([]string, err
 	var out []string
 	for _, e := range entries {
 		name := e.Name()
-		if !e.IsDir() || name == MediaDir || strings.HasPrefix(name, ".") || live[name] {
+		if !e.IsDir() || name == library.FleetMediaDir || strings.HasPrefix(name, ".") || live[name] {
 			continue
 		}
 		out = append(out, name)
@@ -461,9 +588,10 @@ func (s *Syncer) stalePlaylists(fleetRoot string, names []string) ([]string, err
 // takes its place. A rename that fails puts everything back: a reader must see the
 // old set or the new set, never a mixture of the two. The trash directory is
 // removed at the end, so a power cut in the middle leaves a directory that starts
-// with a full stop, which is never a playlist.
+// with a full stop, which is never a playlist, and sweepLeftovers takes it away at
+// the next start.
 func (s *Syncer) swap(fleetRoot, staging string, names, stale []string) error {
-	trash := filepath.Join(fleetRoot, trashPrefix+randomSuffix())
+	trash := filepath.Join(fleetRoot, trashPrefix+rnd.Hex(6))
 	if err := os.MkdirAll(trash, 0o755); err != nil {
 		return fmt.Errorf("make %s: %w", trash, err)
 	}
@@ -509,32 +637,79 @@ func (s *Syncer) swap(fleetRoot, staging string, names, stale []string) error {
 	return nil
 }
 
-// rel gives the path of a file under the media root, with forward slashes. The
-// hash cache of the library is keyed that way.
-func (s *Syncer) rel(abs string) string {
-	rel, err := filepath.Rel(s.opt.MediaRoot, abs)
+// sweepLeftovers removes the staging and the trash directories of a swap that a
+// power cut stopped.
+//
+// A defer is not enough. Such a directory is invisible to the library, to the
+// eviction and to the free space arithmetic. A trash directory holds a whole set of
+// playlists, so a device could lose hundreds of megabytes for ever.
+func (s *Syncer) sweepLeftovers() {
+	fleetRoot := filepath.Join(s.opt.MediaRoot, library.FleetDir)
+	entries, err := os.ReadDir(fleetRoot)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if !e.IsDir() || (!strings.HasPrefix(name, stagingPrefix) && !strings.HasPrefix(name, trashPrefix)) {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(fleetRoot, name)); err != nil {
+			s.log("sync.sweep.fail", name+": "+err.Error())
+			continue
+		}
+		s.log("sync.sweep", name+" is left over from a sync that a power cut stopped")
+	}
+}
+
+// contentKey says if two manifests ask for the same files on the card: the
+// playlists and the object list.
+//
+// It is the half of the manifest that decides a write. The rules are not in it: a
+// schedule edit used to make every device render and fsync every playlist.toml,
+// swap the directories, rescan the card and reload the player.
+func contentKey(m *manifest.Manifest) string {
+	if m == nil {
+		return ""
+	}
+	return marshalKey(struct {
+		Playlists []manifest.Playlist `json:"p"`
+		Media     []manifest.MediaRef `json:"m"`
+	}{m.Playlists, m.Media})
+}
+
+// rulesKey says if two manifests ask for the same schedule. Nothing on the card
+// changes when only this value changes.
+func rulesKey(m *manifest.Manifest) string {
+	if m == nil {
+		return ""
+	}
+	return marshalKey(struct {
+		Default  string               `json:"d"`
+		Schedule []manifest.Rule      `json:"s"`
+		Screen   *manifest.ScreenRule `json:"c"`
+	}{m.DefaultPlaylist, m.Schedule, m.Screen})
+}
+
+// marshalKey gives one comparable value of a part of the manifest. A value that
+// cannot be JSON gives "", which counts as "not the same" and makes the caller do
+// the work.
+func marshalKey(value any) string {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return ""
 	}
-	return filepath.ToSlash(rel)
+	return string(data)
 }
 
-// canonical gives the bytes that say if two manifests ask for the same thing.
-//
-// The commands are not in it. A command is one piece of work and not a state, so a
-// manifest that holds only a new command must not make the device write its
-// playlists again.
-func canonical(m *manifest.Manifest) []byte {
-	if m == nil {
-		return nil
+// keys gives the keys of a set, in order.
+func keys(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
 	}
-	copyOf := *m
-	copyOf.Commands = nil
-	data, err := json.Marshal(copyOf)
-	if err != nil {
-		return nil
-	}
-	return data
+	sort.Strings(out)
+	return out
 }
 
 // partBytes gives the size of the part file of a download that did not finish, or
@@ -554,16 +729,4 @@ func gigabytes(n int64) string {
 		n = 0
 	}
 	return fmt.Sprintf("%.1f GB", float64(n)/float64(1<<30))
-}
-
-// randomSuffix names a staging or trash directory. Two syncs never run at one
-// time, but a directory that a power cut left must not be the directory that the
-// next sync writes into.
-func randomSuffix() string {
-	var b [6]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand does not fail on any system that we run on.
-		panic("syncer: the system gave no random bytes: " + err.Error())
-	}
-	return hex.EncodeToString(b[:])
 }

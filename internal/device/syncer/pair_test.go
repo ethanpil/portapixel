@@ -326,6 +326,11 @@ func TestInsecureURL(t *testing.T) {
 		{"http://127.0.0.1:8093", false},
 		{"http://localhost:8093", false},
 		{"http://fleet.local", false},
+		{"http://server.lan", false},
+		// A name with no full stop cannot be a public DNS name: it is a machine on
+		// the same network, found by the search domain or by the hosts file.
+		{"http://fleet", false},
+		{"http://signage:8099", false},
 		{"", false},
 	}
 	for _, tt := range tests {

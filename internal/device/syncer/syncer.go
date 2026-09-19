@@ -2,7 +2,6 @@ package syncer
 
 import (
 	"context"
-	"errors"
 	"math/rand/v2"
 	"net/http"
 	"os"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/identity"
+	"github.com/ethanpil/portapixel/internal/fleet"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
@@ -60,10 +60,22 @@ const (
 	roundLimit = 30 * time.Minute
 	// ackTimeout is how long the acknowledgement before a reboot may take.
 	ackTimeout = 5 * time.Second
-	// httpTimeout is the limit of one enroll, manifest or heartbeat request.
-	// Object downloads have their own context and are not in it.
-	httpTimeout = 30 * time.Second
 )
+
+// jsonTimeout is the limit of one enroll, manifest or heartbeat request. It is a
+// deadline of each request and not a limit of the HTTP client: the same client
+// downloads the objects, and a client timeout covers the body read. A test lowers
+// the value.
+var jsonTimeout = 30 * time.Second
+
+// maxImmediate is how many passes in a row may ask for no wait at all.
+//
+// A pass gives 0 when it made progress and the next step is due now: a device that
+// paired polls at once. A state that does not move would make that a loop of
+// requests with a state file write in each one, which is thousands of writes a
+// minute on a flash card. After this many the loop waits MinPoll whatever the pass
+// asked for.
+const maxImmediate = 3
 
 // Options are the parameters of a Syncer. Everything that touches the world
 // outside this package is a field, so a test gives a fake and needs no device.
@@ -71,7 +83,7 @@ type Options struct {
 	// MediaRoot is the media root. The fleet store is <MediaRoot>/_fleet.
 	MediaRoot string
 	Log       *opslog.Log
-	// Client makes the requests. A nil client gets one with a timeout.
+	// Client makes the requests. A nil client gets the client of internal/fleet.
 	Client *http.Client
 	Now    func() time.Time
 	// Jitter gives a number from 0 to 1. A nil function uses math/rand.
@@ -87,8 +99,8 @@ type Options struct {
 	Config func() config.Config
 	// State gives the device state. SaveState changes it and writes the file
 	// under the lock of the daemon, which owns the state.
-	State     func() identity.State
 	SaveState func(change func(*identity.State)) error
+	State     func() identity.State
 	// SaveServer writes [server] url and token to portapixel.toml through the
 	// normal configuration save path. Pairing and unpairing are the two explicit
 	// saves that this package makes.
@@ -110,9 +122,13 @@ type Options struct {
 	// Update checks the release source of a paired device and applies what it
 	// finds. The update command of the server calls it (D28).
 	Update func(ctx context.Context) error
+	// ResetUpdate forgets the release that the last check offered. Pairing and
+	// unpairing both change which source a release may come from (D28).
+	ResetUpdate func()
 
-	// CachedSHA, FindSHA and NoteSHA are the hash cache of the library.
-	CachedSHA func(rel string, size, modNS int64) (string, bool)
+	// CachedSHA, FindSHA and NoteSHA are the hash cache of the library. CachedSHA
+	// takes an absolute path.
+	CachedSHA func(abs string, size, modNS int64) (string, bool)
 	FindSHA   func(sha string) (string, bool)
 	NoteSHA   func(abs, sha string)
 
@@ -126,6 +142,11 @@ type Options struct {
 // Syncer is the fleet client. It is safe for use by more than one goroutine.
 type Syncer struct {
 	opt Options
+
+	// pairMu holds one pairing flow at a time: Pair, Unpair and a claim round each
+	// read the state, talk to the server and write the state back. Two of them at
+	// once could write the token of one server beside the address of another.
+	pairMu sync.Mutex
 
 	mu sync.Mutex
 	// The report fields of /api/status and of the heartbeat.
@@ -142,6 +163,15 @@ type Syncer struct {
 	// scheduler. Until then a manifest that did not change must still be applied,
 	// because the scheduler of a new process holds no rules.
 	applied bool
+	// contentKey and rulesKey are the two halves of the manifest that the card
+	// holds now. They are cached here so that a poll does not marshal the stored
+	// manifest again every time.
+	contentKey string
+	rulesKey   string
+	// gen counts the pairings. A round that started under one pairing must not
+	// write anything after an Unpair: the write would bring the fleet state of a
+	// server that this device left back to life.
+	gen uint64
 	// backoff is the wait after a network fault. It doubles up to the poll
 	// interval.
 	backoff time.Duration
@@ -164,7 +194,7 @@ func New(opt Options) *Syncer {
 		opt.Jitter = rand.Float64
 	}
 	if opt.Client == nil {
-		opt.Client = &http.Client{Timeout: httpTimeout}
+		opt.Client = fleet.NewClient()
 	}
 	if opt.Version == "" {
 		opt.Version = version.Version
@@ -201,12 +231,17 @@ type Report struct {
 // health package, which asks no package for anything (D46 keeps the status call
 // cheap).
 func (s *Syncer) Report() Report {
+	// The address is read before the lock. serverURL asks the daemon for its
+	// configuration, and the daemon takes a lock of its own for that: two locks in
+	// two orders is a deadlock waiting for the right moment.
 	st := s.opt.State()
+	address := s.serverURL(st)
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return Report{
 		Paired:     st.Paired(),
-		ServerURL:  s.serverURL(st),
+		ServerURL:  address,
 		ServerName: s.serverName,
 		LastSync:   s.lastSync,
 		LastResult: s.lastResult,
@@ -233,14 +268,19 @@ func (s *Syncer) Managed() (name string, paired bool) {
 //
 // While a device is paired the GitHub source is off. A paired device installs the
 // release that its server approved and nothing else.
+//
+// ServerURL is the address of the pairing and never a value of the manifest. The
+// updater measures the release address against it and sends the device token to that
+// host only.
 func (s *Syncer) UpdateSource() (updater.Source, bool) {
 	st := s.opt.State()
 	if !st.Paired() {
 		return updater.Source{}, false
 	}
+	server := s.serverURL(st)
+
 	s.mu.Lock()
 	release := s.release
-	server := s.serverURL(st)
 	s.mu.Unlock()
 
 	src := updater.Source{ServerURL: server, Bearer: st.DeviceToken}
@@ -251,8 +291,8 @@ func (s *Syncer) UpdateSource() (updater.Source, bool) {
 	return src, true
 }
 
-// serverURL gives the address that this device talks to. The caller holds the
-// lock or does not need it: both values are read-only here.
+// serverURL gives the address that this device talks to. The caller must not hold
+// the lock: this reads the configuration of the daemon.
 func (s *Syncer) serverURL(st identity.State) string {
 	if st.ServerURL != "" {
 		return st.ServerURL
@@ -280,8 +320,15 @@ func (s *Syncer) Restore() {
 	s.serverName = st.Fleet.ServerName
 	s.pollSeconds = st.Fleet.PollSeconds
 	s.release = st.Fleet.Release
+	s.contentKey = contentKey(st.Fleet)
+	s.rulesKey = rulesKey(st.Fleet)
 	s.applied = true
 	s.mu.Unlock()
+
+	// A staging or a trash directory that a power cut left behind. It is invisible
+	// to the library and to the free space arithmetic, and a trash directory holds a
+	// whole set of playlists, so it goes at start and not only in a defer.
+	s.sweepLeftovers()
 
 	if s.opt.SetFleetRules != nil {
 		s.opt.SetFleetRules(st.Fleet.DefaultPlaylist, st.Fleet.Schedule, st.Fleet.Screen)
@@ -294,14 +341,37 @@ func (s *Syncer) Run(done <-chan struct{}) {
 	if !wait(done, settleWait) {
 		return
 	}
+	immediate := 0
 	for {
-		ctx, cancel := contextUntil(done, roundLimit)
-		next := s.Once(ctx)
+		ctx, cancel := fleet.ContextUntil(done, roundLimit)
+		asked := s.Once(ctx)
 		cancel()
+
+		next := nextWait(asked, &immediate)
+		if next != asked {
+			s.log("sync.loop.guard", "the fleet client asked for no wait too many times in a row; it waits for the poll interval")
+		}
 		if !wait(done, next) {
 			return
 		}
 	}
+}
+
+// nextWait is the loop guard. A pass that asks for no wait made progress and the
+// next step is due now: a device that paired polls at once. A run of them is a state
+// that does not move, and that must not become a loop of requests with a state file
+// write in each one.
+func nextWait(asked time.Duration, immediate *int) time.Duration {
+	if asked > 0 {
+		*immediate = 0
+		return asked
+	}
+	*immediate++
+	if *immediate > maxImmediate {
+		*immediate = 0
+		return MinPoll
+	}
+	return asked
 }
 
 // Once does one pass and gives the wait before the next one. Run calls it; a test
@@ -352,7 +422,7 @@ func (s *Syncer) Once(ctx context.Context) time.Duration {
 	default:
 		_, err := s.Pair(ctx, base, cfg.Server.Token, false)
 		switch {
-		case errors.Is(err, ErrRevoked):
+		case Revoked(err):
 			// The token of the TOML is not one that this server accepts.
 			return s.refuseToken()
 		case err != nil:
@@ -360,7 +430,10 @@ func (s *Syncer) Once(ctx context.Context) time.Duration {
 		}
 		// A device that paired polls at once. A device that waits for approval
 		// asks again on the claim interval.
-		return 0
+		if s.opt.State().Paired() {
+			return 0
+		}
+		return claimPoll
 	}
 }
 
@@ -385,7 +458,7 @@ func (s *Syncer) failed(event string, err error) time.Duration {
 	return s.backoff
 }
 
-// interval gives the poll interval: the value of the manifest when the server
+// interval gives the poll interval: the value of the last manifest when the server
 // sent one, else the value of the TOML. It is clamped and it carries the jitter.
 func (s *Syncer) interval() time.Duration {
 	s.mu.Lock()
@@ -427,6 +500,54 @@ func (s *Syncer) setOK() {
 	s.mu.Unlock()
 }
 
+// generation gives the number of the pairing that runs now.
+func (s *Syncer) generation() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gen
+}
+
+// stale reports if the pairing changed since a round started. Every write of a
+// round asks first: an Unpair that landed in the middle must not be undone by the
+// round that it interrupted.
+func (s *Syncer) stale(gen uint64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.gen != gen
+}
+
+// clearFleet forgets everything that belongs to a pairing, in one place.
+//
+// Unpair, a token that the server revoked and a refused token all end the same
+// state, and each one used to reset its own list of fields. A field that one of them
+// forgot was a stale value with a new pairing: the release of the old server beside
+// the token of the new one.
+func (s *Syncer) clearFleet() {
+	s.mu.Lock()
+	s.gen++
+	s.serverName = ""
+	s.pollSeconds = 0
+	s.release = nil
+	s.applied = false
+	s.contentKey = ""
+	s.rulesKey = ""
+	s.syncError = ""
+	s.lastResult = "never"
+	s.lastSync = time.Time{}
+	s.backoff = 0
+	s.revoked = false
+	s.revokedToken = ""
+	s.nextEnroll = time.Time{}
+	s.mu.Unlock()
+
+	// The offer of the last release check belongs to the source that made it. A
+	// GitHub release must not stay installable after a pairing, and the mirror of an
+	// old server must not stay installable after an unpairing (D28).
+	if s.opt.ResetUpdate != nil {
+		s.opt.ResetUpdate()
+	}
+}
+
 func (s *Syncer) log(event, details string) {
 	if s.opt.Log != nil {
 		s.opt.Log.Log(event, details)
@@ -451,17 +572,4 @@ func wait(done <-chan struct{}, d time.Duration) bool {
 	case <-t.C:
 		return true
 	}
-}
-
-// contextUntil gives a context that ends when done closes or after the limit.
-func contextUntil(done <-chan struct{}, limit time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
-	go func() {
-		select {
-		case <-done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	return ctx, cancel
 }

@@ -1,33 +1,53 @@
 package syncer
 
-// The settings boundary of D48, in one table.
+// The settings boundary of D48, derived from one list.
 //
-// The fleet server owns the content, the playlists, the schedules, the screen power
-// times and the updates. The hardware-adjacent settings stay with the local admin
-// even while the device is paired: rotation, audio, the network, video_mode, the
-// device name, the time zone, the web password, SSH and logging. Pushing display
-// settings fleet-wide is how a person bricks a screen that they cannot see.
+// The rule: the fleet server owns exactly what its manifest carries. The manifest
+// holds the default playlist, the schedule rules and the three screen power fields,
+// so those are the fields that a paired device does not take from its local admin.
 //
-// The field names are the names of config.ChangeClass, so the comparison that the
-// settings page already makes is the comparison that this table answers.
-var managedFields = map[string]bool{
-	// The playlist that plays and how it plays.
-	"playback.default_playlist": true,
-	"playback.transition":       true,
-	"playback.transition_ms":    true,
-	"playback.image_duration":   true,
-	"playback.shuffle":          true,
-	"playback.nightly_restart":  true,
-	// The schedule rules.
-	"schedule": true,
-	// The screen power times. The method stays local: it is hardware.
-	"display.on_time":    true,
-	"display.off_time":   true,
-	"display.power_days": true,
-	// The updates.
-	"updates.auto": true,
+// Everything else stays local while the device is paired, and that is a decision and
+// not an oversight:
+//
+//   - The other [playback] fields are the local defaults of this screen. A fleet
+//     playlist carries its own transition and its own shuffle, so the server already
+//     says how its content plays.
+//   - updates.auto says whether this device installs the approved release by itself
+//     or waits for a person. The server gates WHICH version (D28); the owner of the
+//     screen decides when it lands.
+//   - The rotation, the audio, the network, video_mode, the device name, the time
+//     zone, the web password, SSH and logging are hardware and access. Pushing them
+//     fleet-wide is how a person bricks a screen that they cannot see.
+//
+// managed_test.go compares the list with the manifest struct, so a new manifest
+// field cannot be added without a decision here.
+var managedFields = []string{
+	// The playlist that plays when no rule matches (manifest.default_playlist).
+	"playback.default_playlist",
+	// The schedule rules (manifest.schedule).
+	"schedule",
+	// The screen power times (manifest.screen). The method stays local: it is
+	// hardware.
+	"display.on_time",
+	"display.off_time",
+	"display.power_days",
+}
+
+// ManagedFields gives the fields that the fleet server owns, in order. The admin UI
+// reads the list from GET /api/pair, so the page holds no copy of it.
+func ManagedFields() []string {
+	out := make([]string, len(managedFields))
+	copy(out, managedFields)
+	return out
 }
 
 // ManagedField reports if the fleet server owns a configuration field while the
 // device is paired (D48). field is a field name of config.ChangeClass.
-func ManagedField(field string) bool { return managedFields[field] }
+func ManagedField(field string) bool {
+	for _, f := range managedFields {
+		if f == field {
+			return true
+		}
+	}
+	return false
+}

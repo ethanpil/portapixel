@@ -82,7 +82,14 @@ func InsecureURL(raw string) bool {
 		return !localIP(ip)
 	}
 	lower := strings.ToLower(host)
-	return lower != "localhost" && !strings.HasSuffix(lower, ".localhost") &&
+	// A name with no full stop in it cannot be a public DNS name: "http://fleet/"
+	// and "http://signage/" are a machine on the same network, found by the search
+	// domain or by the hosts file. The warning was on every one of them, and a
+	// warning that is wrong is a warning that a person learns to pass over.
+	if !strings.Contains(lower, ".") {
+		return false
+	}
+	return !strings.HasSuffix(lower, ".localhost") &&
 		!strings.HasSuffix(lower, ".local") && !strings.HasSuffix(lower, ".internal") &&
 		!strings.HasSuffix(lower, ".home") && !strings.HasSuffix(lower, ".lan")
 }

@@ -2,7 +2,6 @@ package syncer
 
 import (
 	"context"
-	"errors"
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/device/identity"
@@ -27,7 +26,7 @@ func (s *Syncer) pollRound(ctx context.Context, tomlBase string, st identity.Sta
 	}
 
 	m, err := s.fetchManifest(ctx, base, st.DeviceToken)
-	if errors.Is(err, ErrRevoked) {
+	if Revoked(err) {
 		return s.dropToken()
 	}
 	if err != nil {

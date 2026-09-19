@@ -3,8 +3,10 @@ package syncer
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
@@ -22,6 +24,10 @@ type PairState struct {
 	SyncError   string    `json:"sync_error,omitempty"`
 	// Insecure is true when the address is http:// on a network that is not local.
 	Insecure bool `json:"insecure,omitempty"`
+	// ManagedFields are the configuration fields that the fleet server owns while
+	// this device is paired (D48). The admin UI disables exactly these and nothing
+	// else, so the list is not a copy in the page.
+	ManagedFields []string `json:"managed_fields,omitempty"`
 }
 
 // The three words of PairState.Status.
@@ -30,6 +36,21 @@ const (
 	StatusPending  = "pending"
 	StatusPaired   = "paired"
 )
+
+// ErrAlreadyPaired refuses a second pairing on a device that has one.
+//
+// The token and the address of a pairing belong together, and a POST that changed
+// only the address would send the token of the old server to the new one. The admin
+// UI has an Unpair button, so a person has a way to do this in two steps.
+type ErrAlreadyPaired struct{ Server string }
+
+func (e ErrAlreadyPaired) Error() string {
+	server := e.Server
+	if server == "" {
+		server = "a fleet server"
+	}
+	return "this device is paired with " + server + "; unpair it first"
+}
 
 // State gives the pairing state for GET /api/pair.
 func (s *Syncer) State() PairState {
@@ -52,6 +73,7 @@ func (s *Syncer) State() PairState {
 	switch {
 	case st.Paired():
 		out.Status = StatusPaired
+		out.ManagedFields = ManagedFields()
 	case st.ClaimSecret != "":
 		out.Status = StatusPending
 		out.PairingCode = st.PairingCode
@@ -69,6 +91,10 @@ func (s *Syncer) State() PairState {
 // explicit save. The poll loop passes false, because the values came out of that
 // file already.
 //
+// Nothing is written to portapixel.toml before the server accepted the address. A
+// save that came first destroyed a working address when somebody mistyped the new
+// one, and it wiped the enrollment token that was in the file.
+//
 // All three flows of D25 land here:
 //
 //   - An enrollment token or a device token gives the status "paired" and a
@@ -83,24 +109,31 @@ func (s *Syncer) Pair(ctx context.Context, rawURL, token string, save bool) (Pai
 	if err != nil {
 		return PairState{}, err
 	}
-	if save {
-		if s.opt.SaveServer == nil {
-			return PairState{}, errors.New("this device cannot write its configuration")
-		}
-		if err := s.opt.SaveServer(base, token); err != nil {
-			return PairState{}, err
-		}
-		// A person who typed an address and a token wants an attempt now, whatever
-		// the last answer of the server was.
-		s.mu.Lock()
-		s.revoked = false
-		s.nextEnroll = time.Time{}
-		s.mu.Unlock()
+
+	s.pairMu.Lock()
+	defer s.pairMu.Unlock()
+
+	st := s.opt.State()
+	if st.Paired() {
+		// A device with a pairing must be unpaired first. Its token belongs to the
+		// server that gave it, and this call names an address that can be another one.
+		name, _ := s.Managed()
+		return PairState{}, ErrAlreadyPaired{Server: name}
+	}
+	if save && s.opt.SaveServer == nil {
+		return PairState{}, errors.New("this device cannot write its configuration")
+	}
+
+	// The admin UI shows a saved token as the mask of the configuration API, so the
+	// value that comes back is the mask and not the token. It means "keep the token
+	// that is in the file".
+	cfg := s.opt.Config()
+	if token == config.Mask {
+		token = cfg.Server.Token
 	}
 
 	// A device that waits for approval on this server polls with its claim secret.
 	// A second click on Connect must not make a second pending request.
-	st := s.opt.State()
 	if token == "" && st.ClaimSecret != "" && st.ServerURL == base {
 		token = st.ClaimSecret
 	}
@@ -112,17 +145,51 @@ func (s *Syncer) Pair(ctx context.Context, rawURL, token string, save bool) (Pai
 	if err := s.takeEnrollment(base, res); err != nil {
 		return PairState{}, err
 	}
+	if save {
+		// The server accepted the address, so it is worth keeping. A code pairing
+		// saves no token: there was none to save.
+		if err := s.opt.SaveServer(base, token); err != nil {
+			s.log("sync.pair.config.fail", err.Error())
+			return s.State(), fmt.Errorf("this device paired and could not write its configuration: %w", err)
+		}
+		// A person who typed an address and a token wants an attempt now, whatever
+		// the last answer of the server was.
+		s.mu.Lock()
+		s.revoked = false
+		s.nextEnroll = time.Time{}
+		s.mu.Unlock()
+	}
 	return s.State(), nil
 }
 
 // takeEnrollment writes what the server answered into the state file.
+//
+// The token and the address go in together and they are cleared together. A token
+// that stood beside the address of another server was a token that the device sent to
+// a stranger at the next poll.
+//
+// A pending answer that changes nothing writes nothing. A device can wait for
+// approval for days, and one fsync every ten seconds for days is flash wear for a
+// screen that nobody approved yet.
 func (s *Syncer) takeEnrollment(base string, res manifest.EnrollResponse) error {
 	now := s.opt.Now()
 	paired := res.Status == StatusPaired
+	st := s.opt.State()
 	// A screen can wait for approval for hours, and it asks again every 10 seconds.
 	// One line for each poll would fill the whole ops log, so the line goes out when
 	// the code is a new one.
-	newCode := !paired && s.opt.State().PairingCode != res.PairingCode
+	newCode := !paired && st.PairingCode != res.PairingCode
+
+	if !paired && st.ServerURL == base && st.ClaimSecret == res.ClaimSecret &&
+		st.PairingCode == res.PairingCode && !st.PendingSince.IsZero() {
+		// The same answer as the last poll. Nothing to write, so nothing is written.
+		return nil
+	}
+
+	// A request on another server is a new wait. The clock of the patience window
+	// starts again, or a device that waited an hour on the old address would go to
+	// the slow interval at once on the new one.
+	restart := st.ServerURL != base
 
 	err := s.opt.SaveState(func(st *identity.State) {
 		st.ServerURL = base
@@ -140,17 +207,21 @@ func (s *Syncer) takeEnrollment(base string, res manifest.EnrollResponse) error 
 		}
 		st.ClaimSecret = res.ClaimSecret
 		st.PairingCode = res.PairingCode
-		if st.PendingSince.IsZero() {
+		if restart || st.PendingSince.IsZero() {
 			st.PendingSince = now
 		}
 	})
 	if err != nil {
 		return err
 	}
-	switch {
-	case paired:
+	if paired {
+		// A pairing is a new generation: everything that the old one left in memory
+		// goes, and then the values of this one come in.
+		s.clearFleet()
 		s.log("sync.paired", "the server "+base+" paired this device")
-	case newCode:
+		return nil
+	}
+	if newCode || restart {
 		s.log("sync.pending", "this device waits for approval on "+base+" with the code "+res.PairingCode)
 	}
 	return nil
@@ -158,9 +229,12 @@ func (s *Syncer) takeEnrollment(base string, res manifest.EnrollResponse) error 
 
 // claimRound asks the server again about a request that waits for approval.
 func (s *Syncer) claimRound(ctx context.Context, st identity.State) time.Duration {
+	s.pairMu.Lock()
+	defer s.pairMu.Unlock()
+
 	res, err := s.enroll(ctx, st.ServerURL, st.ClaimSecret)
 	if err != nil {
-		if errors.Is(err, ErrRevoked) {
+		if Revoked(err) {
 			// The admin refused the request, or it expired. Forget the claim and
 			// start again with the address that the person gave.
 			s.log("sync.pending.gone", "the server no longer holds the request of this device; the code is not valid")
@@ -192,47 +266,43 @@ func (s *Syncer) claimRound(ctx context.Context, st identity.State) time.Duratio
 // The objects stay in _fleet/media. A device that pairs again must not download a
 // video of 1 GB one more time, and the card has the space either way.
 //
+// The order is the configuration first and the state second. The poll loop reads the
+// TOML. A state that was cleared while the TOML still named the server would pair
+// this device again inside a minute, and this call would have answered that it
+// worked.
+//
 // There is no route on the server that a device can call to unpair itself, so
 // nothing is sent. The admin removes the row, or revokes the token, and the device
 // already stopped using it.
 func (s *Syncer) Unpair() error {
+	s.pairMu.Lock()
+	defer s.pairMu.Unlock()
+
 	st := s.opt.State()
 	if !st.Paired() && st.ClaimSecret == "" && s.opt.Config().Server.URL == "" {
 		return nil
 	}
 
-	err := s.opt.SaveState(func(st *identity.State) {
+	// The one explicit configuration write of this package beside a pairing. It is
+	// first on purpose: see above.
+	if s.opt.SaveServer != nil {
+		if err := s.opt.SaveServer("", ""); err != nil {
+			s.log("sync.unpair.config.fail", err.Error())
+			return fmt.Errorf("this device could not write its configuration, so it stays paired: %w", err)
+		}
+	}
+	if err := s.opt.SaveState(func(st *identity.State) {
 		st.DeviceToken = ""
 		st.ClaimSecret = ""
 		st.PairingCode = ""
 		st.PendingSince = time.Time{}
 		st.ServerURL = ""
 		st.Fleet = nil
-	})
-	if err != nil {
+	}); err != nil {
 		return err
 	}
 
-	// The address and the token go out of portapixel.toml too. Without that the
-	// poll loop would pair this device again inside a minute, and the Unpair button
-	// would do nothing that lasts.
-	if s.opt.SaveServer != nil {
-		if err := s.opt.SaveServer("", ""); err != nil {
-			s.log("sync.unpair.config.fail", err.Error())
-		}
-	}
-
-	s.mu.Lock()
-	s.serverName = ""
-	s.pollSeconds = 0
-	s.release = nil
-	s.applied = false
-	s.syncError = ""
-	s.lastResult = "never"
-	s.lastSync = time.Time{}
-	s.revoked = false
-	s.nextEnroll = time.Time{}
-	s.mu.Unlock()
+	s.clearFleet()
 
 	if s.opt.ClearFleetRules != nil {
 		s.opt.ClearFleetRules()
@@ -253,14 +323,21 @@ func (s *Syncer) Unpair() error {
 // back, and one enroll attempt with the token of the TOML follows every five
 // minutes. A loop that tried every second would be a denial of service against the
 // server of the person who revoked the token.
+//
+// Only the 401 of the fleet API with the code token-revoked comes here. Any other 401
+// is a fault of something between the device and the server. A pairing that a person
+// made on two screens must not go away because a proxy asked for a password.
 func (s *Syncer) dropToken() time.Duration {
+	s.pairMu.Lock()
 	err := s.opt.SaveState(func(st *identity.State) {
 		st.DeviceToken = ""
 		st.ClaimSecret = ""
 		st.PairingCode = ""
+		st.ServerURL = ""
 		// The next pairing must apply the whole manifest again.
 		st.Fleet = nil
 	})
+	s.pairMu.Unlock()
 	if err != nil {
 		s.log("sync.state.write.fail", err.Error())
 	}
@@ -283,10 +360,14 @@ func (s *Syncer) refuseToken() time.Duration {
 
 	s.mu.Lock()
 	first := !s.revoked
+	s.mu.Unlock()
+
+	s.clearFleet()
+
+	s.mu.Lock()
 	s.revoked = true
 	s.revokedToken = token
 	s.nextEnroll = s.opt.Now().Add(reEnrollGap)
-	s.applied = false
 	s.syncError = ErrRevoked.Error()
 	s.lastResult = "error"
 	s.mu.Unlock()

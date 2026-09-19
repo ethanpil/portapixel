@@ -43,6 +43,9 @@ type fakeServer struct {
 	approved bool
 	// revoked makes every call with the device token answer 401.
 	revoked bool
+	// objectsFail makes every object request answer 500. A test that must prove a
+	// copy from the card sets it: a download would then hide the copy.
+	objectsFail bool
 
 	man manifest.Manifest
 	// objects holds the bytes of each object, by hash. served replaces the bytes
@@ -146,7 +149,7 @@ func (f *fakeServer) enroll(w http.ResponseWriter, r *http.Request) {
 			Status: "pending", PairingCode: f.pairingCode, ClaimSecret: f.claimSecret,
 		})
 	default:
-		http.Error(w, `{"error":"this token is not valid"}`, http.StatusUnauthorized)
+		writeRevoked(w, "this token is not valid")
 	}
 }
 
@@ -187,6 +190,11 @@ func (f *fakeServer) object(w http.ResponseWriter, r *http.Request) {
 	sha := path.Base(r.URL.Path)
 
 	f.mu.Lock()
+	if f.objectsFail {
+		f.mu.Unlock()
+		http.Error(w, "no object here", http.StatusInternalServerError)
+		return
+	}
 	data, ok := f.objects[sha]
 	if replacement, swapped := f.served[sha]; swapped {
 		data = replacement
@@ -241,10 +249,18 @@ func (f *fakeServer) checkToken(w http.ResponseWriter, r *http.Request) bool {
 
 	got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 	if revoked || got == "" || got != want {
-		http.Error(w, `{"error":"this device token is not valid"}`, http.StatusUnauthorized)
+		writeRevoked(w, "this device token is not valid")
 		return false
 	}
 	return true
+}
+
+// writeRevoked is the 401 of the fleet API: the token itself is gone. The device drops
+// its pairing only for this answer, and not for a 401 of a proxy in between.
+func writeRevoked(w http.ResponseWriter, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusUnauthorized)
+	fmt.Fprintf(w, `{"error":%q,"code":%q}`, message, TokenRevokedCode)
 }
 
 func writeJSON(w http.ResponseWriter, body any) {
@@ -384,7 +400,7 @@ func newDevIn(t *testing.T, f *fakeServer, media, state string) *dev {
 
 // fleetPath gives a path under _fleet.
 func (d *dev) fleetPath(parts ...string) string {
-	return filepath.Join(append([]string{d.media, FleetDir}, parts...)...)
+	return filepath.Join(append([]string{d.media, library.FleetDir}, parts...)...)
 }
 
 // objectPath gives the store path of one object of the server.
@@ -393,7 +409,7 @@ func (d *dev) objectPath(ref manifest.MediaRef) string {
 	if err != nil {
 		d.t.Fatal(err)
 	}
-	return d.fleetPath(MediaDir, name)
+	return d.fleetPath(library.FleetMediaDir, name)
 }
 
 // readFleetPlaylist gives the text of one fleet playlist.toml.

@@ -178,12 +178,12 @@ func TestUpdateSourceIsTheFleetMirrorWhilePaired(t *testing.T) {
 	}
 }
 
+// The boundary of D48 is exactly what the manifest carries. Everything else stays
+// with the local admin while the device is paired.
 func TestManagedFieldTable(t *testing.T) {
 	managed := []string{
-		"playback.default_playlist", "playback.transition", "playback.transition_ms",
-		"playback.image_duration", "playback.shuffle", "playback.nightly_restart",
+		"playback.default_playlist",
 		"schedule", "display.on_time", "display.off_time", "display.power_days",
-		"updates.auto",
 	}
 	local := []string{
 		"device.name", "device.timezone", "device.tier",
@@ -191,6 +191,14 @@ func TestManagedFieldTable(t *testing.T) {
 		"network.wifi_ssid", "network.wifi_psk", "network.wifi_country",
 		"display.rotation", "display.video_mode", "display.power_method",
 		"audio.output", "audio.volume",
+		// The local defaults of this screen. A fleet playlist carries its own
+		// transition and its own shuffle, so the server already says how its content
+		// plays.
+		"playback.transition", "playback.transition_ms", "playback.image_duration",
+		"playback.shuffle", "playback.nightly_restart",
+		// The server gates which release is approved (D28). Whether this device
+		// installs it without a person belongs to the owner of the screen.
+		"updates.auto",
 		"server.url", "server.token", "server.poll_seconds",
 		"web.port", "web.password", "ssh.enabled", "logging.persist",
 	}
