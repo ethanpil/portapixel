@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
+	"github.com/ethanpil/portapixel/internal/playlist"
 	"github.com/ethanpil/portapixel/internal/store"
 )
 
@@ -255,6 +256,11 @@ func (s *Store) Delete(sha string) error {
 // http.DetectContentType, which reads the first bytes of the file.
 func TypeOf(origName, path string) string {
 	if ext := strings.ToLower(filepath.Ext(origName)); ext != "" {
+		// The project table answers first. Alpine has no /etc/mime.types, so the
+		// mime package alone knows almost no extension there.
+		if kind := playlist.MediaType(ext); kind != "" {
+			return kind
+		}
 		if kind := mime.TypeByExtension(ext); kind != "" {
 			return kind
 		}
