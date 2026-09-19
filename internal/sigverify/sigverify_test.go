@@ -3,6 +3,7 @@ package sigverify
 import (
 	"bytes"
 	"crypto/rand"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -157,15 +158,35 @@ func TestVerifyFile(t *testing.T) {
 					f := newFixture(t, hashed)
 					tt.change(t, &f)
 					err := VerifyFile(f.path, f.sigPath, f.key)
-					if tt.wantErr && err == nil {
+					// A legacy signature never passes, whatever else is right.
+					wantErr := tt.wantErr || !hashed
+					if wantErr && err == nil {
 						t.Fatal("want an error, got nil")
 					}
-					if !tt.wantErr && err != nil {
+					if !wantErr && err != nil {
 						t.Fatalf("want no error, got %v", err)
 					}
 				})
 			}
 		})
+	}
+}
+
+// TestVerifyFileRefusesALegacySignature makes sure the refusal is a refusal of
+// the algorithm and not an accident of a broken fixture. A legacy signature is
+// of the file itself, so the check would read a whole release binary into the
+// memory of a 512 MB device on a path that the unchecked .minisig chooses.
+func TestVerifyFileRefusesALegacySignature(t *testing.T) {
+	f := newFixture(t, false)
+	err := VerifyFile(f.path, f.sigPath, f.key)
+	if !errors.Is(err, ErrLegacySignature) {
+		t.Fatalf("a good legacy signature gave %v, want ErrLegacySignature", err)
+	}
+
+	// The prehashed signature of the same file still passes.
+	g := newFixture(t, true)
+	if err := VerifyFile(g.path, g.sigPath, g.key); err != nil {
+		t.Fatalf("a prehashed signature must pass: %v", err)
 	}
 }
 

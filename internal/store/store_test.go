@@ -54,15 +54,39 @@ func TestObjectName(t *testing.T) {
 		sha      string
 		origName string
 		want     string
+		wantErr  bool
 	}{
 		{name: "full hash", sha: sha, origName: "welcome.jpg", want: "abababab-welcome.jpg"},
-		{name: "upper case hash", sha: strings.ToUpper(sha), origName: "a.png", want: "abababab-a.png"},
-		{name: "short hash", sha: "abcd", origName: "a.png", want: "abcd-a.png"},
 		{name: "bad name", sha: sha, origName: "../a b.mp4", want: "abababab-a-b.mp4"},
+
+		// The sha comes from the fleet manifest. Every one of these would put
+		// the object somewhere else, or would name it after nothing.
+		{name: "a parent step", sha: "../../..", origName: "a.jpg", wantErr: true},
+		{name: "a parent step in a full-length value", sha: strings.Repeat("../", 21) + "x", origName: "a.jpg", wantErr: true},
+		{name: "a path separator", sha: strings.Repeat("a", 32) + "/" + strings.Repeat("b", 31), origName: "a.jpg", wantErr: true},
+		{name: "upper case", sha: strings.ToUpper(sha), origName: "a.png", wantErr: true},
+		{name: "too short", sha: "abcd", origName: "a.png", wantErr: true},
+		{name: "one character short", sha: sha[:63], origName: "a.png", wantErr: true},
+		{name: "one character too long", sha: sha + "a", origName: "a.png", wantErr: true},
+		{name: "empty", sha: "", origName: "a.png", wantErr: true},
+		{name: "a letter that is not hex", sha: strings.Repeat("ag", 32), origName: "a.png", wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := ObjectName(tt.sha, tt.origName); got != tt.want {
+			got, err := ObjectName(tt.sha, tt.origName)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ObjectName(%q, %q) = %q, want an error", tt.sha, tt.origName, got)
+				}
+				if got != "" {
+					t.Fatalf("a refused sha gave the name %q, want an empty name", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ObjectName(%q, %q): %v", tt.sha, tt.origName, err)
+			}
+			if got != tt.want {
 				t.Fatalf("ObjectName(%q, %q) = %q, want %q", tt.sha, tt.origName, got, tt.want)
 			}
 		})

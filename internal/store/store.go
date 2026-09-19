@@ -17,12 +17,31 @@ const maxNameLen = 64
 // ObjectName gives the file name of one object in the store:
 // <first 8 hex of the sha>-<safe name>. The device keeps fleet objects at
 // _fleet/media/<this name>.
-func ObjectName(sha, origName string) string {
-	short := strings.ToLower(sha)
-	if len(short) > 8 {
-		short = short[:8]
+//
+// The sha must be 64 lower case hex characters. It comes from the fleet
+// manifest, which is not trusted input: a value such as "../../.." would put
+// the object outside the store. The caller skips an item that gives an error
+// here and writes an ops log line.
+func ObjectName(sha, origName string) (string, error) {
+	if !isSHA256(sha) {
+		return "", fmt.Errorf("%q is not a SHA-256 value of 64 lower case hex characters", sha)
 	}
-	return short + "-" + SafeName(origName)
+	return sha[:8] + "-" + SafeName(origName), nil
+}
+
+// isSHA256 reports if sha is 64 lower case hex characters. HashFile gives that
+// form, so the two ends of a download compare the same thing.
+func isSHA256(sha string) bool {
+	if len(sha) != 64 {
+		return false
+	}
+	for i := 0; i < len(sha); i++ {
+		c := sha[i]
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 // SafeName makes a file name that every filesystem accepts. It keeps letters,
