@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Add the device admin UI and its development server.
 - Add the QEMU boot test and the builder VM.
 - Add the image builder, the boot files, the OpenRC services and first boot.
 - Add the package list and the installer. Each name is checked on Alpine 3.23.2.
