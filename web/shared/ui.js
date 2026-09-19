@@ -114,6 +114,25 @@ export function fmtDuration(seconds) {
   return s ? `${m}m ${s}s` : `${m}m`;
 }
 
+/** The temperature as a short string. */
+export function fmtTemp(c) {
+  const n = Number(c);
+  if (!n) return '—';
+  return `${n.toFixed(1)} °C`;
+}
+
+/** The kind of a file from its name, for an item that carries no kind.
+    Keep the two extension lists the same as imageExt and videoExt in
+    internal/playlist/kind.go: a file that Go calls unknown is a file that the
+    player skips, and both UIs must say so. */
+export function guessKind(name) {
+  const n = String(name || '');
+  if (/^https?:\/\//i.test(n)) return 'url';
+  if (/\.(mp4|m4v|mov|webm|mkv|ogv)$/i.test(n)) return 'video';
+  if (/\.(jpg|jpeg|png|gif|webp|avif|bmp|svg)$/i.test(n)) return 'image';
+  return 'unknown';
+}
+
 /** How long ago a time was, for example "40 seconds ago". */
 export function fmtAgo(when) {
   const t = when instanceof Date ? when.getTime() : Date.parse(when);
@@ -167,12 +186,14 @@ export function factList(pairs) {
   }));
 }
 
-/** A progress bar. The returned element carries set(value) for 0 to 1. */
+/** A progress bar. The returned element carries set(value) for 0 to 1.
+    opts: {thin, brand, label}. The role needs a name, so give it one. */
 export function progress(value = 0, opts = {}) {
   const bar = h('div', { class: 'pp-progress__bar' });
   const el = h('div', {
     class: `pp-progress${opts.thin ? ' pp-progress--thin' : ''}${opts.brand ? ' pp-progress--brand' : ''}`,
     role: 'progressbar', 'aria-valuemin': '0', 'aria-valuemax': '100',
+    'aria-label': opts.label || 'Progress',
   }, bar);
   el.set = (v) => {
     const pct = Math.round(Math.min(1, Math.max(0, Number(v) || 0)) * 100);
@@ -186,6 +207,146 @@ export function progress(value = 0, opts = {}) {
 /** A spinner. Give it a label so a screen reader says what it waits for. */
 export function spinner(label) {
   return h('span', { class: 'pp-spinner', role: 'status', 'aria-label': label || 'Working' });
+}
+
+/* -------------------------------------------------------- Page furniture */
+
+/** The title block of a page. `right` goes on the other end of the line. */
+export function pageHead(title, lead, right) {
+  return h('div', { class: 'pp-page-head' },
+    h('div', { style: { 'min-width': 'min(260px, 100%)' } },
+      h('h1', { class: 'pp-h1', text: title }),
+      lead ? h('p', { class: 'pp-lead' }, lead) : null),
+    right || null);
+}
+
+/** A card with a head, a body and an optional footer bar. The title is a real
+    heading, so a person with a screen reader can go from card to card. */
+export function card({ title, meta, body, foot, cls } = {}) {
+  return h('div', { class: `pp-card${cls ? ` ${cls}` : ''}` },
+    title ? h('div', { class: 'pp-card__head' },
+      h('h2', { class: 'pp-h2' }, title),
+      meta ? h('div', { class: 'pp-card__meta' }, meta) : null) : null,
+    body ? h('div', { class: 'pp-card__body' }, body) : null,
+    foot ? h('div', { class: 'pp-card__foot' }, foot) : null);
+}
+
+/** Write text only when it is different. Both UIs refresh on a timer, and a
+    write that changes nothing would still make the browser lay the line out
+    again and lose a selection in the text. */
+export function setText(el, text) {
+  const next = text === null || text === undefined ? '' : String(text);
+  if (el.textContent !== next) el.textContent = next;
+}
+
+/** Show or hide an element without moving anything else. */
+export function setShown(el, shown) {
+  if (el.hidden === !shown) return;
+  el.hidden = !shown;
+}
+
+/** Set a class only when it must change. */
+export function setClass(el, name, on) {
+  if (el.classList.contains(name) === !!on) return;
+  el.classList.toggle(name, !!on);
+}
+
+/* ----------------------------------------------------------------- Errors */
+
+/** The sentence to show for a failed call. A 422 answer carries one message
+    for each field, and a toast can hold two or three of them. */
+export function errorText(err) {
+  const fields = err && err.fields;
+  if (!fields || fields.length === 0) return (err && err.message) || 'That did not work.';
+  const parts = fields.slice(0, 3).map((f) => `${f.field}: ${f.message}`);
+  if (fields.length > 3) parts.push(`and ${fields.length - 3} more`);
+  return parts.join('; ');
+}
+
+/* --------------------------------------------------------- Days and times */
+
+export const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+const DAY_INITIAL = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+const DAY_FULL = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+
+/** Seven toggle chips. An empty list means every day, which is what both
+    schedulers do with it, so all seven chips show as pressed.
+    Returns the element; it carries read(), set(days) and setDisabled(value). */
+export function dayChips({ days = [], disabled = false, onChange } = {}) {
+  let picked = new Set(days.length ? days : DAYS);
+  let off = disabled;
+  const el = h('div', { class: 'pp-days', role: 'group', 'aria-label': 'Days' });
+
+  // The buttons are made one time and only their state changes. A row that was
+  // built again at each click would take the keyboard away from the chip that
+  // the person just pressed.
+  const buttons = DAYS.map((d, i) => h('button', {
+    type: 'button', class: 'pp-day', text: DAY_INITIAL[i], title: DAY_FULL[i],
+    'aria-label': DAY_FULL[i],
+    onClick: () => {
+      // A rule with no day at all means "every day", which is not what an empty
+      // row of chips looks like. So the last day stays.
+      if (picked.has(d) && picked.size === 1) return;
+      if (picked.has(d)) picked.delete(d); else picked.add(d);
+      draw();
+      if (onChange) onChange(el.read());
+    },
+  }));
+  el.append(...buttons);
+
+  function draw() {
+    buttons.forEach((b, i) => {
+      b.setAttribute('aria-pressed', String(picked.has(DAYS[i])));
+      b.disabled = off;
+    });
+  }
+
+  // All seven days go back as an empty list: that is how both ends say "every
+  // day", and a save must not turn it into seven names.
+  el.read = () => (picked.size === 7 ? [] : DAYS.filter((d) => picked.has(d)));
+  el.set = (next) => { picked = new Set(next && next.length ? next : DAYS); draw(); };
+  el.setDisabled = (value) => { off = !!value; draw(); };
+  draw();
+  return el;
+}
+
+/** The list of days in words, for a line of help text. */
+export function daysInWords(days) {
+  if (!days || days.length === 0 || days.length === 7) return 'every day';
+  if (days.length === 5 && DAYS.slice(0, 5).every((d) => days.includes(d))) return 'Mon to Fri';
+  if (days.length === 2 && days.includes('sat') && days.includes('sun')) return 'Sat and Sun';
+  return DAYS.filter((d) => days.includes(d)).map((d) => d[0].toUpperCase() + d.slice(1)).join(', ');
+}
+
+/** "HH:MM" as minutes after midnight, or null. */
+export function toMinutes(value) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(value || '').trim());
+  if (!m) return null;
+  const hours = Number(m[1]);
+  const mins = Number(m[2]);
+  if (hours > 23 || mins > 59) return null;
+  return hours * 60 + mins;
+}
+
+/** An empty day list means every day. Day 0 is Monday, as in the wire format. */
+export function dayPermitted(days, weekday) {
+  if (!days || days.length === 0) return true;
+  return days.includes(DAYS[weekday]);
+}
+
+/** Does a rule cover this moment? This is the rule that the device scheduler
+    keeps (internal/device/scheduler): both times empty is the whole day, and a
+    window that ends before it starts goes past midnight, and then the hours
+    after midnight belong to the day before. */
+export function inWindow(start, end, minute, weekday, days) {
+  if (!String(start || '').trim() && !String(end || '').trim()) return dayPermitted(days, weekday);
+  const s = toMinutes(start);
+  const e = toMinutes(end);
+  if (s === null || e === null || s === e) return false;
+  if (s < e) return minute >= s && minute < e && dayPermitted(days, weekday);
+  if (minute >= s) return dayPermitted(days, weekday);
+  if (minute < e) return dayPermitted(days, (weekday + 6) % 7);
+  return false;
 }
 
 /* ----------------------------------------------------------------- Tables */
@@ -220,13 +381,17 @@ export function table({ columns, rows, empty, onRowClick, rowAlert, foot } = {})
     foot ? h('div', { class: 'pp-card__foot' }, foot) : null);
 }
 
-function cell(c, content) {
+/** One cell of a flex table. `c` takes {grow, mono, align, width, wrap}. A page
+    that builds its own rows uses this, so every table in both UIs keeps the same
+    column rules. */
+export function cell(c, content) {
   const cls = ['pp-cell'];
   if (c.grow) cls.push('pp-cell--grow');
   if (c.mono) cls.push('pp-cell--mono');
   if (c.align === 'right') cls.push('pp-cell--right');
   const el = h('span', { class: cls.join(' ') }, content);
   if (c.width && !c.grow) { el.style.flex = 'none'; el.style.width = c.width; }
+  if (c.wrap) el.style.whiteSpace = 'normal';
   return el;
 }
 
@@ -239,18 +404,21 @@ let toastTimer = 0;
     old one, as in the wireframes. Kind: info (default) or danger. */
 export function toast(msg, kind = 'info') {
   if (!toastEl) {
-    toastEl = h('div', { class: 'pp-toast', role: 'status', 'aria-live': 'polite' });
+    toastEl = h('div', { class: 'pp-toast', role: 'status', 'aria-live': 'polite', hidden: true });
     document.body.append(toastEl);
   }
   clearTimeout(toastTimer);
   toastEl.className = `pp-toast${kind === 'danger' ? ' pp-toast--danger' : ''}`;
-  toastEl.textContent = msg;
-  toastEl.style.display = '';
+  /* The live region must be in the layout BEFORE the text goes in. A region that
+     is hidden while it takes its text announces nothing, so a screen reader read
+     out only the first toast after a page load. */
+  toastEl.hidden = false;
   // Restart the entrance animation.
   toastEl.style.animation = 'none';
   void toastEl.offsetWidth;
   toastEl.style.animation = '';
-  toastTimer = setTimeout(() => { toastEl.style.display = 'none'; }, 2600);
+  toastEl.textContent = msg;
+  toastTimer = setTimeout(() => { toastEl.textContent = ''; toastEl.hidden = true; }, 2600);
 }
 
 /* ------------------------------------------------------------------ Modal */
@@ -321,6 +489,13 @@ export function modal({ title, body, actions, wide, onOpen } = {}) {
 function focusable(root) {
   return [...root.querySelectorAll('button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])')]
     .filter((el) => !el.disabled && el.offsetParent !== null);
+}
+
+/** Take the dialog off the screen, if one is open. The router calls it at every
+    page change and the login view calls it too: a dialog that stayed would run
+    an action from a page that is gone. It answers the caller with null. */
+export function closeModal() {
+  if (modalOpen) modalOpen(null);
 }
 
 /** Ask a yes or no question. Returns true when the user confirms. */
@@ -429,14 +604,16 @@ export function route(map, opts = {}) {
 /* ------------------------------------------------------------------ Shell */
 
 /** Build the top bar, the sidebar and the phone chip row that both admin UIs
-    share. Returns {el, main, topbar, sidebar}.
+    share. Returns {el, main, topbar, sidebar, chipnav}.
     brand:    the product name, default "PortaPixel"
+    brandSub: one muted word after the brand, so that nobody mistakes the two
+              UIs for each other. The control server passes "Control".
     subtitle: text or nodes next to the brand, after a divider
     tools:    nodes on the right of the top bar
     nav:      [{id, label}] — the id is the hash route and the data-nav value
     footer:   nodes for the block under the sidebar links
     wide:     true gives the wider main column the server UI uses */
-export function renderShell({ brand = 'PortaPixel', subtitle, tools, nav = [], footer, wide } = {}) {
+export function renderShell({ brand = 'PortaPixel', brandSub, subtitle, tools, nav = [], footer, wide } = {}) {
   const navButtons = () => nav.map((n) => h('a', {
     class: 'pp-nav__item', href: `#/${n.id}`, dataset: { nav: n.id }, text: n.label,
   }));
@@ -444,7 +621,8 @@ export function renderShell({ brand = 'PortaPixel', subtitle, tools, nav = [], f
   const topbar = h('div', { class: 'pp-topbar' },
     h('div', { class: 'pp-brand' },
       h('span', { class: 'pp-brand__mark' }),
-      h('span', { class: 'pp-brand__name', text: brand })),
+      h('span', { class: 'pp-brand__name', text: brand }),
+      brandSub ? h('span', { class: 'pp-brand__sub', text: brandSub }) : null),
     subtitle ? h('div', { class: 'pp-rule pp-hide-sm' }) : null,
     subtitle ? h('div', { class: 'pp-topbar__id pp-trunc' }, subtitle) : null,
     h('div', { class: 'pp-spacer' }),

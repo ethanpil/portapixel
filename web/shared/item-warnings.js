@@ -152,13 +152,18 @@ export const PREFIX = {
       opts: {mixed} — true when the playlist holds more than a URL item
              {extra} — sentences that the host page found itself, for example a
                        file that the device reports as missing. Each one is a
-                       string or a {prefix, text}. */
+                       string or a {prefix, text}.
+             {machine} — the words for the machine that the warning is about.
+                       The device UI leaves it out and gets "this box" or "this
+                       browser"; the fleet UI passes "some screens", because the
+                       report it gives is the whole fleet at its worst. */
 export function warningsFor(item, caps, tier, opts = {}) {
   const out = [];
   const push = (prefix, text) => out.push({ prefix, text });
   if (!item) return out;
   const kind = String(item.kind || '').toLowerCase();
-  const machine = caps && caps.source === 'device' ? 'this box' : 'this browser';
+  const machine = opts.machine
+    || (caps && caps.source === 'device' ? 'this box' : 'this browser');
   const effTier = tier || (caps && caps.tier) || null;
 
   if (kind === 'video') {

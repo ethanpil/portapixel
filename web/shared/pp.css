@@ -100,10 +100,13 @@
   --pp-border: oklch(0.90 0.008 85);
   --pp-border-2: oklch(0.93 0.008 85);
   --pp-border-faint: oklch(0.965 0.006 85);
+  /* A control boundary needs 3:1 against the surface. --pp-border is a
+     decorative rule at 1.3:1, so inputs and buttons take this one. */
+  --pp-border-strong: oklch(0.72 0.01 85);
   --pp-head: oklch(0.965 0.006 85);
   --pp-subtle: oklch(0.978 0.005 85);
   --pp-muted: oklch(0.52 0.010 80);
-  --pp-placeholder: oklch(0.68 0.01 80);
+  --pp-placeholder: oklch(0.58 0.01 80);
   --pp-ro-ink: oklch(0.45 0.01 80);
 
   /* Brand green ("moss") */
@@ -125,11 +128,11 @@
   /* Warning */
   --pp-warn-tint: oklch(0.965 0.045 78);
   --pp-warn-border: oklch(0.88 0.07 78);
-  --pp-warn: oklch(0.68 0.13 72);
-  --pp-warn-ink: oklch(0.42 0.04 70);
+  --pp-warn: oklch(0.68 0.13 72);          /* fills, borders and dots only */
+  --pp-warn-ink: oklch(0.42 0.04 70);      /* the warning colour for TEXT */
 
   /* Other states */
-  --pp-quiet: oklch(0.72 0.01 80);
+  --pp-quiet: oklch(0.62 0.01 80);
   --pp-stripe-a: oklch(0.92 0.008 85);
   --pp-stripe-b: oklch(0.955 0.006 85);
   --pp-toast-bg: oklch(0.26 0.012 80);
@@ -188,16 +191,17 @@
     --pp-surface: oklch(0.235 0.009 80);
     --pp-border: oklch(0.33 0.010 80);
     --pp-border-2: oklch(0.30 0.010 80);
+    --pp-border-strong: oklch(0.52 0.010 80);
     --pp-border-faint: oklch(0.275 0.009 80);
     --pp-head: oklch(0.275 0.009 80);
     --pp-subtle: oklch(0.255 0.009 80);
     --pp-muted: oklch(0.70 0.010 80);
-    --pp-placeholder: oklch(0.55 0.010 80);
-    --pp-ro-ink: oklch(0.62 0.010 80);
+    --pp-placeholder: oklch(0.68 0.010 80);
+    --pp-ro-ink: oklch(0.72 0.010 80);
 
     --pp-link: oklch(0.78 0.10 150);
     --pp-link-hover: oklch(0.86 0.10 150);
-    --pp-brand: oklch(0.56 0.105 150);
+    --pp-brand: oklch(0.50 0.105 150);
     --pp-brand-tint: oklch(0.30 0.045 150);
     --pp-brand-tint-border: oklch(0.41 0.06 150);
     --pp-brand-tint-ink: oklch(0.88 0.07 150);
@@ -205,7 +209,7 @@
 
     --pp-danger-tint: oklch(0.30 0.055 25);
     --pp-danger-border: oklch(0.43 0.08 25);
-    --pp-danger: oklch(0.56 0.16 25);
+    --pp-danger: oklch(0.68 0.16 25);
     --pp-danger-ink: oklch(0.88 0.04 30);
 
     --pp-warn-tint: oklch(0.31 0.05 78);
@@ -213,7 +217,7 @@
     --pp-warn: oklch(0.76 0.13 72);
     --pp-warn-ink: oklch(0.90 0.05 70);
 
-    --pp-quiet: oklch(0.55 0.010 80);
+    --pp-quiet: oklch(0.62 0.010 80);
     --pp-stripe-a: oklch(0.31 0.009 85);
     --pp-stripe-b: oklch(0.265 0.008 85);
     --pp-toast-bg: oklch(0.90 0.006 85);
@@ -229,6 +233,13 @@
 /* ------------------------------------------------- 4. Reset and base */
 
 * { box-sizing: border-box; }
+
+/* The top bar is sticky, and so is the save bar. Without this, a field that the
+   keyboard or scrollIntoView() brings up lands under one of them. */
+html {
+  scroll-padding-top: calc(var(--pp-topbar-h) + var(--pp-space-3));
+  scroll-padding-bottom: 80px;
+}
 
 /* A class that sets display is stronger than the browser rule for [hidden]. */
 [hidden] { display: none !important; }
@@ -279,6 +290,8 @@ img, svg { display: block; max-width: 100%; }
 .pp-rule { width: 1px; height: 22px; flex: none; background: var(--pp-border); }
 .pp-topbar__id { display: flex; align-items: baseline; gap: var(--pp-space-4); min-width: 0; }
 .pp-topbar__id > :first-child { font-weight: 500; }
+/* text-overflow never applies to a flex container, so the children carry it. */
+.pp-topbar__id > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pp-topbar__tools { display: flex; align-items: center; gap: var(--pp-space-3); }
 
 .pp-shell { display: flex; flex: 1; align-items: flex-start; }
@@ -374,7 +387,7 @@ img, svg { display: block; max-width: 100%; }
 .pp-facts__k { color: var(--pp-muted); }
 .pp-facts__v { font-family: var(--pp-mono); text-align: right; }
 .pp-facts__row--danger .pp-facts__v { color: var(--pp-danger); }
-.pp-facts__row--warn .pp-facts__v { color: var(--pp-warn); }
+.pp-facts__row--warn .pp-facts__v { color: var(--pp-warn-ink); }
 
 /* ------------------------------------------------------------- 9. Tables */
 /* Flex tables. Horizontal rules only: no column dividers, no zebra stripes. */
@@ -412,12 +425,17 @@ button.pp-table__row:hover { background: var(--pp-subtle); }
   border-radius: var(--pp-r-chip); font-size: var(--pp-fs-sm); color: var(--pp-danger-ink);
 }
 .pp-table__alert > span { flex: 1 1 220px; }
+/* The alert sits inside the min-width:max-content row container, so a long
+   sentence would set the width of every other row and give the fleet list a
+   horizontal scrollbar. Cap it and let it wrap. */
+.pp-table__alert { max-width: calc(100vw - 96px); }
+.pp-table__alert > span { white-space: normal; overflow-wrap: anywhere; }
 
 /* ------------------------------------------------------------ 10. Buttons */
 
 .pp-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: var(--pp-space-2);
-  border: 1px solid var(--pp-border); background: var(--pp-surface); color: var(--pp-ink);
+  border: 1px solid var(--pp-border-strong); background: var(--pp-surface); color: var(--pp-ink);
   padding: 7px 13px; border-radius: var(--pp-r-ctl);
   font-size: var(--pp-fs-body); line-height: 1.3; white-space: nowrap;
   text-decoration: none;
@@ -437,7 +455,7 @@ button.pp-table__row:hover { background: var(--pp-subtle); }
 .pp-btn--danger-outline:hover { background: var(--pp-danger-tint); color: var(--pp-danger); }
 .pp-btn--warn-outline { border-color: var(--pp-warn-border); color: var(--pp-warn-ink); background: var(--pp-surface); }
 .pp-btn--warn-outline:hover { background: var(--pp-warn-tint); }
-.pp-btn--ghost { border: 0; background: none; color: var(--pp-link); padding: 0; }
+.pp-btn--ghost { border: 0; background: none; color: var(--pp-link); padding: var(--pp-space-1) 2px; min-height: 24px; }
 .pp-btn--ghost:hover { background: none; color: var(--pp-link-hover); text-decoration: underline; }
 .pp-btn--dashed { border-style: dashed; border-color: oklch(0.80 0.01 85); color: var(--pp-muted); }
 .pp-btn--dashed:hover { color: var(--pp-ink); }
@@ -518,7 +536,6 @@ button.pp-table__row:hover { background: var(--pp-subtle); }
 .pp-dot--alert { background: var(--pp-danger); }
 .pp-dot--busy { background: var(--pp-warn); }
 .pp-dot--quiet { background: var(--pp-quiet); }
-.pp-dot--lg { width: var(--pp-space-4); height: var(--pp-space-4); }
 .pp-status { display: inline-flex; align-items: center; gap: var(--pp-space-3); font-size: var(--pp-fs-body); }
 
 /* Small square legend swatch. */
@@ -567,24 +584,25 @@ button.pp-table__row:hover { background: var(--pp-subtle); }
 .pp-label { display: block; font-size: var(--pp-fs-sm); color: var(--pp-muted); }
 .pp-label__hint { color: var(--pp-warn-ink); }
 
-.pp-input, .pp-select, .pp-textarea {
+.pp-input, .pp-select {
   display: block; width: 100%;
-  border: 1px solid var(--pp-border); border-radius: var(--pp-r-ctl);
+  border: 1px solid var(--pp-border-strong); border-radius: var(--pp-r-ctl);
   padding: 7px var(--pp-space-4); font-size: var(--pp-fs-lead);
   background: var(--pp-surface); color: var(--pp-ink);
 }
-.pp-label > .pp-input, .pp-label > .pp-select, .pp-label > .pp-textarea { margin-top: 5px; }
+.pp-label > .pp-input, .pp-label > .pp-select { margin-top: 5px; }
 .pp-input--mono, .pp-select--mono { font-family: var(--pp-mono); }
 .pp-input--sm { padding: 5px var(--pp-space-3); font-size: var(--pp-fs-body); border-radius: var(--pp-r-chip); }
-.pp-input--auto { width: auto; }
 .pp-input[readonly] {
   background: var(--pp-head); color: var(--pp-ro-ink); border-color: var(--pp-border-2);
 }
-.pp-input[disabled], .pp-select[disabled], .pp-textarea[disabled] {
+.pp-input[disabled], .pp-select[disabled] {
   cursor: not-allowed; background: var(--pp-head); color: var(--pp-ro-ink);
 }
 .pp-help { font-size: var(--pp-fs-sm); color: var(--pp-muted); margin-top: 5px; line-height: 1.5; }
-.pp-help .pp-mono { color: var(--pp-ink); }
+/* A data directory, an address or a hash has no space to break at, so it would
+   stick out of its card on a phone. */
+.pp-help .pp-mono { color: var(--pp-ink); overflow-wrap: anywhere; }
 .pp-error { font-size: var(--pp-fs-sm); color: var(--pp-danger); margin-top: 5px; }
 .pp-field--invalid .pp-input, .pp-field--invalid .pp-select { border-color: oklch(0.80 0.10 28); }
 .pp-field--warn .pp-input, .pp-field--warn .pp-select { border-color: var(--pp-warn-border); }
@@ -786,7 +804,9 @@ button.pp-tile { display: block; width: 100%; padding: 0; text-align: left; colo
 .pp-pe__sound { width: 62px; flex: none; font-size: var(--pp-fs-sm); color: var(--pp-muted); }
 .pp-pe__sound input { width: 14px; height: 14px; }
 .pp-pe__move { display: flex; flex-direction: column; gap: 1px; flex: none; }
-.pp-pe__move .pp-btn--icon { width: 24px; height: 16px; }
+/* These two are the only pointer route to a reorder, so they keep a real
+   target. 24px is the smallest that a finger finds. */
+.pp-pe__move .pp-btn--icon { width: 26px; height: 24px; }
 .pp-pe__sub { margin: 0 var(--pp-space-7) 11px 43px; }
 .pp-pe__warn {
   display: flex; gap: var(--pp-space-4); align-items: flex-start; flex-wrap: wrap;
@@ -812,6 +832,65 @@ button.pp-tile { display: block; width: 100%; padding: 0; text-align: left; colo
 .pp-pe__foot-left { display: flex; flex-direction: column; gap: var(--pp-space-3); min-width: 0; }
 .pp-pe__summary { font-size: var(--pp-fs-sm); color: var(--pp-muted); }
 .pp-pe__dirty { color: var(--pp-warn-ink); font-weight: 500; }
+
+/* ------------------------- 20b. Split layout, pickers, rules and the week */
+/* Both UIs put a narrow list beside a wide panel, both draw a picker row, both
+   draw a time-rule row, and both draw the weekly coverage grid. One copy. */
+
+.pp-split { display: flex; gap: var(--pp-space-6); align-items: flex-start; }
+.pp-split__side { flex: 0 0 244px; min-width: 0; }
+.pp-split__main { flex: 1 1 380px; min-width: 0; }
+
+/* One row of a picker list: a playlist, or a group. */
+.pp-pick {
+  display: block; width: 100%; text-align: left; border: 0; background: none;
+  color: inherit; padding: var(--pp-space-4) var(--pp-space-5);
+  border-bottom: 1px solid var(--pp-border-faint);
+}
+.pp-pick:last-of-type { border-bottom: 0; }
+.pp-pick:hover { background: var(--pp-subtle); }
+.pp-pick[aria-current='true'] { background: var(--pp-brand-tint); }
+.pp-pick[aria-current='true'] .pp-pick__name { color: var(--pp-brand-tint-ink); font-weight: 600; }
+.pp-pick__name {
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--pp-space-3); font-size: var(--pp-fs-lead);
+}
+.pp-pick__name > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pp-pick__count { font-family: var(--pp-mono); font-size: 12px; color: var(--pp-muted); flex: none; }
+.pp-pick__meta { font-size: var(--pp-fs-sm); color: var(--pp-muted); margin-top: 2px; }
+.pp-pick__tags { display: flex; gap: var(--pp-space-1); flex-wrap: wrap; margin-top: 5px; }
+
+/* A time-rule row. The columns stack on a phone. */
+.pp-rule {
+  display: flex; gap: var(--pp-space-5); align-items: flex-end; flex-wrap: wrap;
+  padding: var(--pp-space-5) var(--pp-space-7);
+  border-bottom: 1px solid var(--pp-border-faint);
+}
+.pp-rule__n {
+  flex: none; width: 20px; font-family: var(--pp-mono); font-size: 12px;
+  color: var(--pp-muted); padding-bottom: 7px;
+}
+.pp-rule__pl { flex: 1 1 180px; min-width: 150px; }
+.pp-rule__when { flex: none; }
+.pp-rule__times { display: flex; gap: var(--pp-space-2); flex: none; }
+/* Wide enough for a time field that a 12-hour locale draws with AM or PM. */
+.pp-rule__times .pp-input { width: 122px; }
+.pp-rule__acts { display: flex; gap: 2px; margin-left: auto; padding-bottom: 5px; }
+
+/* Weekly coverage grid: seven rows of twenty-four hours. The axis shows every
+   sixth hour, so the hidden rule must come first or it would win. */
+.pp-week { display: grid; grid-template-columns: 34px 1fr; gap: 3px var(--pp-space-3); align-items: center; }
+.pp-week__day { font-size: var(--pp-fs-xs); color: var(--pp-muted); }
+.pp-week__hours { display: grid; grid-template-columns: repeat(24, 1fr); gap: 2px; }
+.pp-week__cell { height: 14px; border-radius: 2px; background: var(--pp-head); }
+.pp-week__cell--on { background: var(--pp-brand); }
+.pp-week__axis { display: grid; grid-template-columns: repeat(24, 1fr); font-size: 10px; color: var(--pp-muted); margin-top: var(--pp-space-1); }
+.pp-week__axis span { visibility: hidden; }
+.pp-week__axis span:nth-child(6n+1) { visibility: visible; }
+
+/* A tile that is a link has to give back the ink and drop the underline. */
+a.pp-tile { display: block; color: var(--pp-ink); text-decoration: none; }
+a.pp-tile:hover { color: var(--pp-ink); border-color: var(--pp-brand-tint-border); background: var(--pp-subtle); }
 
 /* ----------------------------------------------------------- 21. Login page */
 
@@ -863,6 +942,8 @@ button.pp-tile { display: block; width: 100%; padding: 0; text-align: left; colo
     background: var(--pp-brand-tint); border-color: var(--pp-brand-tint-border);
   }
   .pp-shell { flex-direction: column; }
+  /* The chip row is sticky under the top bar on a phone. */
+  html { scroll-padding-top: calc(var(--pp-topbar-h) + 46px); }
   .pp-main { padding: var(--pp-space-7) var(--pp-space-6) 40px; max-width: 100%; }
   .pp-page-head { margin-bottom: var(--pp-space-6); }
   .pp-h1 { font-size: 19px; }
@@ -874,6 +955,10 @@ button.pp-tile { display: block; width: 100%; padding: 0; text-align: left; colo
   span.pp-pe__sound { display: none; }
   .pp-modal { padding: var(--pp-space-8); }
   .pp-grid { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: var(--pp-space-4); }
+  .pp-split { flex-direction: column; }
+  .pp-split__side, .pp-split__main { flex: 1 1 auto; width: 100%; }
+  .pp-rule { padding-left: var(--pp-space-5); padding-right: var(--pp-space-5); }
+  .pp-rule__acts { margin-left: 0; }
 }
 
 /* Chip nav is a real sidebar above this width. Keep it hidden. */
@@ -885,6 +970,8 @@ button.pp-tile { display: block; width: 100%; padding: 0; text-align: left; colo
 
 @media (prefers-reduced-motion: reduce) {
   .pp-modal, .pp-toast { animation: none; }
-  .pp-spinner { animation-duration: 2s; }
+  /* A ring that turns slowly is still motion. Show a still mark instead; the
+     role="status" label is what says that something is in progress. */
+  .pp-spinner { animation: none; border-color: var(--pp-brand); border-style: dotted; }
   * { transition-duration: 0.01ms !important; }
 }

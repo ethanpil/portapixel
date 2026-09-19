@@ -36,14 +36,16 @@ const ITEM_KEYS = ['file', 'sha256', 'url', 'name', 'kind', 'duration', 'mute',
                   upload() is the device path: it puts a file in the playlist.
     readOnly:     true shows the managed-by banner and disables everything.
     capabilities: {commentLossWarning, configFile, managedBy, folder, tier,
-                   decode, warnPrefix, warnAction, impact, saveLabel,
+                   decode, warnPrefix, warnMachine, warnAction, impact, saveLabel,
                    itemWarnings(item), libraryLabel, libraryEmpty}
                   itemWarnings(item) gives the warnings that only the host page
                   knows, for example a file that the device reports as missing.
                   Each one is a string or a {prefix, text}.
                   warnPrefix replaces the lead-in of EVERY warning. Leave it out
                   and each warning uses its own.
-    onSave(playlist):          must return a promise.
+    onSave(playlist):          must return a promise. Resolve it with the saved
+                  playlist and the editor adopts that answer, so a host page
+                  never has to draw the editor again after a save.
     onUpload(file, onProgress): overrides mediaSource.upload.
     onDirty(dirty):            called whenever the dirty state changes.
     Returns {destroy, getPlaylist, isDirty, setPlaylist, markClean}. */
@@ -56,6 +58,8 @@ export function mountPlaylistEditor(el, opts = {}) {
   let pl = adopt(opts.playlist);
   let clean = snapshot(pl);
   let dirty = false;
+  let gone = false;
+  const uploads = new Set();   // the uploads that are in flight
 
   /* ---- fixed parts ---- */
 
@@ -112,6 +116,7 @@ export function mountPlaylistEditor(el, opts = {}) {
 
   const fileInput = h('input', {
     type: 'file', multiple: true, class: 'pp-sr-only',
+    tabindex: '-1', 'aria-hidden': 'true',
     onChange: () => { uploadFiles([...fileInput.files]); fileInput.value = ''; },
   });
 
@@ -252,7 +257,7 @@ export function mountPlaylistEditor(el, opts = {}) {
   function renderSub(item, sub) {
     const mixed = pl.items.length > 1;
     const extra = caps.itemWarnings ? caps.itemWarnings(item) || [] : [];
-    const warns = warningsFor(item, caps.decode, caps.tier, { mixed, extra });
+    const warns = warningsFor(item, caps.decode, caps.tier, { mixed, extra, machine: caps.warnMachine });
     const parts = [];
 
     for (const w of warns) {
@@ -402,16 +407,21 @@ export function mountPlaylistEditor(el, opts = {}) {
   async function uploadFiles(files) {
     if (!uploader || files.length === 0) return;
     for (const file of files) {
+      if (gone) return;
       // progress() starts the bar at zero and carries the aria values. A bar
       // built by hand here has no width, which the stylesheet shows as full.
-      const bar = progress(0);
+      const bar = progress(0, { label: `Uploading ${file.name}` });
       bar.style.setProperty('margin-top', '6px');
       const line = h('div', { class: 'pp-pe__sub' },
         h('div', { class: 'pp-pe__note', text: `Uploading ${file.name} — ${fmtBytes(file.size)}` }),
         bar);
       itemsSlot.append(line);
       try {
-        const added = await uploader(file, (frac) => bar.set(frac));
+        const job = uploader(file, (frac) => bar.set(frac));
+        if (job && job.abort) uploads.add(job);
+        const added = await job;
+        uploads.delete(job);
+        if (gone) return;
         line.remove();
         // An uploader that gives nothing back has put the file in the playlist
         // folder under its own name.
@@ -543,9 +553,12 @@ export function mountPlaylistEditor(el, opts = {}) {
     // must still count as not saved.
     const sent = snapshot(pl);
     try {
-      await (opts.onSave ? opts.onSave(JSON.parse(sent)) : Promise.resolve());
-      clean = sent;
-      touch();
+      const saved = opts.onSave ? await opts.onSave(JSON.parse(sent)) : null;
+      // A host page that gives the saved playlist back gets it adopted here: the
+      // new item names, the new sizes and a clean baseline in one step. A host
+      // page that gives nothing back keeps what is on the screen.
+      if (saved && typeof saved === 'object') api.setPlaylist(saved);
+      else { clean = sent; touch(); }
     } catch (err) {
       toast(err.message || 'That did not save', 'danger');
     } finally {
@@ -578,7 +591,7 @@ export function mountPlaylistEditor(el, opts = {}) {
 
   function getPlaylist() { return JSON.parse(snapshot(pl)); }
 
-  return {
+  const api = {
     getPlaylist,
     isDirty: () => dirty,
     markClean,
@@ -590,8 +603,16 @@ export function mountPlaylistEditor(el, opts = {}) {
       render();
       if (opts.onDirty) opts.onDirty(false);
     },
-    destroy() { el.replaceChildren(); },
+    destroy() {
+      gone = true;
+      // An upload that is still in flight must not go on writing into nodes that
+      // are not on the page any more.
+      for (const job of uploads) job.abort();
+      uploads.clear();
+      el.replaceChildren();
+    },
   };
+  return api;
 }
 
 /* --------------------------------------------------------------- helpers */
