@@ -28,6 +28,9 @@ func TestBuildDefaultCommand(t *testing.T) {
 		"--ozone-platform=wayland",
 		"--remote-debugging-address=127.0.0.1",
 		"--remote-debugging-port=9222",
+		// Without this flag Chromium 111 and later refuse the DevTools socket of
+		// our own client, and rung 1 fails at the first navigation.
+		"--remote-allow-origins=http://127.0.0.1:9222",
 		"--autoplay-policy=no-user-gesture-required",
 		"--user-data-dir=/var/cache/kiosk/profile",
 		"--disk-cache-dir=/var/cache/kiosk/cache",
@@ -54,11 +57,27 @@ func TestBuildDefaultCommand(t *testing.T) {
 		"XDG_RUNTIME_DIR=/run/user/1300",
 		"WLR_LIBINPUT_NO_DEVICES=1",
 		"HOME=/var/cache/kiosk/home",
-		"WAYLAND_DISPLAY=" + WaylandDisplay,
 	} {
 		if !strings.Contains(env, want) {
 			t.Errorf("the environment has no %q: %v", want, cmd.Env)
 		}
+	}
+	// cage MUST NOT see WAYLAND_DISPLAY. wlroots then looks for a parent
+	// compositor, finds none, and the screen stays black.
+	if strings.Contains(env, "WAYLAND_DISPLAY=") {
+		t.Errorf("the environment of cage holds WAYLAND_DISPLAY: %v", cmd.Env)
+	}
+}
+
+// A program that joins the session from outside must find the socket.
+func TestToolEnvironmentHasTheWaylandDisplay(t *testing.T) {
+	cfg := CommandConfig{CacheDir: "/var/cache/kiosk", RuntimeDir: "/run/user/1300"}
+	cmd, err := cfg.Tool(context.Background(), "wlr-randr", "--output", "HDMI-A-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(cmd.Env, " "), "WAYLAND_DISPLAY="+WaylandDisplay) {
+		t.Errorf("a tool has no WAYLAND_DISPLAY: %v", cmd.Env)
 	}
 }
 
