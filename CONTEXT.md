@@ -47,6 +47,36 @@ something that cost you time. Remove an entry when it is no longer true.
 - `swclock` is part of the `openrc` package. `cec-ctl` is in `v4l-utils`. `sgdisk` is its
   own package. `intel-ucode`, `amd-ucode`, `syslinux`, `intel-media-driver` and
   `libva-intel-driver` are x86_64 only.
+- Alpine 3.23 has apk-tools 3, not apk 2. `--initdb` is an option of `add`. `--root` is
+  `-p`. For another architecture, apk needs the keys from `/usr/share/apk/keys/<arch>/`.
+  The x86_64 keys refuse the aarch64 index as UNTRUSTED.
+- Alpine 3.23 puts each OpenRC script in a `-openrc` subpackage, for example
+  `openssh-server-common-openrc`, `busybox-openrc`, `chrony-openrc`, `seatd-openrc`.
+  Without it, `rc-update add` fails.
+- Firmware names: iwlwifi is in `linux-firmware-intel`. nouveau uses
+  `linux-firmware-nvidia`. mt76 is in `linux-firmware-mediatek`. PCIe ath9k needs no
+  firmware. `partx` is its own package. `partprobe` is in `parted`.
+- The mkinitfs feature for SATA is `ata`. There is no `sata` feature.
+- Do not add the `kms` mkinitfs feature. It copies all GPU firmware into the initramfs
+  (167 MB against 18.5 MB). The root filesystem loads the GPU driver later.
+- `ifupdown-ng` fails when `/etc/network/interfaces` does not exist. Then `networking`
+  fails and OpenRC does not start `chronyd`. `install.sh` writes a safe DHCP default.
+- `syslinux --install` changes the FAT boot sector but not its backup copy, so
+  `fsck.vfat` reports a fault at each boot. The fstab pass number of PPBOOT is 0.
+- busybox `blkid` takes no options. Use `findfs LABEL=...` in shell scripts.
+- Name the clock service for each architecture: `hwclock` on x86_64, `swclock` on
+  aarch64. The two provide `clock`. If it is implicit, OpenRC makes the choice.
+- `install.sh` makes the `seat` group. The post-install script of `seatd` cannot run for
+  another architecture.
+- With UEFI, the firmware framebuffer takes `/dev/dri/card0` and the GPU is `card1`. Do
+  not write `card0` into code.
+- QEMU needs the package `qemu-hw-display-virtio-vga` to give the guest a DRM device.
+- The x86_64 root filesystem is 1488 MB with Chromium, 41 % of the 3.5 GB PPROOT.
+- The aarch64 build needs qemu-user binfmt on the build host (plan section 17). Without
+  it the apk triggers fail with `Exec format error`. GitHub Actions has it. The test
+  container does not.
+- A container has no loop devices. `tests/qemu/builder-vm.sh` builds an image in a KVM
+  guest.
 - The Pi Zero 2 W (512 MB) is now marginal, because Chromium uses more RAM than WPE.
   Test it on real hardware before we promise it.
 
