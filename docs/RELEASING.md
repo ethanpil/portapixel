@@ -27,6 +27,22 @@ here would roll every good release back and mark it bad for ever (D47).
 
 Never edit the version anywhere else. The tag is the only place.
 
+Both binaries say which version they are in two forms, and the two have two
+readers:
+
+```
+portapixeld version          portapixeld 0.1.0 amd64
+portapixeld version --json   {"name":"portapixeld","version":"0.1.0","arch":"amd64"}
+```
+
+The line with no flag is for a person and a log. The JSON is the form that a
+program reads: `internal/updater` runs `version --json` on a staged release and
+checks the version AND the processor against the release that the source named.
+A program must never take a field of the human line by its position. The first
+reader took the LAST field, so it compared the processor name with the release
+name and every download and every sideload failed at the cross-check with "the
+release says it is amd64".
+
 ## 2. Cut a release
 
 1. Put the changes at the top of `CHANGELOG.md`. The release note is the top
@@ -136,7 +152,7 @@ The pipeline holds these rules:
 | `images` (x86_64, aarch64) | `os/build-image.sh` makes a bootable image from the exact Alpine release, PPROOT leaves room for a second release, the initramfs finds USB, SD, eMMC, NVMe and SATA (D53), and the package manifest is there (D50) |
 | `smoke-x86` (bios, uefi) | the x86_64 image boots under SeaBIOS and under OVMF, `/api/status` answers on port 80, and the browser session comes up |
 | `smoke-arm` | the aarch64 image holds a daemon that starts and passes `selftest` under qemu-user, the display packages are in it, the overlay is in place, and PPBOOT holds every Pi firmware file |
-| `smoke-update` | the A/B update path with the real binary and the real health gate: a signed release is installed and swapped, the daemon writes `<VERSION>.ok`, a release with no marker is rolled back and marked bad, and an unsigned release, a release with another key, a legacy signature and a changed binary are all refused before the flip |
+| `smoke-update` | the A/B update path with the real binary and the real health gate: a signed release is installed and swapped, the daemon writes `<VERSION>.ok`, twenty starts of the gate and the daemon together all pass in either order, a release with no marker is rolled back and marked bad, and an unsigned release, a release with another key, a legacy signature and a changed binary are all refused before the flip |
 | `server` | the server route tests pass, the Docker image builds for both architectures, it goes to GHCR, and it runs and answers |
 | `smoke-vanilla-install` | `os/install.sh` puts PortaPixel on a stock Alpine box, live, as root, and the box answers after a reboot (D51). It is NOT blocking: it boots two virtual machines and it is the longest job |
 | `release` | every deliverable is present, and one GitHub Release holds them |
@@ -173,8 +189,8 @@ These are measured times from run 35432531114 on hosted runners.
 | `images` | 3.5 minutes (aarch64) to 5 minutes (x86_64). The gzip step is half of it |
 | `smoke-x86` | 90 seconds (BIOS) to 2 minutes (UEFI), with KVM |
 | `smoke-arm` | 45 seconds |
-| `smoke-update` | 45 seconds |
-| `server` | 7.5 minutes. The arm64 container builds under emulation |
+| `smoke-update` | 45 seconds, plus about 35 seconds for the twenty starts of the gate and the daemon |
+| `server` | 7.5 minutes in run 35432531114, when the arm64 container built its Go binary under emulation. `deploy/Dockerfile` now builds that stage on the native platform of the runner and cross-compiles, so this time must be measured again |
 | `smoke-vanilla-install` | 15 to 40 minutes |
 | `release` | 2 to 4 minutes |
 

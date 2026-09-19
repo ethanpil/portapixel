@@ -8,6 +8,8 @@
 // What it proves:
 //   - a release that a key signs is installed, and current points at it;
 //   - the daemon writes health/<VERSION>.ok, and the gate then passes;
+//   - twenty starts of the gate and the daemon together all pass, so the order of
+//     the two cannot decide the answer;
 //   - a release that writes no marker is rolled back, marked bad and restarted;
 //   - an unsigned release, a release with another key, a legacy signature and a
 //     changed binary are all refused BEFORE the symlink flip (D47, plan 18).
@@ -22,6 +24,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -228,7 +231,7 @@ func currentTarget(t *testing.T, root string) string {
 
 // manager makes a Manager for a release root. binaryVersion nil keeps the
 // PRODUCTION path, which runs the staged binary and reads what it prints.
-func manager(t *testing.T, root, publicKey string, binaryVersion func(string) (string, error)) *updater.Manager {
+func manager(t *testing.T, root, publicKey string, binaryVersion func(string) (updater.BinaryInfo, error)) *updater.Manager {
 	t.Helper()
 	return updater.New(updater.Options{
 		Root:          root,
@@ -267,7 +270,7 @@ func TestSwapAndHealthGate(t *testing.T) {
 
 	// ---------------------------------------------------------------- 1. the flip
 	// The PRODUCTION version reader runs here: Options.BinaryVersion is nil, so
-	// the updater runs the staged binary and reads the version that it prints.
+	// the updater runs the staged binary and reads what it says about itself.
 	// This is the cross-check of final-review item 19 and it must work with the
 	// real binary, not only with a test double.
 	t.Run("production version reader", func(t *testing.T) {
@@ -278,8 +281,10 @@ func TestSwapAndHealthGate(t *testing.T) {
 		defer cancel()
 		if err := m.Apply(ctx, rel); err != nil {
 			t.Errorf("Apply with the production version reader failed: %v\n"+
-				"The binary prints \"portapixeld <version> <arch>\" and internal/updater\n"+
-				"readVersion takes the LAST field, so it reads the architecture.", err)
+				"The binary answers \"version --json\" with {name, version, arch}, and\n"+
+				"internal/updater readBinaryInfo reads that form. A reader that takes a\n"+
+				"field of the human line by its position compares the processor name\n"+
+				"with the release name.", err)
 			return
 		}
 		if got, want := currentTarget(t, root), updater.ReleasesDir+"/"+newVersion; got != want {
@@ -287,19 +292,26 @@ func TestSwapAndHealthGate(t *testing.T) {
 		}
 	})
 
-	// From here the test gives the version reader that the release workflow
-	// proves separately (the second field of "portapixeld <version> <arch>"), so
-	// that one fault cannot hide the rest of the path.
-	readVersion := func(path string) (string, error) {
-		out, err := exec.Command(path, "version").Output()
+	// From here the test gives a version reader of its own, so that one fault in
+	// the production reader cannot hide the rest of the path. It reads the same
+	// JSON, with its own decoder.
+	readVersion := func(path string) (updater.BinaryInfo, error) {
+		out, err := exec.Command(path, "version", "--json").Output()
 		if err != nil {
-			return "", err
+			return updater.BinaryInfo{}, err
 		}
-		fields := strings.Fields(string(out))
-		if len(fields) < 2 {
-			return "", errors.New("the binary printed no version")
+		var info struct {
+			Name    string `json:"name"`
+			Version string `json:"version"`
+			Arch    string `json:"arch"`
 		}
-		return fields[1], nil
+		if err := json.Unmarshal(out, &info); err != nil {
+			return updater.BinaryInfo{}, fmt.Errorf("the binary answered %q: %w", out, err)
+		}
+		if info.Version == "" || info.Arch == "" {
+			return updater.BinaryInfo{}, errors.New("the binary named no version and no processor")
+		}
+		return updater.BinaryInfo{Name: info.Name, Version: info.Version, Arch: info.Arch}, nil
 	}
 
 	t.Run("swap then health marker", func(t *testing.T) {
@@ -326,10 +338,10 @@ func TestSwapAndHealthGate(t *testing.T) {
 			t.Fatalf("the pending marker holds %q, want %q", pending, newVersion)
 		}
 
-		// The gate goes FIRST and the daemon second, the way the OpenRC service
-		// orders them: the gate arms itself in start_pre. The gate also removes a
-		// marker of an earlier install of the same version before it waits, so a
-		// marker that was already there proves nothing.
+		// The order of the OpenRC service: the arm step runs in start_pre and the
+		// start waits for it, then the gate waits in the background while the
+		// daemon comes up. prepareHealthGate does the arm step, which removes a
+		// marker of an earlier install of the same version.
 		gate, gateLog := prepareHealthGate(t, root, 90)
 		if err := gate.Start(); err != nil {
 			t.Fatalf("start the health gate: %v", err)
@@ -357,6 +369,87 @@ func TestSwapAndHealthGate(t *testing.T) {
 		if got, want := currentTarget(t, root), updater.ReleasesDir+"/"+newVersion; got != want {
 			t.Fatalf("the gate moved current to %q", got)
 		}
+	})
+
+	// The race that rolled a good release back. The gate and the daemon start at
+	// the same moment, twenty times. Before the fix the gate removed the health
+	// marker after it started, so a daemon that was quick lost its marker, the gate
+	// waited the whole timeout and marked a release that works bad for ever.
+	//
+	// Each round also leaves a STALE marker of the same version behind. The arm step
+	// must remove it, and the marker that the gate passes on must be the one that
+	// THIS daemon wrote.
+	t.Run("the gate and the daemon start together", func(t *testing.T) {
+		root := releaseRoot(t, oldBinary)
+		m := manager(t, root, publicKey, readVersion)
+		rel := good.serve(t)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		if err := m.Apply(ctx, rel); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		binary := filepath.Join(root, updater.ReleasesDir, newVersion, "portapixeld")
+		pending := filepath.Join(root, updater.PendingFile)
+		marker := filepath.Join(root, updater.HealthDir, newVersion+updater.OKSuffix)
+
+		const rounds = 20
+		for i := 1; i <= rounds; i++ {
+			// The state after an Apply: the pending marker names the new release.
+			// The first round already has it, and a round that passed removed it.
+			if err := os.WriteFile(pending, []byte(newVersion+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			// A marker of an earlier install of this same version. It proves
+			// nothing, so the arm step has to take it away.
+			if err := os.WriteFile(marker, []byte("a stale marker of an earlier boot\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			// The arm step runs inside prepareHealthGate, the way start_pre runs it
+			// before the service starts the daemon.
+			gate, gateLog := prepareHealthGate(t, root, 30)
+			var stop func()
+			if i%2 == 0 {
+				// The gate looks first and the daemon comes up while it waits.
+				if err := gate.Start(); err != nil {
+					t.Fatalf("round %d: start the health gate: %v", i, err)
+				}
+				stop = startDaemon(t, binary, root)
+			} else {
+				// The daemon WINS the race: its marker is on the disk before the
+				// gate looks at all. This is the order that rolled a good release
+				// back, because the gate removed the marker after it started.
+				stop = startDaemon(t, binary, root)
+				waitForMarker(t, marker)
+				if err := gate.Start(); err != nil {
+					t.Fatalf("round %d: start the health gate: %v", i, err)
+				}
+			}
+			rc := waitGate(t, gate)
+			body, readErr := os.ReadFile(marker)
+			stop()
+			if rc != 0 {
+				t.Fatalf("round %d: the health gate answered %d while the new daemon was up:\n%s",
+					i, rc, gateLog())
+			}
+			if readErr != nil {
+				t.Fatalf("round %d: the daemon wrote no health marker: %v", i, readErr)
+			}
+			// The daemon writes its own version, its pid and its start time. The
+			// stale line holds none of that, so a gate that passed on the stale
+			// marker fails here.
+			if !strings.Contains(string(body), "pid=") {
+				t.Fatalf("round %d: the gate passed on the marker %q, which this daemon did not write",
+					i, strings.TrimSpace(string(body)))
+			}
+			if _, err := os.Stat(pending); !os.IsNotExist(err) {
+				t.Fatalf("round %d: the gate left the pending marker in place", i)
+			}
+			if got, want := currentTarget(t, root), updater.ReleasesDir+"/"+newVersion; got != want {
+				t.Fatalf("round %d: the gate moved current to %q:\n%s", i, got, gateLog())
+			}
+		}
+		t.Logf("%d starts of the gate and the daemon together, no rollback", rounds)
 	})
 
 	t.Run("no marker rolls back", func(t *testing.T) {
@@ -482,7 +575,9 @@ func startDaemon(t *testing.T, binary, root string) func() {
 	cmd := exec.Command(binary, "run",
 		"--browser-cmd", "none",
 		"--kiosk-user", "",
-		"--listen", "127.0.0.1:18099",
+		// Port 0: the race test starts the daemon twenty times, and a fixed port
+		// can still be in the TIME_WAIT state of the round before.
+		"--listen", "127.0.0.1:0",
 		"--media", filepath.Join(work, "media"),
 		"--state", filepath.Join(work, "state"),
 		"--run", filepath.Join(work, "run"),
@@ -506,9 +601,13 @@ func startDaemon(t *testing.T, binary, root string) func() {
 	}
 }
 
-// prepareHealthGate builds the command that runs the real os/overlay
-// health-gate.sh against a release root. The caller starts it, because the gate
-// and the daemon run at the same time on a device.
+// prepareHealthGate arms the real os/overlay health-gate.sh against a release
+// root and builds the command of its wait mode. The caller starts that command,
+// because the gate and the daemon run at the same time on a device.
+//
+// The arm step runs HERE and it finishes before this function answers, the way
+// the OpenRC start_pre runs it before the service starts the daemon. It is the
+// one step that may remove a health marker.
 //
 // The script calls "rc-service portapixeld restart" after a rollback. The test
 // puts a stand-in for that command first in PATH, so the restart is recorded and
@@ -532,14 +631,22 @@ func prepareHealthGate(t *testing.T, root string, timeout int) (*exec.Cmd, func(
 	if err := os.MkdirAll(state, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command("sh", script)
-	cmd.Env = append(os.Environ(),
+	env := append(os.Environ(),
 		"PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
 		"PP_RELEASES="+root,
 		"PP_STATE="+state,
 		"PP_RUN="+filepath.Join(root, "run"),
 		fmt.Sprintf("PP_HEALTH_TIMEOUT=%d", timeout),
 	)
+
+	arm := exec.Command("sh", script, "arm")
+	arm.Env = env
+	if out, err := arm.CombinedOutput(); err != nil {
+		t.Fatalf("arm the health gate: %v\n%s", err, out)
+	}
+
+	cmd := exec.Command("sh", script, "wait")
+	cmd.Env = env
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out
@@ -547,6 +654,21 @@ func prepareHealthGate(t *testing.T, root string, timeout int) (*exec.Cmd, func(
 		log, _ := os.ReadFile(filepath.Join(state, "ops.log"))
 		return out.String() + string(log)
 	}
+}
+
+// waitForMarker waits until the daemon has written its health marker. The content
+// names the run that wrote it, so "pid=" tells the marker of this daemon from the
+// stale line that the test left behind.
+func waitForMarker(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(60 * time.Second)
+	for time.Now().Before(deadline) {
+		if body, err := os.ReadFile(path); err == nil && strings.Contains(string(body), "pid=") {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("the daemon wrote no health marker of its own")
 }
 
 // waitGate waits for the health gate and gives its exit code.

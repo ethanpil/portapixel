@@ -7,7 +7,8 @@
 #
 #   1. the daemon binary in the image starts and passes "selftest" under
 #      qemu-user, so the embedded web assets and the templates are there;
-#   2. "portapixeld version" prints the release that CI built;
+#   2. "portapixeld version" prints the release that CI built, and
+#      "portapixeld version --json" gives the form that the updater reads;
 #   3. the packages of the display stack are in the manifest (D50);
 #   4. the overlay files and the release layout are in place;
 #   5. PPBOOT holds every file that the Pi firmware needs.
@@ -141,6 +142,19 @@ say "version: $out"
 # updater builds the asset name from it (internal/version Arch).
 printf '%s' "$out" | grep -q "portapixeld $VERSION arm64" ||
 	die "the binary says \"$out\" and CI built $VERSION for arm64"
+
+# The machine-readable form, which is the one that internal/updater reads before
+# it installs a release (readBinaryInfo). The updater checks the version AND the
+# processor from it, so a binary that answers only the human line above refuses
+# every update on a real device.
+json="$(chroot "$R" /opt/portapixel/current/portapixeld version --json 2>&1)" ||
+	die "the aarch64 daemon does not answer \"version --json\":
+$json"
+say "version --json: $json"
+for want in "\"version\":\"$VERSION\"" "\"arch\":\"arm64\"" "\"name\":\"portapixeld\""; do
+	printf '%s' "$json" | grep -q "$want" ||
+		die "\"version --json\" says \"$json\" and it must hold $want"
+done
 
 out="$(chroot "$R" /opt/portapixel/current/portapixeld selftest 2>&1)" || {
 	printf '%s\n' "$out"
