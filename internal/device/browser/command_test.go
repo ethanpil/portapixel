@@ -1,6 +1,9 @@
 package browser
 
 import (
+	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -139,24 +142,80 @@ func TestTransformName(t *testing.T) {
 	}
 }
 
-func TestClockMinutes(t *testing.T) {
+// firstOutput reads the text of another program, so it must never stop the
+// daemon. A line of whitespace that is neither a space nor a tab passes the
+// first-character guard and gives no fields at all.
+func TestFirstOutput(t *testing.T) {
 	tests := []struct {
-		in   string
-		want int
+		name string
+		text string
+		want string
 		ok   bool
 	}{
-		{"03:30", 210, true},
-		{"00:00", 0, true},
-		{"23:59", 1439, true},
-		{"24:00", 0, false},
-		{"3:30", 0, false},
-		{"", 0, false},
-		{"ab:cd", 0, false},
+		{"the first output wins", "HDMI-A-1 \"Acme 27\"\n  Make: Acme\nDP-1 \"Other\"\n", "HDMI-A-1", true},
+		{"indented lines are skipped", "  Make: Acme\n\tMode: 1920x1080\nHDMI-A-2\n", "HDMI-A-2", true},
+		{"a carriage return alone is not an output", "\r\nHDMI-A-3\n", "HDMI-A-3", true},
+		{"a vertical tab alone is not an output", "\v\nHDMI-A-4\n", "HDMI-A-4", true},
+		{"a no-break space alone is not an output", " \nHDMI-A-5\n", "HDMI-A-5", true},
+		{"no output at all", "\v\n\f\n", "", false},
+		{"nothing", "", "", false},
 	}
 	for _, tt := range tests {
-		got, ok := clockMinutes(tt.in)
-		if ok != tt.ok || (ok && got != tt.want) {
-			t.Errorf("clockMinutes(%q) = %d, %v", tt.in, got, ok)
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := firstOutput(tt.text)
+			if (err == nil) != tt.ok {
+				t.Fatalf("firstOutput(%q) error = %v, want ok=%v", tt.text, err, tt.ok)
+			}
+			if got != tt.want {
+				t.Errorf("firstOutput(%q) = %q, want %q", tt.text, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRedactURL(t *testing.T) {
+	tests := []struct {
+		in   string
+		want string
+	}{
+		{"http://127.0.0.1:8099/player?k=abc123", "http://127.0.0.1:8099/player?k=REDACTED"},
+		{"http://127.0.0.1:8099/player?k=abc123&resume=3", "http://127.0.0.1:8099/player?k=REDACTED&resume=3"},
+		{"http://127.0.0.1:8099/player?resume=3&k=abc123", "http://127.0.0.1:8099/player?resume=3&k=REDACTED"},
+		{"https://dash.example.com/board", "https://dash.example.com/board"},
+		{"", ""},
+	}
+	for _, tt := range tests {
+		if got := RedactURL(tt.in); got != tt.want {
+			t.Errorf("RedactURL(%q) = %q, want %q", tt.in, got, tt.want)
+		}
+		if strings.Contains(RedactURL(tt.in), "abc123") {
+			t.Errorf("RedactURL(%q) still holds the secret", tt.in)
 		}
 	}
+}
+
+// waitForCompositor must not run wlr-randr before cage made its socket: the
+// rotation would be lost until the next launch.
+func TestWaitForCompositor(t *testing.T) {
+	t.Run("no runtime directory means no wait", func(t *testing.T) {
+		if err := waitForCompositor(context.Background(), ""); err != nil {
+			t.Fatalf("waitForCompositor with no runtime directory = %v", err)
+		}
+	})
+	t.Run("the socket is there", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, WaylandDisplay), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := waitForCompositor(context.Background(), dir); err != nil {
+			t.Fatalf("waitForCompositor = %v", err)
+		}
+	})
+	t.Run("a context that ends stops the wait", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if err := waitForCompositor(ctx, t.TempDir()); err == nil {
+			t.Fatal("waitForCompositor waited for a socket that will never come")
+		}
+	})
 }

@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"golang.org/x/net/websocket"
-
-	"github.com/ethanpil/portapixel/internal/opslog"
 )
 
 // Times of the DevTools Protocol.
@@ -32,7 +30,6 @@ const (
 type cdpNavigator struct {
 	proc     *launcher
 	endpoint string // for example http://127.0.0.1:9222
-	log      *opslog.Log
 
 	// startTimeout is how long Start waits for a page target. 0 uses
 	// cdpStartTimeout.
@@ -41,18 +38,17 @@ type cdpNavigator struct {
 	mu     sync.Mutex
 	conn   *websocket.Conn
 	nextID int64
-	lastOK string // the URL of the last navigation that the browser accepted
 }
 
 // newCDP makes rung 1.
-func newCDP(proc *launcher, endpoint string, timeout time.Duration, log *opslog.Log) *cdpNavigator {
+func newCDP(proc *launcher, endpoint string, timeout time.Duration) *cdpNavigator {
 	if timeout <= 0 {
 		timeout = cdpStartTimeout
 	}
-	return &cdpNavigator{proc: proc, endpoint: endpoint, startTimeout: timeout, log: log}
+	return &cdpNavigator{proc: proc, endpoint: endpoint, startTimeout: timeout}
 }
 
-func (n *cdpNavigator) Name() string { return "cdp" }
+func (n *cdpNavigator) Name() string { return RungCDP }
 
 // Start starts the browser and waits for a page target. An error means that the
 // protocol did not answer, and the supervisor then falls to rung 2. The browser
@@ -72,7 +68,6 @@ func (n *cdpNavigator) Start(ctx context.Context, url string) error {
 			return fmt.Errorf("the browser ended before the debug port answered: %s", n.proc.exitReason())
 		}
 		if _, err := pageTarget(wait, n.endpoint); err == nil {
-			n.setLast(url)
 			return nil
 		}
 		select {
@@ -85,11 +80,8 @@ func (n *cdpNavigator) Start(ctx context.Context, url string) error {
 
 // Navigate sends the browser to url.
 func (n *cdpNavigator) Navigate(ctx context.Context, url string) error {
-	if _, err := n.call(ctx, "Page.navigate", map[string]any{"url": url}); err != nil {
-		return err
-	}
-	n.setLast(url)
-	return nil
+	_, err := n.call(ctx, "Page.navigate", map[string]any{"url": url})
+	return err
 }
 
 // Reload loads the page again. A dashboard with a long dwell time needs it
@@ -208,12 +200,6 @@ func (n *cdpNavigator) dropConn() {
 	if conn != nil {
 		conn.Close()
 	}
-}
-
-func (n *cdpNavigator) setLast(url string) {
-	n.mu.Lock()
-	n.lastOK = url
-	n.mu.Unlock()
 }
 
 // pageTarget asks the browser for the WebSocket address of its page.

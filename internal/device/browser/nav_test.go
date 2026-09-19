@@ -187,7 +187,7 @@ func TestCDPRung(t *testing.T) {
 	browser := newCDPStub(t)
 	s := newStub(t)
 	proc := newLauncher(CommandConfig{Override: s.override}, testLog(t))
-	nav := newCDP(proc, browser.server.URL, 2*time.Second, testLog(t))
+	nav := newCDP(proc, browser.server.URL, 2*time.Second)
 	t.Cleanup(func() { nav.Stop() })
 
 	ctx := context.Background()
@@ -230,7 +230,7 @@ func TestCDPRung(t *testing.T) {
 func TestCDPReconnectsAfterALostSocket(t *testing.T) {
 	browser := newCDPStub(t)
 	proc := newLauncher(CommandConfig{Override: newStub(t).override}, testLog(t))
-	nav := newCDP(proc, browser.server.URL, 2*time.Second, testLog(t))
+	nav := newCDP(proc, browser.server.URL, 2*time.Second)
 	t.Cleanup(func() { nav.Stop() })
 
 	ctx := context.Background()
@@ -266,7 +266,7 @@ func TestCDPStartFailsWithNoPageTarget(t *testing.T) {
 	browser.mu.Unlock()
 
 	proc := newLauncher(CommandConfig{Override: newStub(t).override}, testLog(t))
-	nav := newCDP(proc, browser.server.URL, 2*time.Second, testLog(t))
+	nav := newCDP(proc, browser.server.URL, 2*time.Second)
 	t.Cleanup(func() { nav.Stop() })
 
 	// A short deadline: the real timeout is 45 seconds, which no test may take.
@@ -284,7 +284,7 @@ func TestCDPStartFailsWithNoPageTarget(t *testing.T) {
 func TestCDPCallFailsWhenTheBrowserIsGone(t *testing.T) {
 	browser := newCDPStub(t)
 	proc := newLauncher(CommandConfig{Override: newStub(t).override}, testLog(t))
-	nav := newCDP(proc, browser.server.URL, 2*time.Second, testLog(t))
+	nav := newCDP(proc, browser.server.URL, 2*time.Second)
 	if err := nav.Start(context.Background(), "http://x/"); err != nil {
 		t.Fatal(err)
 	}

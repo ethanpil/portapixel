@@ -117,21 +117,6 @@ func (l *launcher) lastURL() string {
 	return l.url
 }
 
-// exitCh gives a channel that closes when the browser ends. It gives a closed
-// channel when no browser runs, so a caller that waits on it never blocks for a
-// browser that is already gone.
-func (l *launcher) exitCh() <-chan struct{} {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.exited == nil {
-		closed := make(chan struct{})
-		close(closed)
-		return closed
-	}
-	return l.exited
-}
-
 // exitReason gives a short sentence about the last exit, with the end of the
 // browser's own output. It is for the ops log.
 func (l *launcher) exitReason() string {

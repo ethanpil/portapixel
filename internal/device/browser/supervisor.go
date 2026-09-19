@@ -2,11 +2,14 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
 )
@@ -24,10 +27,19 @@ const (
 	// nightly restart. After it, the restart happens in the middle of an item
 	// (plan 3.3).
 	graceTimeout = 60 * time.Second
-	// displayWaitMin and displayWaitMax are the backoff of the wait for a display
-	// (D44). The wait never counts toward the restart ladder.
-	displayWaitMin = 5 * time.Second
+	// displayProbeEvery is the time between two reads of the DRM connectors. It is
+	// also the shortest step of the wait backoff. The loop runs for months, and a
+	// read of /sys at every tick is a read that nobody needs. A hotplug is seen
+	// inside this time, which D44 permits.
+	displayProbeEvery = 5 * time.Second
+	// displayWaitMax is the longest step of the wait for a display (D44). The wait
+	// never counts toward the restart ladder.
 	displayWaitMax = 60 * time.Second
+	// launchRetryMin and launchRetryMax are the backoff of a launch that fails. A
+	// missing binary or a full tmpfs fails at every try. A try at every tick fills
+	// the ops log and trips the reboot rung in four seconds.
+	launchRetryMin = 5 * time.Second
+	launchRetryMax = 60 * time.Second
 	// kioskRetryMin and kioskRetryMax are the backoff of the retry of a single
 	// URL kiosk page that does not answer (D42).
 	kioskRetryMin = 10 * time.Second
@@ -38,6 +50,9 @@ const (
 	// log. A broken item in a loop sends its note every 5 seconds, and a log that
 	// holds one fault a thousand times holds nothing else (ARCHITECTURE 7a).
 	noteRepeat = time.Hour
+	// noteMemory is how many different notes the rate limit remembers. Two broken
+	// items that take turns are the case that one remembered note cannot hold.
+	noteMemory = 32
 )
 
 // The values of State.Browser. They are the words that /api/status uses.
@@ -48,6 +63,12 @@ const (
 	StateWaiting  = "waiting-for-display"
 	StateDisabled = "disabled"
 )
+
+// ErrBusy says that the command queue of the browser is full. The loop is inside
+// a navigation, and one more message would only make it later. A caller that
+// answers a person must report this: a command that says "done" and does nothing
+// is worse than an error.
+var ErrBusy = errors.New("the browser is busy; ask again in a moment")
 
 // Active is the playlist that must play now.
 type Active struct {
@@ -109,7 +130,8 @@ type Options struct {
 	Display func() DisplaySettings
 	// Reachable probes a URL item. A nil function uses the HTTP probe.
 	Reachable func(url string) bool
-	// Reboot reboots the device. It is rung 2 of the watchdog ladder.
+	// Reboot reboots the device. It is rung 2 of the watchdog ladder. A nil
+	// function becomes an ops log line, so the ladder always ends somewhere.
 	Reboot func(reason string)
 	// Grace asks the player for a good moment to restart. The player answers with
 	// POST /api/player/ready, which the daemon passes to Ready.
@@ -121,6 +143,9 @@ type Options struct {
 	ScreenOffCovers func(t time.Time) bool
 	// DRMRoot is where the display connectors are. "" uses /sys/class/drm.
 	DRMRoot string
+	// DisplayProbe is the time between two reads of the connectors. 0 uses
+	// displayProbeEvery. A test sets a short value.
+	DisplayProbe time.Duration
 	// CDPTimeout is how long the first launch waits for the DevTools port before
 	// it falls to rung 2. 0 uses 45 seconds, which a cold Chromium on a Pi Zero
 	// needs. A test sets a short value.
@@ -185,32 +210,44 @@ type Supervisor struct {
 
 	// Fields that the loop owns.
 	nav        Navigator
-	rungPicked bool
 	window     *urlWindow
 	kiosk      *kioskPage
 	target     string
 	expectExit bool
 	everUp     bool
-	waitDelay  time.Duration
-	waitUntil  time.Time
-	waitLogged bool
-	graceUntil time.Time
-	ready      bool
-	lastDay    string
+	// launchFailed says that the last launch did not start a browser. The retry
+	// then waits: one continuous fault is one step on the ladder, not one step
+	// for each tick.
+	launchFailed bool
+	launchDelay  time.Duration
+	launchNext   time.Time
+	// The display probe and its backoff.
+	probedAt    time.Time
+	probeNext   time.Time
+	lastDisplay bool
+	waitDelay   time.Duration
+	waitLogged  bool
+	// pendingRestart holds the reason of a restart that arrived while the screen
+	// was off. The resume starts a new browser, which is that restart.
+	pendingRestart string
+	graceUntil     time.Time
+	ready          bool
+	lastDay        string
+	badNightly     string
 
 	// Fields under the lock. Run writes them, and the HTTP handlers read them.
-	mu         sync.Mutex
-	wd         watchdog
-	state      string
-	rung       string
-	displayOK  bool
-	suspended  bool
-	restarts   int
-	lastErr    string
-	lastBeat   *Heartbeat
-	beatSince  time.Time
-	lastNote   string
-	lastNoteAt time.Time
+	mu        sync.Mutex
+	wd        watchdog
+	state     string
+	rung      string
+	displayOK bool
+	suspended bool
+	restarts  int
+	lastErr   string
+	lastBeat  *Heartbeat
+	beatSince time.Time
+	// notes remembers when each player note last went in the ops log.
+	notes map[string]time.Time
 }
 
 // New makes a Supervisor.
@@ -224,6 +261,9 @@ func New(opt Options) *Supervisor {
 	if opt.Tick <= 0 {
 		opt.Tick = defaultTick
 	}
+	if opt.DisplayProbe <= 0 {
+		opt.DisplayProbe = displayProbeEvery
+	}
 	if opt.Active == nil {
 		opt.Active = func() Active { return Active{} }
 	}
@@ -234,12 +274,22 @@ func New(opt Options) *Supervisor {
 		opt.PlayerURL = func(int) string { return "http://127.0.0.1/player" }
 	}
 	s := &Supervisor{
-		opt:       opt,
-		proc:      newLauncher(opt.Command, opt.Log),
-		cmds:      make(chan command, 8),
-		state:     StateStopped,
-		displayOK: true,
-		waitDelay: displayWaitMin,
+		opt:         opt,
+		proc:        newLauncher(opt.Command, opt.Log),
+		cmds:        make(chan command, 8),
+		state:       StateStopped,
+		displayOK:   true,
+		lastDisplay: true,
+		waitDelay:   opt.DisplayProbe,
+		launchDelay: launchRetryMin,
+		notes:       make(map[string]time.Time),
+	}
+	if s.opt.Reboot == nil {
+		// The ladder must always end somewhere. Without a reboot function the end
+		// is a line that a person can read.
+		s.opt.Reboot = func(reason string) {
+			s.log("browser.reboot.none", "no reboot function is wired: "+reason)
+		}
 	}
 	if opt.Command.Disabled() {
 		s.state = StateDisabled
@@ -250,6 +300,7 @@ func New(opt Options) *Supervisor {
 // Run drives the browser until done is closed. It is the only goroutine that
 // starts, stops or navigates the browser.
 func (s *Supervisor) Run(done <-chan struct{}) {
+	defer s.reportPanic()
 	t := time.NewTicker(s.opt.Tick)
 	defer t.Stop()
 	defer s.shutdown()
@@ -266,11 +317,39 @@ func (s *Supervisor) Run(done <-chan struct{}) {
 	}
 }
 
+// reportPanic writes a panic of the loop into the ops log and then lets it go on.
+//
+// A device that dies must say why. The ops log is on ext4, so a person reads the
+// line after the reboot. The panic then ends the process with a code that is not
+// zero, and the OpenRC supervisor starts the daemon again.
+func (s *Supervisor) reportPanic() {
+	r := recover()
+	if r == nil {
+		return
+	}
+	s.log("browser.panic", fmt.Sprintf("%v; %s", r, firstFrames(debug.Stack())))
+	panic(r)
+}
+
+// firstFrames keeps the top of a stack trace. The ops log trims at 1000 lines,
+// so a full trace would push out the lines that say what happened before.
+func firstFrames(stack []byte) string {
+	lines := strings.Split(string(stack), "\n")
+	if len(lines) > 12 {
+		lines = lines[:12]
+	}
+	return strings.Join(lines, " | ")
+}
+
 // Started reports if the browser reached a running state, or if the device is
-// waiting for a display. The daemon writes its health marker then: a device with
-// no display plugged in is healthy (plan section 15).
+// waiting for a display, or if the screen is off. The daemon writes its health
+// marker then: a device with no display plugged in, and a device in its night
+// hours, are both healthy (plan section 15).
 func (s *Supervisor) Started() bool {
 	st := s.State()
+	if st.Suspended {
+		return true
+	}
 	return st.Browser == StateRunning || st.Browser == StateWaiting || st.Browser == StateDisabled
 }
 
@@ -312,11 +391,7 @@ func (s *Supervisor) Heartbeat(hb Heartbeat) {
 	s.lastBeat = &copyOf
 	reason := s.wd.heartbeat(now, hb.Frames)
 	note := strings.TrimSpace(hb.Note)
-	logNote := note != "" && (note != s.lastNote || now.Sub(s.lastNoteAt) >= noteRepeat)
-	if logNote {
-		s.lastNote = note
-		s.lastNoteAt = now
-	}
+	logNote := note != "" && s.rememberNote(note, now)
 	s.mu.Unlock()
 
 	// The player says what it cannot do; the ops log is where a person reads it.
@@ -326,6 +401,28 @@ func (s *Supervisor) Heartbeat(hb Heartbeat) {
 	if reason != "" {
 		s.Restart(reason)
 	}
+}
+
+// rememberNote reports if a note may go in the ops log now, and records it. The
+// caller holds the lock.
+//
+// Every note has its own time, because two broken items that take turns would
+// beat a memory of one note and write a line at every heartbeat.
+func (s *Supervisor) rememberNote(note string, now time.Time) bool {
+	if last, seen := s.notes[note]; seen && now.Sub(last) < noteRepeat {
+		return false
+	}
+	if len(s.notes) >= noteMemory {
+		oldest, at := "", time.Time{}
+		for k, v := range s.notes {
+			if at.IsZero() || v.Before(at) {
+				oldest, at = k, v
+			}
+		}
+		delete(s.notes, oldest)
+	}
+	s.notes[note] = now
+	return true
 }
 
 // URLItem takes over the browser for a URL item (ARCHITECTURE 7a). It gives
@@ -346,28 +443,34 @@ func (s *Supervisor) URLItem(url string, dwellSeconds, refreshSeconds, resume in
 		s.log("browser.url.skip", url+" does not answer")
 		return true
 	}
-	s.send(command{
+	if !s.send(command{
 		kind:   cmdWindow,
 		url:    url,
 		dwell:  time.Duration(dwellSeconds) * time.Second,
 		period: time.Duration(refreshSeconds) * time.Second,
 		resume: resume,
-	})
+	}) {
+		// The message was dropped. An answer of "I took the browser" here stops
+		// the player for a handover that never comes. The screen then holds one
+		// item until the watchdog restarts the browser.
+		s.log("browser.url.skip", url+": the browser queue is full")
+		return true
+	}
 	return false
 }
 
 // Restart asks for a browser restart. The watchdog and the remote command both
 // use it.
-func (s *Supervisor) Restart(reason string) {
-	s.send(command{kind: cmdRestart, reason: reason})
+func (s *Supervisor) Restart(reason string) error {
+	return s.queue(command{kind: cmdRestart, reason: reason})
 }
 
 // Suspend stops the browser. The power package calls it when the screen goes off:
 // a browser with no screen only holds memory.
-func (s *Supervisor) Suspend() { s.send(command{kind: cmdSuspend}) }
+func (s *Supervisor) Suspend() error { return s.queue(command{kind: cmdSuspend}) }
 
 // Resume starts the browser again after Suspend.
-func (s *Supervisor) Resume() { s.send(command{kind: cmdResume}) }
+func (s *Supervisor) Resume() error { return s.queue(command{kind: cmdResume}) }
 
 // PlaylistChanged tells the supervisor that the active playlist is different. The
 // supervisor only acts when the kiosk mode starts or ends; a change between two
@@ -381,14 +484,25 @@ func (s *Supervisor) Ready() { s.send(command{kind: cmdReady}) }
 // different. The new values need a new browser process.
 func (s *Supervisor) DisplayChanged() { s.send(command{kind: cmdDisplay}) }
 
+// queue puts a message in the queue and reports a full queue as ErrBusy. The API
+// handlers use it: a person who asks for a restart must learn that it did not
+// happen.
+func (s *Supervisor) queue(c command) error {
+	if !s.send(c) {
+		return ErrBusy
+	}
+	return nil
+}
+
 // send puts a message in the queue. It never blocks: a full queue means that the
-// loop is busy with a navigation, and one more restart message would only make
-// it later.
-func (s *Supervisor) send(c command) {
+// loop is busy with a navigation. It gives false when the message was dropped.
+func (s *Supervisor) send(c command) bool {
 	select {
 	case s.cmds <- c:
+		return true
 	default:
 		s.log("browser.queue.full", fmt.Sprintf("the message %d was dropped", c.kind))
+		return false
 	}
 }
 
@@ -408,6 +522,10 @@ func (s *Supervisor) handle(c command) {
 		if s.isSuspended() {
 			s.setSuspended(false)
 			s.log("browser.resume", "the screen is on")
+			if s.pendingRestart != "" {
+				s.log("browser.restart", s.pendingRestart+"; the screen is on again")
+				s.pendingRestart = ""
+			}
 			s.step()
 		}
 	case cmdWindow:
@@ -450,19 +568,37 @@ func (s *Supervisor) step() {
 
 // displayReady reports if a display is plugged in. No display is a wait state and
 // never a watchdog step (D44).
+//
+// The read of /sys happens on a cadence, not at every tick. While a display is
+// connected the cadence is Options.DisplayProbe. While none is connected the
+// cadence doubles up to displayWaitMax, so a television that stays in standby for
+// a month costs one read a minute.
 func (s *Supervisor) displayReady(now time.Time) bool {
+	if !s.probedAt.IsZero() && now.Before(s.probeNext) {
+		return s.lastDisplay
+	}
+	s.probedAt = now
 	connected := DisplayConnected(s.opt.DRMRoot)
+	s.lastDisplay = connected
 	s.setDisplay(connected)
+
 	if connected {
+		s.probeNext = now.Add(s.opt.DisplayProbe)
 		if s.waitLogged {
 			s.log("browser.display.found", "a display is connected; the browser starts")
 			s.waitLogged = false
-			s.waitDelay = displayWaitMin
-			s.waitUntil = time.Time{}
 		}
+		s.waitDelay = s.opt.DisplayProbe
 		return true
 	}
 
+	s.probeNext = now.Add(s.waitDelay)
+	if s.waitDelay < displayWaitMax {
+		s.waitDelay *= 2
+		if s.waitDelay > displayWaitMax {
+			s.waitDelay = displayWaitMax
+		}
+	}
 	if s.nav != nil {
 		s.stopBrowser()
 	}
@@ -471,22 +607,22 @@ func (s *Supervisor) displayReady(now time.Time) bool {
 		s.waitLogged = true
 	}
 	s.setState(StateWaiting, "no display is connected")
-	if now.Before(s.waitUntil) {
-		return false
-	}
-	s.waitUntil = now.Add(s.waitDelay)
-	if s.waitDelay < displayWaitMax {
-		s.waitDelay *= 2
-		if s.waitDelay > displayWaitMax {
-			s.waitDelay = displayWaitMax
-		}
-	}
 	return false
 }
 
 // handleExit starts the browser, and counts a restart when the browser died on
 // its own.
 func (s *Supervisor) handleExit(now time.Time) {
+	// A launch that failed left no browser and no navigator. The fault is the
+	// launch, not a browser that died, so the retry waits and counts nothing: one
+	// continuous fault is one step on the ladder.
+	if s.launchFailed {
+		if now.Before(s.launchNext) {
+			return
+		}
+		s.launch(now)
+		return
+	}
 	if s.everUp && !s.expectExit {
 		reason := s.proc.exitReason()
 		s.log("browser.exit", reason)
@@ -515,12 +651,13 @@ func (s *Supervisor) launch(now time.Time) {
 	ctx, cancel := context.WithTimeout(context.Background(), wait+navTimeout)
 	defer cancel()
 
-	if !s.rungPicked || s.rung == "cdp" {
-		nav := newCDP(s.proc, s.opt.Command.Endpoint(), s.opt.CDPTimeout, s.opt.Log)
+	rung := s.currentRung()
+	if rung == "" || rung == RungCDP {
+		nav := newCDP(s.proc, s.opt.Command.Endpoint(), s.opt.CDPTimeout)
 		if err := nav.Start(ctx, url); err == nil {
-			s.useNav(nav, now, ctx)
+			s.useNav(nav, now)
 			return
-		} else if !s.rungPicked {
+		} else if rung == "" {
 			s.log("browser.rung.cdp.fail", err.Error())
 		} else {
 			s.log("browser.rung.cdp.fail", err.Error()+"; this launch uses the relaunch rung")
@@ -529,18 +666,27 @@ func (s *Supervisor) launch(now time.Time) {
 
 	nav := newRelaunch(s.proc)
 	if err := nav.Start(ctx, url); err != nil {
+		s.launchFailed = true
+		s.launchNext = now.Add(s.launchDelay)
 		s.setState(StateStopped, err.Error())
-		s.log("browser.start.fail", err.Error())
+		s.log("browser.start.fail", fmt.Sprintf("%s; the next try is in %s", err.Error(), s.launchDelay))
+		if s.launchDelay < launchRetryMax {
+			s.launchDelay *= 2
+			if s.launchDelay > launchRetryMax {
+				s.launchDelay = launchRetryMax
+			}
+		}
 		return
 	}
-	s.useNav(nav, now, ctx)
+	s.useNav(nav, now)
 }
 
 // useNav takes a navigator that started, and finishes the launch.
-func (s *Supervisor) useNav(nav Navigator, now time.Time, ctx context.Context) {
+func (s *Supervisor) useNav(nav Navigator, now time.Time) {
 	s.nav = nav
 	s.everUp = true
-	s.rungPicked = true
+	s.launchFailed = false
+	s.launchDelay = launchRetryMin
 	s.setRung(nav.Name())
 	s.setState(StateRunning, "")
 
@@ -548,26 +694,43 @@ func (s *Supervisor) useNav(nav Navigator, now time.Time, ctx context.Context) {
 	s.wd.started(now)
 	s.mu.Unlock()
 
-	s.log("browser.start", "rung="+nav.Name()+" url="+s.target)
-	s.applyOutput(ctx)
+	s.log("browser.start", "rung="+nav.Name()+" url="+RedactURL(s.target))
+	// The rotation waits for the Wayland socket, which cage makes some time after
+	// it forks. That wait belongs in its own goroutine: a tick that waits is a
+	// tick that does not watch the browser.
+	go s.applyDisplay()
 	// The kiosk state and the window state belong to the URL that we started on.
 	s.refreshTarget()
 }
 
-// restart stops the browser and lets the next step start it again. counted says
+// restart stops the browser and lets the next tick start it again. counted says
 // if this restart belongs to the watchdog ladder: a restart that a person or the
 // nightly job asked for does not.
+//
+// It never calls step() itself. The tick does that. A restart that started the
+// browser again from inside itself can come back here through the ladder. A reboot
+// function that does nothing then makes a recursion with no end.
 func (s *Supervisor) restart(reason string, counted bool) {
 	now := s.opt.Now()
 	s.graceUntil = time.Time{}
 	s.ready = false
+
+	if s.isSuspended() {
+		// No browser runs. The resume starts a new one, which is the restart.
+		s.pendingRestart = reason
+		s.log("browser.restart.hold", reason+"; the screen is off, so the restart waits for it")
+		return
+	}
+
 	s.log("browser.restart", reason)
 	s.stopBrowser()
 	s.setState(StateStarting, "")
-	if counted && s.countRestart(now, reason) {
-		return
+	// A restart is a fresh try, so the launch backoff starts again.
+	s.launchFailed = false
+	s.launchDelay = launchRetryMin
+	if counted {
+		s.countRestart(now, reason)
 	}
-	s.step()
 }
 
 // countRestart records a restart and asks for a reboot at the fourth one in an
@@ -577,7 +740,10 @@ func (s *Supervisor) countRestart(now time.Time, reason string) bool {
 	count, reboot := s.wd.restarted(now)
 	s.restarts = count
 	if reboot {
+		// The window starts again, so State never reports more restarts than the
+		// window holds.
 		s.wd.rebootDone()
+		s.restarts = 0
 	}
 	s.mu.Unlock()
 
@@ -586,11 +752,8 @@ func (s *Supervisor) countRestart(now time.Time, reason string) bool {
 	}
 	text := fmt.Sprintf("%d browser restarts in one hour; the last reason was: %s", count, reason)
 	s.log("browser.reboot", text)
-	if s.opt.Reboot != nil {
-		s.opt.Reboot(text)
-		return true
-	}
-	return false
+	s.opt.Reboot(text)
+	return true
 }
 
 // stopBrowser ends the browser and forgets the page state.
@@ -640,11 +803,24 @@ func (s *Supervisor) refreshTarget() {
 		if s.kiosk != nil {
 			s.kiosk = nil
 			s.log("browser.kiosk.end", "the playlist is not a single URL any more")
-			s.navigate(s.opt.PlayerURL(-1))
+			s.handBackToPlayer(-1)
 		}
 	case s.kiosk == nil || s.kiosk.url != active.KioskURL:
 		s.startKiosk(active)
 	}
+}
+
+// handBackToPlayer puts the browser on the player SPA.
+//
+// Every path that gives the page back to the player goes through here. The
+// watchdog must count the silence from the moment that the player can answer. A
+// path that forgot the reset read hours of old silence. It then restarted the
+// browser at the next tick, and that is a counted step on the ladder.
+func (s *Supervisor) handBackToPlayer(resume int) {
+	s.mu.Lock()
+	s.wd.started(s.opt.Now())
+	s.mu.Unlock()
+	s.navigate(s.opt.PlayerURL(resume))
 }
 
 // startKiosk parks the browser on a single URL playlist (D42).
@@ -672,7 +848,7 @@ func (s *Supervisor) enterKioskFallback(now time.Time, reason string) {
 	s.kiosk.fallback = true
 	s.kiosk.retryAt = now.Add(s.kiosk.backoff)
 	s.log("browser.kiosk.fallback", s.kiosk.url+": "+reason)
-	s.navigate(s.opt.PlayerURL(-1))
+	s.handBackToPlayer(-1)
 }
 
 // serviceKiosk keeps a kiosk page fresh and alive.
@@ -748,10 +924,7 @@ func (s *Supervisor) serviceWindow(now time.Time) {
 	if w.dwell > 0 && now.Sub(w.started) >= w.dwell {
 		s.window = nil
 		s.log("browser.url.end", fmt.Sprintf("%s after %s", w.url, w.dwell))
-		s.mu.Lock()
-		s.wd.started(now) // the player answers again from here
-		s.mu.Unlock()
-		s.navigate(s.opt.PlayerURL(w.resume))
+		s.handBackToPlayer(w.resume)
 		return
 	}
 	if w.period > 0 && now.Sub(w.reloaded) >= w.period {
@@ -804,10 +977,18 @@ func (s *Supervisor) checkNightly(now time.Time) {
 	if s.opt.NightlyRestart == nil {
 		return
 	}
-	target, ok := clockMinutes(s.opt.NightlyRestart())
+	value := s.opt.NightlyRestart()
+	target, ok := config.ParseClock(value)
 	if !ok {
+		// A value that is not a time would make the nightly restart go away with
+		// no word about it. Say it once for each different value.
+		if value != "" && value != s.badNightly {
+			s.badNightly = value
+			s.log("browser.nightly.bad", value+" is not a time in the form HH:MM; there is no nightly restart")
+		}
 		return
 	}
+	s.badNightly = ""
 	day := now.Format("2006-01-02")
 	if s.lastDay == day {
 		return
@@ -842,7 +1023,7 @@ func (s *Supervisor) navigate(url string) {
 
 	s.target = url
 	if err := s.nav.Navigate(ctx, url); err != nil {
-		s.log("browser.navigate.fail", url+": "+err.Error())
+		s.log("browser.navigate.fail", RedactURL(url)+": "+err.Error())
 		s.restart("the navigation to the next page failed", true)
 	}
 }
@@ -883,6 +1064,14 @@ func (s *Supervisor) setRung(name string) {
 	s.mu.Unlock()
 }
 
+// currentRung gives the rung that the daemon chose, or "" before the first
+// launch.
+func (s *Supervisor) currentRung() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rung
+}
+
 func (s *Supervisor) setDisplay(connected bool) {
 	s.mu.Lock()
 	s.displayOK = connected
@@ -908,17 +1097,23 @@ func (s *Supervisor) log(event, details string) {
 	}
 }
 
-// clockMinutes reads "HH:MM" into minutes after midnight.
-func clockMinutes(value string) (int, bool) {
-	if len(value) != 5 || value[2] != ':' {
-		return 0, false
+// RedactURL hides the boot secret of a player URL.
+//
+// The ops log is a file that a person reads over SSH and copies into a support
+// message, and /var/log holds the same line. The secret in ?k= gates the whole
+// player API (D46), so it never goes in a log.
+func RedactURL(url string) string {
+	for _, sep := range []string{"?k=", "&k="} {
+		at := strings.Index(url, sep)
+		if at < 0 {
+			continue
+		}
+		start := at + len(sep)
+		if end := strings.IndexByte(url[start:], '&'); end >= 0 {
+			url = url[:start] + "REDACTED" + url[start+end:]
+		} else {
+			url = url[:start] + "REDACTED"
+		}
 	}
-	h := int(value[0]-'0')*10 + int(value[1]-'0')
-	m := int(value[3]-'0')*10 + int(value[4]-'0')
-	if value[0] < '0' || value[0] > '9' || value[1] < '0' || value[1] > '9' ||
-		value[3] < '0' || value[3] > '9' || value[4] < '0' || value[4] > '9' ||
-		h > 23 || m > 59 {
-		return 0, false
-	}
-	return h*60 + m, true
+	return url
 }

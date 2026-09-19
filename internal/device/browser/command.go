@@ -1,11 +1,13 @@
 package browser
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // DisableCommand is the override value that stops the browser. A development
@@ -32,17 +34,12 @@ type CommandConfig struct {
 	// empty name runs the browser as the daemon's own user, which is for
 	// development only.
 	KioskUser string
-	// CacheDir is the size-capped tmpfs that holds the Chromium profile and
-	// cache (D39). HomeDir is the home of the kiosk user.
+	// CacheDir is the size-capped tmpfs that holds the Chromium profile, the
+	// cache and the home directory of the kiosk user (D39).
 	CacheDir string
-	HomeDir  string
 	// RuntimeDir is XDG_RUNTIME_DIR of the cage session.
 	RuntimeDir string
 
-	// Cage and Chromium are the program names. A different Alpine release may
-	// name them differently, so they are values and not constants.
-	Cage      string
-	Chromium  string
 	DebugPort int
 	// DebugURL replaces the address of the DevTools Protocol. Only a test sets
 	// it, to point rung 1 at a stub browser.
@@ -105,16 +102,8 @@ func (c CommandConfig) Build(url string) (*exec.Cmd, error) {
 		return c.command(args[0], args[1:]...)
 	}
 
-	cage := c.Cage
-	if cage == "" {
-		cage = "cage"
-	}
-	chromium := c.Chromium
-	if chromium == "" {
-		chromium = "chromium"
-	}
 	args := []string{
-		"-s", "--", chromium,
+		"-s", "--", "chromium",
 		"--kiosk",
 		"--ozone-platform=wayland",
 		"--remote-debugging-address=127.0.0.1",
@@ -130,15 +119,37 @@ func (c CommandConfig) Build(url string) (*exec.Cmd, error) {
 		"--password-store=basic",
 		url,
 	}
-	return c.command(cage, args...)
+	return c.command("cage", args...)
 }
 
 // Tool makes a command that runs one program in the cage session, for example
 // wlr-randr. It runs as the kiosk user with the same environment, because a
 // Wayland client must be the user that owns the session.
-func (c CommandConfig) Tool(name string, args ...string) (*exec.Cmd, error) {
-	return c.command(name, args...)
+//
+// The context ends the program. exec.CommandContext kills the child itself. It
+// does that before cmd.Wait reaps the child and never after. A timeout of our own
+// sent a signal to a process number that the system gave to another program.
+func (c CommandConfig) Tool(ctx context.Context, name string, args ...string) (*exec.Cmd, error) {
+	cmd := exec.CommandContext(ctx, name, args...)
+	// The child is a process group of its own, so Cancel must end the group.
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		return terminate(cmd.Process.Pid, true)
+	}
+	cmd.WaitDelay = toolWaitDelay
+	cmd.Env = c.env()
+	if err := applyCredential(cmd, c.KioskUser); err != nil {
+		return nil, err
+	}
+	return cmd, nil
 }
+
+// toolWaitDelay is how long a tool may hold its output pipes after the context
+// ended. Without it, a child of the tool that keeps the pipe open would hold
+// cmd.Wait for ever.
+const toolWaitDelay = 2 * time.Second
 
 // command makes the command and gives it the environment and the account.
 func (c CommandConfig) command(name string, args ...string) (*exec.Cmd, error) {
@@ -179,13 +190,10 @@ const WaylandDisplay = "wayland-0"
 // home gives HOME for the browser. It must be on the capped tmpfs: Chromium
 // writes dot directories into HOME, and the flash must never take them (D39).
 func (c CommandConfig) home() string {
-	if c.HomeDir != "" {
-		return c.HomeDir
+	if c.CacheDir == "" {
+		return ""
 	}
-	if c.CacheDir != "" {
-		return c.CacheDir + "/home"
-	}
-	return ""
+	return c.CacheDir + "/home"
 }
 
 func (c CommandConfig) profileDir() string {

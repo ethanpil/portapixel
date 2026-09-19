@@ -3,19 +3,36 @@ package browser
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 )
 
 // clock is a time that a test moves by hand. Every threshold of the ladder is a
 // duration, so the whole ladder can be tested without waiting for anything.
-type clock struct{ t time.Time }
+//
+// The lock is there because a supervisor test gives now to the loop goroutine and
+// moves the time from the test goroutine.
+type clock struct {
+	mu sync.Mutex
+	t  time.Time
+}
 
 func newClock() *clock {
 	return &clock{t: time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)}
 }
-func (c *clock) now() time.Time      { return c.t }
-func (c *clock) add(d time.Duration) { c.t = c.t.Add(d) }
+
+func (c *clock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *clock) add(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
 
 func TestWatchdogHeartbeatLoss(t *testing.T) {
 	c := newClock()

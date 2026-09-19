@@ -19,8 +19,9 @@ import (
 const stubFlag = "--pp-stub-browser"
 
 // stubLife is how long the stub waits before it ends by itself. A test that
-// fails must not leave a process for ever.
-const stubLife = 30 * time.Second
+// fails must not leave a process for ever, and a process that lives on takes the
+// processor from the tests that come after.
+const stubLife = 20 * time.Second
 
 func TestMain(m *testing.M) {
 	if len(os.Args) > 2 && os.Args[1] == stubFlag {
@@ -87,9 +88,13 @@ func (s *stub) starts(t *testing.T) []string {
 
 // waitFor waits until check is true. It keeps the tests short without a sleep of
 // a fixed length.
+//
+// The deadline is generous because `go test ./...` runs the packages together and
+// each of these tests starts a process. A test that is right must never fail
+// because the machine was busy.
 func waitFor(t *testing.T, what string, check func() bool) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
+	deadline := time.Now().Add(30 * time.Second)
 	for time.Now().Before(deadline) {
 		if check() {
 			return

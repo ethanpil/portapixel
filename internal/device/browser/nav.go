@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// The names of the two rungs. They go in the ops log and in /api/status, and the
+// supervisor compares against them, so they are constants and not literals.
+const (
+	RungCDP      = "cdp"
+	RungRelaunch = "relaunch"
+)
+
 // Navigator is one rung of the navigation ladder (ARCHITECTURE section 7).
 //
 // The interface exists because the two rungs are two different mechanisms with

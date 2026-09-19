@@ -1,6 +1,7 @@
 package browser
 
 import (
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -11,10 +12,11 @@ import (
 
 // harness runs a Supervisor with a stub browser and a fast tick.
 type harness struct {
-	sup  *Supervisor
-	stub *stub
-	log  *opslog.Log
-	done chan struct{}
+	sup     *Supervisor
+	stub    *stub
+	log     *opslog.Log
+	done    chan struct{}
+	stopped chan struct{}
 
 	mu        sync.Mutex
 	reachable map[string]bool
@@ -32,15 +34,17 @@ func newHarness(t *testing.T, opts func(*Options, *harness)) *harness {
 		stub:      newStub(t),
 		log:       testLog(t),
 		done:      make(chan struct{}),
+		stopped:   make(chan struct{}),
 		reachable: map[string]bool{},
 	}
 	o := Options{
-		Command:    CommandConfig{Override: h.stub.override},
-		Log:        h.log,
-		Tick:       5 * time.Millisecond,
-		CDPTimeout: 100 * time.Millisecond,
-		PlayerURL:  func(resume int) string { return playerURL(resume) },
-		Active:     func() Active { h.mu.Lock(); defer h.mu.Unlock(); return h.active },
+		Command:      CommandConfig{Override: h.stub.override},
+		Log:          h.log,
+		Tick:         5 * time.Millisecond,
+		DisplayProbe: 5 * time.Millisecond,
+		CDPTimeout:   100 * time.Millisecond,
+		PlayerURL:    func(resume int) string { return playerURL(resume) },
+		Active:       func() Active { h.mu.Lock(); defer h.mu.Unlock(); return h.active },
 		Reachable: func(url string) bool {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -64,8 +68,21 @@ func newHarness(t *testing.T, opts func(*Options, *harness)) *harness {
 		opts(&o, h)
 	}
 	h.sup = New(o)
-	go h.sup.Run(h.done)
-	t.Cleanup(func() { close(h.done); time.Sleep(20 * time.Millisecond) })
+	go func() {
+		h.sup.Run(h.done)
+		close(h.stopped)
+	}()
+	// Wait for Run to end. Its deferred shutdown stops the browser, and a stub
+	// that nobody stops sleeps for stubLife and takes the processor from the tests
+	// that come after: that is what made the restart test time out.
+	t.Cleanup(func() {
+		close(h.done)
+		select {
+		case <-h.stopped:
+		case <-time.After(15 * time.Second):
+			t.Error("the supervisor did not stop and its browser may still run")
+		}
+	})
 	return h
 }
 
@@ -109,13 +126,16 @@ func (h *harness) events() string {
 	return b.String()
 }
 
-func (h *harness) sawEvent(name string) bool {
-	for _, e := range h.log.Tail(200) {
+func (h *harness) sawEvent(name string) bool { return h.countEvent(name) > 0 }
+
+func (h *harness) countEvent(name string) int {
+	n := 0
+	for _, e := range h.log.Tail(1200) {
 		if e.Event == name {
-			return true
+			n++
 		}
 	}
-	return false
+	return n
 }
 
 func TestSupervisorStartsOnThePlayer(t *testing.T) {
@@ -168,9 +188,16 @@ func TestSupervisorRestartsAfterACrash(t *testing.T) {
 	waitFor(t, "the browser to run", func() bool { return h.sup.State().Browser == StateRunning })
 
 	// Kill the stub. The supervisor must start it again and count the restart.
+	// launcher.stop takes its own lock, so this is safe from the test goroutine.
+	// The loop already reads expectExit as false after a start that worked, so
+	// nothing else has to be set here.
 	h.sup.proc.stop()
-	h.sup.expectExit = false // the loop must read this as a crash
 
+	defer func() {
+		if t.Failed() {
+			t.Logf("ops log:\n%s", h.events())
+		}
+	}()
 	waitFor(t, "the second start", func() bool { return len(h.stub.starts(t)) >= 2 })
 	waitFor(t, "the restart count", func() bool { return h.sup.State().Restarts >= 1 })
 }
@@ -245,11 +272,12 @@ func TestSupervisorKioskFallbackWhenThePageIsDown(t *testing.T) {
 	h.setActive(Active{Playlist: "board", KioskURL: "https://dash.example.com/board"})
 	waitFor(t, "the fallback screen", func() bool { return h.sawEvent("browser.kiosk.fallback") })
 
-	// The browser shows the SPA, not the dead page.
-	starts := h.stub.starts(t)
-	if last := starts[len(starts)-1]; !strings.Contains(last, "/player") {
-		t.Fatalf("the browser is on %q, want the player", last)
-	}
+	// The browser shows the SPA, not the dead page. The navigation comes after the
+	// log line, so this waits for it: reading the list at once was a race.
+	waitFor(t, "the browser on the player", func() bool {
+		starts := h.stub.starts(t)
+		return len(starts) > 0 && strings.Contains(starts[len(starts)-1], "/player")
+	})
 }
 
 func TestSupervisorSuspendAndResume(t *testing.T) {
@@ -278,6 +306,7 @@ func TestSupervisorWaitsForADisplayAndNeverEscalates(t *testing.T) {
 		drm := t.TempDir()
 		writeStatus(t, drm, "card0-HDMI-A-1", "disconnected")
 		o.DRMRoot = drm
+		o.DisplayProbe = 5 * time.Millisecond
 		h.drm = drm
 	})
 
@@ -463,11 +492,217 @@ func TestSupervisorLogsPlayerNotes(t *testing.T) {
 	if got := count(); got != 2 {
 		t.Fatalf("player lines = %d after a heartbeat with no note", got)
 	}
-	// The first note again, inside the hour: still one line.
-	h.sup.Heartbeat(Heartbeat{Playlist: "default", Frames: 202, Note: note})
-	if got := count(); got != 3 {
-		// A note that is different from the LAST note is new, so this is line 3.
-		t.Fatalf("player lines = %d, want three", got)
+	// The first note again, inside the hour: still two lines. Two broken items
+	// that take turns send their notes every 5 seconds, and a memory of one note
+	// would write a line for each of them and empty the ops log in two hours.
+	for i := 0; i < 5; i++ {
+		h.sup.Heartbeat(Heartbeat{Playlist: "default", Frames: int64(202 + i), Note: note})
+		h.sup.Heartbeat(Heartbeat{Playlist: "default", Frames: int64(300 + i), Note: "the manifest did not load"})
+	}
+	if got := count(); got != 2 {
+		t.Fatalf("player lines = %d after two notes that take turns, want two", got)
+	}
+}
+
+// The rate limit remembers a bounded number of notes. A player that sends a new
+// note at every heartbeat must not grow the map for the life of the daemon.
+func TestSupervisorNoteMemoryIsBounded(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	s := New(Options{
+		Command: CommandConfig{Override: DisableCommand},
+		Log:     testLog(t),
+		Now:     func() time.Time { return now },
+	})
+	for i := 0; i < noteMemory*4; i++ {
+		s.Heartbeat(Heartbeat{Playlist: "default", Frames: int64(i), Note: "note " + itoa(i)})
+	}
+	s.mu.Lock()
+	size := len(s.notes)
+	s.mu.Unlock()
+	if size > noteMemory {
+		t.Fatalf("the note memory holds %d entries, want %d at most", size, noteMemory)
+	}
+}
+
+// Leaving kiosk mode hands the page back to the player. The watchdog must count
+// the silence from that moment: the kiosk page sent no heartbeat, and the old
+// lastBeat would read as hours of silence and count a restart. Four of those in
+// one hour reboot the device.
+func TestSupervisorKioskEndResetsTheWatchdog(t *testing.T) {
+	clk := newClock()
+	h := newHarness(t, func(o *Options, h *harness) { o.Now = clk.now })
+	waitFor(t, "the browser to run", func() bool { return h.sup.State().Browser == StateRunning })
+	h.sup.Heartbeat(Heartbeat{Playlist: "default", Frames: 10})
+
+	h.setActive(Active{Playlist: "board", KioskURL: "https://dash.example.com/board"})
+	waitFor(t, "the kiosk page", func() bool {
+		starts := h.stub.starts(t)
+		return len(starts) >= 2 && starts[len(starts)-1] == "https://dash.example.com/board"
+	})
+
+	// The kiosk page ran for two hours. No heartbeat came in that time, and that
+	// is correct: our JavaScript is not on that page.
+	clk.add(2 * time.Hour)
+	h.setActive(Active{Playlist: "default"})
+	waitFor(t, "the return to the player", func() bool { return h.sawEvent("browser.kiosk.end") })
+
+	// Give the loop many ticks at the new time.
+	time.Sleep(100 * time.Millisecond)
+	if got := h.countEvent("browser.restart"); got != 0 {
+		t.Fatalf("the return from kiosk mode wrote %d browser.restart lines:\n%s", got, h.events())
+	}
+	if got := h.sup.State().Restarts; got != 0 {
+		t.Fatalf("the return from kiosk mode counted %d restarts on the reboot ladder", got)
+	}
+}
+
+// The kiosk fallback screen is the same hand-back. The SPA answers from there,
+// so the silence timer starts there too.
+func TestSupervisorKioskFallbackResetsTheWatchdog(t *testing.T) {
+	clk := newClock()
+	h := newHarness(t, func(o *Options, h *harness) { o.Now = clk.now })
+	waitFor(t, "the browser to run", func() bool { return h.sup.State().Browser == StateRunning })
+	h.sup.Heartbeat(Heartbeat{Playlist: "default", Frames: 10})
+
+	clk.add(2 * time.Hour)
+	h.setReachable("https://dash.example.com/board", false)
+	h.setActive(Active{Playlist: "board", KioskURL: "https://dash.example.com/board"})
+	waitFor(t, "the fallback screen", func() bool { return h.sawEvent("browser.kiosk.fallback") })
+
+	time.Sleep(100 * time.Millisecond)
+	if got := h.countEvent("browser.restart"); got != 0 {
+		t.Fatalf("the kiosk fallback wrote %d browser.restart lines:\n%s", got, h.events())
+	}
+}
+
+// A full command queue must never look like a hand-over that worked. The player
+// stops its own loop when the daemon says "I took the browser", so a dropped
+// message would hold one item on the screen until the watchdog restarted the
+// browser.
+func TestSupervisorReportsAFullQueue(t *testing.T) {
+	s := New(Options{
+		Command:   CommandConfig{Override: DisableCommand},
+		Log:       testLog(t),
+		Reachable: func(string) bool { return true },
+	})
+	// Run is not started, so nothing reads the queue.
+	for i := 0; i < cap(s.cmds); i++ {
+		if err := s.Restart("fill the queue"); err != nil {
+			t.Fatalf("Restart %d = %v, want no error", i, err)
+		}
+	}
+	if err := s.Restart("one too many"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Restart on a full queue = %v, want ErrBusy", err)
+	}
+	if err := s.Suspend(); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Suspend on a full queue = %v, want ErrBusy", err)
+	}
+	s.setState(StateRunning, "")
+	if skip := s.URLItem("https://dash.example.com/board", 10, 0, 1); !skip {
+		t.Fatal("URLItem said that the daemon took the browser while the queue was full; the player would wait for ever")
+	}
+}
+
+// One continuous fault is one step on the restart ladder. A launch that fails at
+// every tick counted a step every second, so four seconds rebooted the device.
+func TestSupervisorOneOutageIsOneLadderStep(t *testing.T) {
+	clk := newClock()
+	drm := t.TempDir()
+	writeStatus(t, drm, "card0-HDMI-A-1", "connected")
+	log := testLog(t)
+	s := New(Options{
+		Command:      CommandConfig{Override: "pp-no-such-program"},
+		Log:          log,
+		Now:          clk.now,
+		DRMRoot:      drm,
+		DisplayProbe: time.Millisecond,
+		Tick:         time.Hour, // the test drives step itself
+	})
+	// The browser was up once, so an exit with no navigator counts.
+	s.everUp = true
+
+	s.step()
+	if got := s.State().Restarts; got != 1 {
+		t.Fatalf("Restarts = %d after the first failed launch, want 1", got)
+	}
+	for i := 0; i < 20; i++ {
+		s.step()
+	}
+	if got := s.State().Restarts; got != 1 {
+		t.Fatalf("Restarts = %d after 20 ticks of one outage, want 1: four of these reboot the device", got)
+	}
+	lines := 0
+	for _, e := range log.Tail(1200) {
+		if e.Event == "browser.start.fail" {
+			lines++
+		}
+	}
+	if lines != 1 {
+		t.Fatalf("browser.start.fail appears %d times, want once: the log must not flood", lines)
+	}
+
+	// The backoff ends. One more try, one more line, and still one ladder step.
+	clk.add(launchRetryMin)
+	s.step()
+	if got := s.State().Restarts; got != 1 {
+		t.Fatalf("Restarts = %d after the retry, want 1", got)
+	}
+	if got := s.State().Browser; got != StateStopped {
+		t.Fatalf("Browser = %q after a launch that cannot work", got)
+	}
+}
+
+// A restart while the screen is off must not leave the browser in "starting" for
+// ever, and a device in its night hours is healthy: without this the update gate
+// can roll a good release back.
+func TestSupervisorRestartWhileSuspended(t *testing.T) {
+	h := newHarness(t, nil)
+	waitFor(t, "the browser to run", func() bool { return h.sup.State().Browser == StateRunning })
+
+	if err := h.sup.Suspend(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the browser to stop", func() bool { return h.sup.State().Suspended })
+	if err := h.sup.Restart("the admin asked for a browser restart"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the held restart", func() bool { return h.sawEvent("browser.restart.hold") })
+
+	st := h.sup.State()
+	if st.Browser == StateStarting {
+		t.Fatalf("the browser state is %q while the screen is off", st.Browser)
+	}
+	if !h.sup.Started() {
+		t.Fatal("a device with the screen off is not healthy; the update gate would roll a good release back")
+	}
+
+	if err := h.sup.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the browser to run again", func() bool { return h.sup.State().Browser == StateRunning })
+	if !h.sawEvent("browser.restart") {
+		t.Errorf("the held restart never reached the ops log:\n%s", h.events())
+	}
+}
+
+// A nightly_restart value that is not a time must say so once. Before this the
+// nightly restart went away with no word about it.
+func TestSupervisorBadNightlyRestartIsLoggedOnce(t *testing.T) {
+	now := time.Date(2026, 9, 18, 3, 30, 0, 0, time.UTC)
+	h := newHarness(t, func(o *Options, h *harness) {
+		o.Now = func() time.Time { return now }
+		h.nightly = "3:30"
+	})
+	waitFor(t, "the warning", func() bool { return h.sawEvent("browser.nightly.bad") })
+	time.Sleep(60 * time.Millisecond)
+	if got := h.countEvent("browser.nightly.bad"); got != 1 {
+		t.Fatalf("browser.nightly.bad appears %d times, want once", got)
+	}
+	h.mu.Lock()
+	graces := h.graces
+	h.mu.Unlock()
+	if graces != 0 {
+		t.Fatalf("a bad time asked the player for a grace moment %d times", graces)
 	}
 }
 

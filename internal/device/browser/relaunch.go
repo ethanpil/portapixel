@@ -17,7 +17,7 @@ func newRelaunch(proc *launcher) *relaunchNavigator {
 	return &relaunchNavigator{proc: proc}
 }
 
-func (n *relaunchNavigator) Name() string { return "relaunch" }
+func (n *relaunchNavigator) Name() string { return RungRelaunch }
 
 // Start starts the browser on url. A browser that already shows this URL stays:
 // the supervisor tries rung 1 first, and that attempt left a running process.
