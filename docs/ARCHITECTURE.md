@@ -19,7 +19,8 @@ Permitted dependencies. Each new dependency needs a rationale line here.
 | `modernc.org/sqlite` | Pure-Go SQLite for the server. No cgo. |
 | `aead.dev/minisign` | Verify release signatures (D47). |
 | `golang.org/x/crypto` | bcrypt for the server admin password. |
-| `github.com/godbus/dbus/v5` | Navigation rung 1 (cog D-Bus). |
+| `golang.org/x/net/websocket` | CDP client for navigation rung 1. The standard library has no WebSocket client. |
+| `golang.org/x/sys` | Indirect, through minisign. |
 | `github.com/hashicorp/mdns` | mDNS announce (D20). |
 | `github.com/skip2/go-qrcode` | QR code on the fallback screen (D18). |
 
@@ -47,7 +48,7 @@ internal/httpguard        Host allowlist, CSRF header check, session store, logi
 internal/device/identity  Device ID derivation and repair semantics (D21).
 internal/device/library   Scan media root, parse playlists, hash cache, item warnings.
 internal/device/scheduler Rule evaluation each minute, clock-sync gate (D17, D40).
-internal/device/browser   cog supervisor, navigation ladder, watchdog, URL items, kiosk mode.
+internal/device/browser   cage + Chromium supervisor, navigation ladder, watchdog, URL items, kiosk mode.
 internal/device/power     CEC or DPMS, screen schedule.
 internal/device/syncer    Fleet client: enroll, poll, download, fleet playlists, commands.
 internal/device/mdns      Announce.
@@ -204,32 +205,56 @@ The device stores fleet objects at `_fleet/media/<first 8 hex of sha>-<safe name
 - Each request with a method other than GET or HEAD must carry `X-PortaPixel: 1`.
 - `/api/player/*` accepts loopback peers only and needs `?k=<boot secret>` or the
   `X-PortaPixel-Player` header with the same value. The secret is 32 random hex chars made
-  at daemon start. cog opens `/player?k=<secret>`.
+  at daemon start. The browser opens `/player?k=<secret>`.
 - `/api/status` needs no session. It includes `pairing_code` for loopback peers only.
 - The server uses the same package with an allowlist made from `public_url`.
 
 ## 7. Navigation ladder (`internal/device/browser`)
 
+The display stack is Chromium in kiosk mode inside `cage` (see CONTEXT.md section 3).
+The daemon starts one process tree as the `kiosk` user:
+
+```
+cage -s -- chromium --kiosk --ozone-platform=wayland \
+  --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
+  --autoplay-policy=no-user-gesture-required \
+  --user-data-dir=<tmpfs>/profile --disk-cache-dir=<tmpfs>/cache \
+  --no-first-run --noerrdialogs --disable-infobars \
+  --disable-session-crashed-bubble --disable-features=Translate \
+  --password-store=basic <url>
+```
+
+Rotation and `video_mode` go through `wlr-randr` in the cage session. They rotate all
+content, external pages included. The browser command and its flags live in ONE place,
+`internal/device/browser/command.go`.
+
 ```go
 type Navigator interface {
-    Name() string                                  // "dbus" | "webdriver" | "relaunch"
+    Name() string                                  // "cdp" | "relaunch"
     Start(ctx context.Context, url string) error   // browser up and on url
     Navigate(ctx context.Context, url string) error
+    Reload(ctx context.Context) error
     CurrentURL(ctx context.Context) (string, error) // relaunch rung returns the last url if the process lives
     Alive() bool
     Stop() error
 }
 ```
 
-The supervisor probes rung 1, then 2, then 3 at start. It writes the chosen rung to the
-ops log. Tests must exercise all three rungs: D-Bus and WebDriver against stubs, relaunch
-against a real stub process.
+The ladder has two rungs. Rung 1 is the Chrome DevTools Protocol (CDP) on the loopback
+port: `GET /json` to find the page target, then `Page.navigate`, `Page.reload` and
+`Runtime.evaluate("location.href")` on its WebSocket. Rung 2 starts the browser again with
+the target URL as its argument. The supervisor tries rung 1 at start and falls to rung 2
+when CDP does not answer. It writes the chosen rung to the ops log. Tests must exercise
+both rungs: CDP against a stub HTTP and WebSocket server, relaunch against a real stub
+process.
 
 ## 8. Web assets
 
 No build step. No npm. The file in the repository is the file that ships.
-`web/shared/` holds Bootstrap (vendored), `playlist-editor.js`, `item-warnings.js`,
-`api.js` and the common stylesheet. The two admin UIs import them by URL path `/shared/`.
+`web/shared/` holds `pp.css` (the one stylesheet, made from the wireframe design tokens),
+`fonts/` (IBM Plex, local files), `playlist-editor.js`, `item-warnings.js`, `api.js` and
+`ui.js` (toast, modal, table helpers). The two admin UIs import them by URL path
+`/shared/`. There is no Bootstrap (see CONTEXT.md section 3).
 
 ## 9. Test rule
 

@@ -29,13 +29,44 @@ something that cost you time. Remove an entry when it is no longer true.
 
 ## 3. Divergences from the plan
 
-None yet.
+| Plan | What we did | Why |
+|---|---|---|
+| D3, D4, D5: WPE WebKit + cog on DRM/KMS, no compositor, three navigation rungs | Chromium in kiosk mode inside `cage`. Two navigation rungs: CDP, then relaunch. The `--autoplay-policy=no-user-gesture-required` flag is now REQUIRED. `seatd` and `wlr-randr` are in the image. | Alpine removed `cog`, `wpewebkit` and `wpebackend-fdo` after 3.21 (checked with `apk` against 3.22, 3.23 and edge on 2026-09-18). The maintainer chose Chromium + cage on 2026-09-18. `cage` shows one fullscreen window. It is not a desktop. Weston, sway and labwc stay out of scope. |
+| Section 7: GStreamer packages | Not installed. | Chromium has its own media stack. |
+| D39: browser tmpfs about 96 MB | About 256 MB. | A Chromium profile is larger than a WebKit one. |
+| D6, D7: vendored Bootstrap for the two admin UIs | One hand-written stylesheet, `web/shared/pp.css`. No Bootstrap. | The wireframes give a full custom design (IBM Plex, moss green, `oklch` colours). Bootstrap below it would be more code, not less. Open decision for the maintainer. |
+| Fonts from Google Fonts (wireframes) | IBM Plex Sans and Mono as local `woff2` files in `web/shared/fonts/` | A device on a closed network cannot get remote fonts. The licence is OFL. |
 
 ## 4. M0 results
 
-Not yet recorded.
+- Alpine 3.23 has no `cog` and no `wpewebkit`. The last branch with them is 3.21
+  (WPE WebKit 2.40.5, from 2023). This is risk 1 of the plan's risk register. See
+  section 3 for the decision.
+- Alpine 3.23 has `chromium` 149, `cage` 0.2.1, `seatd` and `wlr-randr` for x86_64 and
+  aarch64.
+- `swclock` is part of the `openrc` package. `cec-ctl` is in `v4l-utils`. `sgdisk` is its
+  own package. `intel-ucode`, `amd-ucode`, `syslinux`, `intel-media-driver` and
+  `libva-intel-driver` are x86_64 only.
+- The Pi Zero 2 W (512 MB) is now marginal, because Chromium uses more RAM than WPE.
+  Test it on real hardware before we promise it.
 
 ## 5. Lessons
 
+- `internal/config` imports `time/tzdata` (about 450 KB). Without it, time zone checks
+  fail on a host with no zone database. The system database still wins on Alpine.
+- The API shows a secret as `********`. A PUT that sends this mask keeps the old secret.
+  An empty string clears it. A blank mask would make it impossible to clear a WiFi key.
+- `config.Load` never returns an error. It always gives a config that works (D38). The
+  caller reads `FromShadow`, `FromDefault` and `Warning`.
+- `config.ChangeClass` has three classes: `live`, `browser` (restart the browser) and
+  `reboot`. The reasons are in `internal/config/change.go`.
+- The rendered TOML comments are in Simplified Technical English. They are not a copy of
+  plan section 11.1. Each key and default of 11.1 is there.
+- `version.PublicKey` is empty until release 1. `sigverify` refuses an empty key, so a
+  development build cannot install an update.
+- `store.Download` computes the SHA-256 on the complete `.part` file. A resumed download
+  cannot continue a hash that was in progress.
+- `fsutil.FreeBytes` is real on Linux only. Other systems get a large constant.
+- Run `go test -race` in CI on Linux. The Windows machine has no C compiler.
 - The development machine is Windows. Linux-only code (statfs, DRM, CEC, mount) sits
   behind build tags or runtime checks, so that `go test ./...` runs on Windows.
