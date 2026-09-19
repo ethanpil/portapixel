@@ -151,8 +151,11 @@ func TestPasswordEqual(t *testing.T) {
 		{name: "different", given: "portapixel", want: "PortaPixel"},
 		{name: "a prefix is not enough", given: "porta", want: "portapixel"},
 		{name: "longer", given: "portapixel1", want: "portapixel"},
-		{name: "both empty", given: "", want: "", equal: true},
+		// An empty wanted password must never open the admin UI, whatever the
+		// person sent.
+		{name: "both empty", given: "", want: ""},
 		{name: "empty against a password", given: "", want: "portapixel"},
+		{name: "a password against an empty one", given: "portapixel", want: ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

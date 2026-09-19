@@ -58,9 +58,15 @@ func (l *Log) Log(event, details string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	f, err := os.OpenFile(l.path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(l.path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0o644)
 	if err != nil {
 		return
+	}
+	if isTorn(f) {
+		// A power cut can stop a line in the middle. Start a line of our own,
+		// or the two lines become one line that parse cannot read, and both
+		// events are then lost.
+		line = "\n" + line
 	}
 	if _, err := f.WriteString(line); err != nil {
 		f.Close()
@@ -120,6 +126,21 @@ func (l *Log) trim() {
 		return
 	}
 	l.lines = len(lines)
+}
+
+// isTorn reports if the file does not end with a newline. A file with no bytes
+// in it is not torn. isTorn reads the last byte, so the caller must open the
+// file for reading as well.
+func isTorn(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	var last [1]byte
+	if _, err := f.ReadAt(last[:], info.Size()-1); err != nil {
+		return false
+	}
+	return last[0] != '\n'
 }
 
 // parse reads one line of the log.

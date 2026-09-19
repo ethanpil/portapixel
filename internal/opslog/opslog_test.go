@@ -59,6 +59,63 @@ func TestLogLineFormat(t *testing.T) {
 	}
 }
 
+// TestLogAfterATornLine covers the log that a power cut stopped in the middle of
+// a line. The next line must stay a line of its own: a log that joins the two
+// loses the old event and the new one.
+func TestLogAfterATornLine(t *testing.T) {
+	tests := []struct {
+		name string
+		// torn is the content that the power cut left in the file.
+		torn      string
+		wantLines int
+	}{
+		{
+			name:      "the last line has no newline",
+			torn:      "2026-09-18T10:00:00Z\tsync\tstarted\n2026-09-18T11:00:00Z\tsync\tpar",
+			wantLines: 3,
+		},
+		{
+			name:      "the file holds one torn line only",
+			torn:      "2026-09-18T11:00:00Z\tsync\tpar",
+			wantLines: 2,
+		},
+		{
+			name:      "a whole file goes on as before",
+			torn:      "2026-09-18T10:00:00Z\tsync\tstarted\n",
+			wantLines: 2,
+		},
+		{name: "an empty file", wantLines: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "ops.log")
+			if tt.torn != "" {
+				if err := os.WriteFile(path, []byte(tt.torn), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			l := New(path)
+			at := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+			l.now = func() time.Time { return at }
+
+			l.Log("boot", "version dev")
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Count(string(data), "\n"); got != tt.wantLines {
+				t.Fatalf("the file holds %d whole lines, want %d: %q", got, tt.wantLines, data)
+			}
+			// The new event must be the newest entry that Tail can read.
+			last := l.Tail(1)
+			if len(last) != 1 || last[0].Event != "boot" || last[0].Details != "version dev" {
+				t.Fatalf("Tail lost the new event: %+v", last)
+			}
+		})
+	}
+}
+
 func TestTail(t *testing.T) {
 	l := newTestLog(t)
 	for i := range 5 {

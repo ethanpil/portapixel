@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -187,6 +188,83 @@ func TestDownloadRangeRefused(t *testing.T) {
 	got := rec.list()
 	if len(got) != 2 || got[0] == "" || got[1] != "" {
 		t.Fatalf("ranges = %v, want a Range request and then a plain request", got)
+	}
+}
+
+// TestDownloadStopsAtThePromisedSize covers a server that sends more bytes than
+// the manifest promises. The extra bytes must never reach the card: they would
+// fill the media partition, and the part file that stayed behind would then stop
+// every later write.
+func TestDownloadStopsAtThePromisedSize(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(body)
+		// The manifest promised len(body). This server goes on.
+		w.Write(bytes.Repeat([]byte("x"), 40000))
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "media.bin")
+	if err := Download(context.Background(), newClient(), srv.URL, "", dest, bodySHA(), int64(len(body))); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	assertFile(t, dest)
+}
+
+// TestDownloadRefusesARangeFromAnotherOffset covers a cache or a proxy that
+// answers 206 from the start although we asked to continue. Those bytes at the
+// end of the part file would make an object that is wrong in the middle.
+func TestDownloadRefusesARangeFromAnotherOffset(t *testing.T) {
+	rec := &recorder{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rec.add(r)
+		if r.Header.Get("Range") == "" {
+			w.Write(body)
+			return
+		}
+		// The answer says 206 but begins at byte 0.
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes 0-%d/%d", len(body)-1, len(body)))
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write(body)
+	}))
+	defer srv.Close()
+
+	dest := filepath.Join(t.TempDir(), "media.bin")
+	if err := os.WriteFile(dest+".part", body[:100], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := Download(context.Background(), newClient(), srv.URL, "", dest, bodySHA(), int64(len(body))); err != nil {
+		t.Fatalf("Download: %v", err)
+	}
+	assertFile(t, dest)
+	got := rec.list()
+	if len(got) != 2 || got[0] == "" || got[1] != "" {
+		t.Fatalf("ranges = %v, want a Range request and then a plain request", got)
+	}
+}
+
+func TestRangeStart(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  int64
+		ok    bool
+	}{
+		{name: "a range from the start", value: "bytes 0-999/1000", want: 0, ok: true},
+		{name: "a range that continues", value: "bytes 600-999/1000", want: 600, ok: true},
+		{name: "extra spaces", value: "  bytes  600-999/1000 ", want: 600, ok: true},
+		{name: "an unknown total", value: "bytes 600-999/*", want: 600, ok: true},
+		{name: "no header at all", value: ""},
+		{name: "another unit", value: "items 600-999/1000"},
+		{name: "no first byte", value: "bytes -999/1000"},
+		{name: "not a number", value: "bytes abc-999/1000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := rangeStart(tt.value)
+			if ok != tt.ok || got != tt.want {
+				t.Fatalf("rangeStart(%q) = %d, %v, want %d, %v", tt.value, got, ok, tt.want, tt.ok)
+			}
+		})
 	}
 }
 

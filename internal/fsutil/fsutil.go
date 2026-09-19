@@ -7,6 +7,10 @@ import (
 	"path/filepath"
 )
 
+// chmodFile changes the mode of an open file. It is a variable, because a test
+// must be able to make the change fail on a machine that permits it.
+var chmodFile = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }
+
 // WriteFileAtomic writes data to path in a way that a power cut cannot damage.
 // It writes a temporary file in the same directory, syncs it, and then renames
 // it onto path. The rename is the commit. After the rename it syncs the parent
@@ -33,9 +37,12 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := f.Sync(); err != nil {
 		return fmt.Errorf("sync %s: %w", tmp, err)
 	}
-	if err := f.Chmod(perm); err != nil {
-		return fmt.Errorf("set the mode of %s: %w", tmp, err)
-	}
+	// A filesystem that has no file modes refuses this change. PPMEDIA is such a
+	// filesystem: exFAT takes the mode from the mount options and answers
+	// "operation not permitted". A mode is not worth a lost write, so a refusal
+	// is not an error here. os.CreateTemp makes the file with mode 0600, so the
+	// file that stays after a refusal has the safe mode, not a wide one.
+	chmodFile(f, perm)
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", tmp, err)
 	}

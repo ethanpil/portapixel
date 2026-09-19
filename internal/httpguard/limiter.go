@@ -13,38 +13,63 @@ const (
 	failWindow  = time.Minute
 )
 
+// maxWrites is the number of records that the limiter takes before it drops the
+// addresses that have no recent record. One pass costs one step for each
+// address, and it runs once in maxWrites records, so the cost stays small.
+const maxWrites = 1024
+
 // Limiter counts failed logins for each remote address. It makes a password
 // guess attack slow without a lock-out that an attacker could use to keep the
 // true admin out for a long time.
 type Limiter struct {
 	mu       sync.Mutex
 	failures map[string][]time.Time
-	now      func() time.Time
+	// open holds the attempts that Allow permitted and that did not end yet. An
+	// open attempt counts against the limit. Without it a burst of requests that
+	// arrive together would all pass the check, because each one of them reads
+	// the count before any one of them reports a failure.
+	open   map[string][]time.Time
+	writes int
+	now    func() time.Time
 }
 
 // NewLimiter makes an empty limiter.
 func NewLimiter() *Limiter {
-	return &Limiter{failures: make(map[string][]time.Time), now: time.Now}
+	return &Limiter{
+		failures: make(map[string][]time.Time),
+		open:     make(map[string][]time.Time),
+		now:      time.Now,
+	}
 }
 
-// Allow reports if this address may try to log in now.
+// Allow reports if this address may try to log in now. It counts the attempt
+// that it permits. Fail or Reset ends that attempt; an attempt that ends in no
+// other way stops counting after one window.
 func (l *Limiter) Allow(remoteAddr string) bool {
 	key := limiterKey(remoteAddr)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	return len(l.recent(key)) < maxFailures
+	if len(l.recent(l.failures, key))+len(l.recent(l.open, key)) >= maxFailures {
+		return false
+	}
+	l.open[key] = append(l.open[key], l.now())
+	l.sweep()
+	return true
 }
 
-// Fail records one failed login.
+// Fail records one failed login. It ends the open attempt of the address, so
+// that one failed login counts one time.
 func (l *Limiter) Fail(remoteAddr string) {
 	key := limiterKey(remoteAddr)
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.failures[key] = append(l.recent(key), l.now())
+	l.endOpen(key)
+	l.failures[key] = append(l.recent(l.failures, key), l.now())
+	l.sweep()
 }
 
 // Reset removes the failures of an address. The caller calls it after a good
@@ -56,24 +81,58 @@ func (l *Limiter) Reset(remoteAddr string) {
 	defer l.mu.Unlock()
 
 	delete(l.failures, key)
+	delete(l.open, key)
 }
 
-// recent gives the failures of key that are inside the window and drops the
+// recent gives the times of key in m that are inside the window and drops the
 // older ones. The caller holds the lock.
-func (l *Limiter) recent(key string) []time.Time {
+func (l *Limiter) recent(m map[string][]time.Time, key string) []time.Time {
 	cut := l.now().Add(-failWindow)
-	kept := l.failures[key][:0]
-	for _, t := range l.failures[key] {
+	kept := m[key][:0]
+	for _, t := range m[key] {
 		if t.After(cut) {
 			kept = append(kept, t)
 		}
 	}
 	if len(kept) == 0 {
-		delete(l.failures, key)
+		delete(m, key)
 		return nil
 	}
-	l.failures[key] = kept
+	m[key] = kept
 	return kept
+}
+
+// endOpen ends the oldest open attempt of key. The caller holds the lock. A Fail
+// with no open attempt is not a fault: a caller may count a failure that it
+// found in another way.
+func (l *Limiter) endOpen(key string) {
+	open := l.recent(l.open, key)
+	if len(open) == 0 {
+		return
+	}
+	if len(open) == 1 {
+		delete(l.open, key)
+		return
+	}
+	l.open[key] = open[1:]
+}
+
+// sweep drops every address that has no recent record. recent works on one
+// address only, so without this pass an address that never comes back keeps its
+// record for as long as the daemon runs: one failed login from each address of
+// one network would fill the memory of a small device. The caller holds the
+// lock.
+func (l *Limiter) sweep() {
+	l.writes++
+	if l.writes < maxWrites {
+		return
+	}
+	l.writes = 0
+	for _, m := range []map[string][]time.Time{l.failures, l.open} {
+		for key := range m {
+			l.recent(m, key)
+		}
+	}
 }
 
 // limiterKey gives the address without the port, because the port changes with

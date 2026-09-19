@@ -24,6 +24,11 @@ const TRANSITIONS = [
 
 const KIND_LABEL = { image: 'Image', video: 'Video', url: 'Web page' };
 
+/* The item keys that the editor itself reads and writes. snapshot() puts them
+   first, in this order, and keeps every other key that the host page added. */
+const ITEM_KEYS = ['file', 'sha256', 'url', 'name', 'kind', 'duration', 'mute',
+  'max_duration', 'refresh_seconds', 'thumb'];
+
 /** Mount the editor into `el`.
     playlist:     the playlist object. It is copied, never edited in place.
     mediaSource:  {list(), thumbUrl(item), upload(file, onProgress)}
@@ -54,14 +59,19 @@ export function mountPlaylistEditor(el, opts = {}) {
     onInput: () => { pl.name = nameInput.value; touch(); },
   });
 
+  /* The first option is the third state: the playlist says nothing and the
+     device setting decides. A save must be able to keep that state. */
   const transSelect = h('select', {
     class: 'pp-select', 'aria-label': 'Transition between items', disabled: ro,
     onChange: () => { pl.transition = transSelect.value; touch(); },
-  }, TRANSITIONS.map(([v, label]) => h('option', { value: v, text: label })));
-  transSelect.value = pl.transition || 'crossfade';
+  }, [h('option', { value: '', text: 'Device setting' }),
+    TRANSITIONS.map(([v, label]) => h('option', { value: v, text: label }))]);
+  transSelect.value = pl.transition || '';
 
+  /* A half-checked box is the same third state for shuffle. A click on it makes
+     the value explicit; there is no way back to the device setting from here. */
   const shuffleBox = h('input', {
-    type: 'checkbox', checked: !!pl.shuffle, disabled: ro,
+    type: 'checkbox', checked: pl.shuffle === true, indeterminate: pl.shuffle === null, disabled: ro,
     onChange: () => { pl.shuffle = shuffleBox.checked; touch(); },
   });
 
@@ -383,7 +393,9 @@ export function mountPlaylistEditor(el, opts = {}) {
       try {
         const added = await uploader(file, (frac) => { bar.style.width = `${Math.round(frac * 100)}%`; });
         line.remove();
-        addItems(added ? (Array.isArray(added) ? added : [added]) : [fromFile(file)]);
+        // An uploader that gives nothing back has put the file in the playlist
+        // folder under its own name.
+        addItems(added ? (Array.isArray(added) ? added : [added]) : [{ file: file.name, name: file.name, size: file.size }]);
       } catch (err) {
         line.remove();
         toast(err.message || `${file.name} did not upload`, 'danger');
@@ -487,9 +499,14 @@ export function mountPlaylistEditor(el, opts = {}) {
       if (!go) return;
     }
     saveBtn.disabled = true;
+    // Take the copy that goes out before the wait. Every other control stays
+    // live while the save is in flight, and an edit that the server never got
+    // must still count as not saved.
+    const sent = snapshot(pl);
     try {
-      await (opts.onSave ? opts.onSave(getPlaylist()) : Promise.resolve());
-      markClean();
+      await (opts.onSave ? opts.onSave(JSON.parse(sent)) : Promise.resolve());
+      clean = sent;
+      touch();
     } catch (err) {
       toast(err.message || 'That did not save', 'danger');
     } finally {
@@ -515,8 +532,9 @@ export function mountPlaylistEditor(el, opts = {}) {
 
   function syncHead() {
     nameInput.value = pl.name || '';
-    transSelect.value = pl.transition || 'crossfade';
-    shuffleBox.checked = !!pl.shuffle;
+    transSelect.value = pl.transition || '';
+    shuffleBox.checked = pl.shuffle === true;
+    shuffleBox.indeterminate = pl.shuffle === null || pl.shuffle === undefined;
   }
 
   function getPlaylist() { return JSON.parse(snapshot(pl)); }
@@ -544,8 +562,11 @@ function adopt(p) {
   return {
     name: s.name || '',
     title: s.title || '',
-    transition: s.transition || 'crossfade',
-    shuffle: !!s.shuffle,
+    // An absent transition and an absent shuffle mean "use the device setting".
+    // The playlist file keeps that third state, so the editor keeps it too:
+    // opening a playlist and saving it must not pin the device values into it.
+    transition: s.transition || '',
+    shuffle: s.shuffle === null || s.shuffle === undefined ? null : !!s.shuffle,
     items: (s.items || []).map(normalizeItem),
   };
 }
@@ -566,16 +587,27 @@ function guessKind(name) {
 function label(item) { return item.name || item.file || item.url || 'item'; }
 
 /* One canonical string per playlist state, used for dirty tracking and for
-   handing a copy to onSave. Key order is fixed so it compares reliably. */
+   handing a copy to onSave. Key order is fixed so it compares reliably.
+   An undefined value never reaches the string, so a transition or a shuffle
+   that the playlist does not set stays unset and the device value stays live. */
 function snapshot(pl) {
   return JSON.stringify({
-    name: pl.name, title: pl.title, transition: pl.transition, shuffle: pl.shuffle,
-    items: pl.items.map((i) => ({
-      file: i.file ?? null, sha256: i.sha256 ?? null, url: i.url ?? null,
-      name: i.name ?? null, kind: i.kind ?? null,
-      duration: i.duration ?? null, mute: i.mute ?? null,
-      max_duration: i.max_duration ?? null, refresh_seconds: i.refresh_seconds ?? null,
-      thumb: i.thumb ?? null,
-    })),
+    name: pl.name, title: pl.title,
+    transition: pl.transition || undefined,
+    shuffle: pl.shuffle === null || pl.shuffle === undefined ? undefined : pl.shuffle,
+    items: pl.items.map(snapshotItem),
   });
+}
+
+/* One item in canonical form: the keys that the editor owns, in a fixed order,
+   and then every other key in name order. A host page adds fields of its own,
+   for example codec, width, height, size and length. The warnings and the pass
+   time read them, so a save and a discard must both keep them. */
+function snapshotItem(item) {
+  const out = {};
+  for (const k of ITEM_KEYS) out[k] = item[k] ?? null;
+  for (const k of Object.keys(item).sort()) {
+    if (!ITEM_KEYS.includes(k)) out[k] = item[k];
+  }
+  return out;
 }

@@ -122,6 +122,13 @@ func isLoopback(addr string) bool {
 // PasswordEqual compares two passwords in constant time. A comparison that
 // stops at the first different character tells an attacker how much of the
 // password is correct.
+//
+// An empty password never matches. Two empty values are equal to
+// subtle.ConstantTimeCompare, so a configuration file that holds no password
+// would otherwise let every login in.
 func PasswordEqual(given, want string) bool {
+	if given == "" || want == "" {
+		return false
+	}
 	return subtle.ConstantTimeCompare([]byte(given), []byte(want)) == 1
 }

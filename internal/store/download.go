@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
@@ -32,12 +33,12 @@ func Download(ctx context.Context, client *http.Client, url, bearer, destPath, w
 	}
 	part := destPath + ".part"
 
-	err := fetch(ctx, client, url, bearer, part)
+	err := fetch(ctx, client, url, bearer, part, wantSize)
 	if errors.Is(err, errRangeRejected) {
 		// The part file does not fit this object any more. Get the whole object
 		// one more time.
 		os.Remove(part)
-		err = fetch(ctx, client, url, bearer, part)
+		err = fetch(ctx, client, url, bearer, part, wantSize)
 	}
 	if err != nil {
 		return err
@@ -74,7 +75,10 @@ func Download(ctx context.Context, client *http.Client, url, bearer, destPath, w
 // fetch writes the body of url to the part file. It continues a part file that
 // is already there. It syncs the part file before it returns, so that the bytes
 // survive a power cut and a later call can continue them.
-func fetch(ctx context.Context, client *http.Client, url, bearer, part string) error {
+//
+// wantSize is the size that the manifest promises, or 0 when the caller does not
+// know it. fetch never writes more than that number of bytes.
+func fetch(ctx context.Context, client *http.Client, url, bearer, part string, wantSize int64) error {
 	f, err := os.OpenFile(part, os.O_RDWR|os.O_CREATE, 0o644)
 	if err != nil {
 		return fmt.Errorf("open %s: %w", part, err)
@@ -104,15 +108,24 @@ func fetch(ctx context.Context, client *http.Client, url, bearer, part string) e
 	}
 	defer resp.Body.Close()
 
+	// offset is the place in the part file where the body goes.
+	offset := have
 	switch {
 	case resp.StatusCode == http.StatusPartialContent:
-		// The server continues the part file. Write at the end.
+		// The server continues the part file. Write at the end, but only if the
+		// answer begins at the byte that we asked for. A cache or a proxy can
+		// answer 206 from another offset, and those bytes at the end of the part
+		// file would make an object that is wrong in the middle.
+		if start, ok := rangeStart(resp.Header.Get("Content-Range")); !ok || start != have {
+			return errRangeRejected
+		}
 		if _, err := f.Seek(have, io.SeekStart); err != nil {
 			return fmt.Errorf("seek %s: %w", part, err)
 		}
 	case resp.StatusCode == http.StatusOK:
 		// The server sent the whole object, even if we asked for a range. Start
 		// the part file again.
+		offset = 0
 		if err := f.Truncate(0); err != nil {
 			return fmt.Errorf("truncate %s: %w", part, err)
 		}
@@ -125,7 +138,14 @@ func fetch(ctx context.Context, client *http.Client, url, bearer, part string) e
 		return fmt.Errorf("get %s: the server answered %s", url, resp.Status)
 	}
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	// Take the promised number of bytes and no more. A server that sends more
+	// than the manifest promises must not be able to fill the media partition:
+	// the card would then hold a part file that no later download can remove.
+	var body io.Reader = resp.Body
+	if wantSize > 0 {
+		body = io.LimitReader(resp.Body, wantSize-offset)
+	}
+	if _, err := io.Copy(f, body); err != nil {
 		f.Sync() // keep the bytes that did arrive, so that a retry can continue
 		return fmt.Errorf("read the body of %s: %w", url, err)
 	}
@@ -133,4 +153,20 @@ func fetch(ctx context.Context, client *http.Client, url, bearer, part string) e
 		return fmt.Errorf("sync %s: %w", part, err)
 	}
 	return nil
+}
+
+// rangeStart gives the first byte number of a Content-Range header value, for
+// example 600 from "bytes 600-999/1000". It reports false when the value is
+// missing or has another shape.
+func rangeStart(value string) (int64, bool) {
+	v := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(value), "bytes"))
+	dash := strings.IndexByte(v, '-')
+	if dash < 0 {
+		return 0, false
+	}
+	start, err := strconv.ParseInt(strings.TrimSpace(v[:dash]), 10, 64)
+	if err != nil || start < 0 {
+		return 0, false
+	}
+	return start, true
 }

@@ -7,7 +7,11 @@
 
 /* ------------------------------------------------------------ DOM builder */
 
-const PROPS = new Set(['value', 'checked', 'selected', 'disabled', 'indeterminate', 'readOnly', 'htmlFor']);
+/* Keys that must go to the property, not to the attribute. `draggable` is one
+   of them: it takes the words "true" and "false", so the empty string that a
+   boolean attribute gets would mean "auto", which is "not draggable" for a
+   span. */
+const PROPS = new Set(['value', 'checked', 'selected', 'disabled', 'indeterminate', 'readOnly', 'htmlFor', 'draggable']);
 
 /** Build an element. `attrs` holds attributes, `on*` listeners, `style`, `dataset`.
     Children can be strings, numbers, Nodes, arrays, or null. */

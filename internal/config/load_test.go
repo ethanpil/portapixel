@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,6 +85,32 @@ func TestLoad(t *testing.T) {
 			media:    &goodFile,
 			shadow:   &otherFile,
 			wantName: "Lobby",
+		},
+		{
+			// The file parses, so only Validate finds the fault. A hand edit that
+			// breaks a value must behave like any other bad file (D38).
+			name:        "a media file with a bad value falls back to the shadow copy",
+			media:       ptr(strings.Replace(goodFile, "rotation = 0", "rotation = 45", 1)),
+			shadow:      &otherFile,
+			wantName:    "Shadow copy",
+			wantShadow:  true,
+			wantWarning: true,
+		},
+		{
+			name:        "an empty password is a bad value",
+			media:       ptr(strings.Replace(goodFile, `password = "portapixel"`, `password = ""`, 1)),
+			shadow:      &otherFile,
+			wantName:    "Shadow copy",
+			wantShadow:  true,
+			wantWarning: true,
+		},
+		{
+			name:        "a bad value in both files gives the defaults",
+			media:       ptr(strings.Replace(goodFile, "rotation = 0", "rotation = 45", 1)),
+			shadow:      ptr(strings.Replace(otherFile, "volume = 100", "volume = 900", 1)),
+			wantName:    "PortaPixel",
+			wantDefault: true,
+			wantWarning: true,
 		},
 	}
 
@@ -174,19 +201,42 @@ func TestLoadWritesTheMirrorOnlyWhenItChanges(t *testing.T) {
 }
 
 func TestLoadDoesNotMirrorABadFile(t *testing.T) {
-	mediaRoot, stateDir := dirs(t)
 	good := string(Render(Default()))
-	write(t, ShadowPath(stateDir), good)
-	write(t, MediaPath(mediaRoot), "bad [")
-
-	Load(mediaRoot, stateDir)
-
-	got, err := os.ReadFile(ShadowPath(stateDir))
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name  string
+		media string
+	}{
+		{name: "the file is not toml", media: "bad ["},
+		{
+			// The last-known-good copy must hold a file that is good in both
+			// ways: it parses and every value in it is permitted.
+			name:  "the file holds a bad value",
+			media: strings.Replace(good, "rotation = 0", "rotation = 45", 1),
+		},
+		{
+			name:  "the file holds a network value that would inject a directive",
+			media: strings.Replace(good, `mode = "dhcp"`, "mode = \"static\"\naddress = \"192.168.1.50/24\\n\\tup /bin/sh -c id\"", 1),
+		},
 	}
-	if string(got) != good {
-		t.Fatal("a bad media file must never replace the shadow copy")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mediaRoot, stateDir := dirs(t)
+			write(t, ShadowPath(stateDir), good)
+			write(t, MediaPath(mediaRoot), tt.media)
+
+			got := Load(mediaRoot, stateDir)
+			if !got.FromShadow {
+				t.Fatalf("Load must fall back to the shadow copy, got %+v", got)
+			}
+
+			shadow, err := os.ReadFile(ShadowPath(stateDir))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(shadow) != good {
+				t.Fatal("a bad media file must never replace the shadow copy")
+			}
+		})
 	}
 }
 

@@ -51,6 +51,95 @@ func TestValidate(t *testing.T) {
 			change:    func(c *Config) { c.Network.WifiPSK = "secret" },
 			wantField: "network.wifi_ssid",
 		},
+		// The daemon renders the five network values into files that belong to
+		// root. A value with a line break in it would add a directive of its own,
+		// so each value must have the shape of its field.
+		{
+			name: "an address that carries a second directive",
+			change: func(c *Config) {
+				c.Network.Mode = "static"
+				c.Network.Address = "192.168.1.50/24\n\tup /bin/sh -c id"
+			},
+			wantField: "network.address",
+		},
+		{
+			name: "an address that is not an address",
+			change: func(c *Config) {
+				c.Network.Mode = "static"
+				c.Network.Address = "the lobby switch"
+			},
+			wantField: "network.address",
+		},
+		{
+			name: "a bare address is good",
+			change: func(c *Config) {
+				c.Network.Mode = "static"
+				c.Network.Address = "192.168.1.50"
+			},
+		},
+		{
+			name: "an IPv6 address with a prefix is good",
+			change: func(c *Config) {
+				c.Network.Mode = "static"
+				c.Network.Address = "2001:db8::5/64"
+			},
+		},
+		{
+			name: "a gateway that carries a second directive",
+			change: func(c *Config) {
+				c.Network.Mode = "static"
+				c.Network.Address = "192.168.1.50/24"
+				c.Network.Gateway = "192.168.1.1\n\tup /bin/sh -c id"
+			},
+			wantField: "network.gateway",
+		},
+		{
+			name: "a gateway with a prefix length",
+			change: func(c *Config) {
+				c.Network.Mode = "static"
+				c.Network.Address = "192.168.1.50/24"
+				c.Network.Gateway = "192.168.1.1/24"
+			},
+			wantField: "network.gateway",
+		},
+		{
+			name: "a good gateway and good dns servers",
+			change: func(c *Config) {
+				c.Network.Mode = "static"
+				c.Network.Address = "192.168.1.50/24"
+				c.Network.Gateway = "192.168.1.1"
+				c.Network.DNS = []string{"192.168.1.1", "1.1.1.1", "2606:4700:4700::1111"}
+			},
+		},
+		{
+			name: "a dns server that is a name",
+			change: func(c *Config) {
+				c.Network.DNS = []string{"1.1.1.1", "dns.example.com"}
+			},
+			wantField: "network.dns[1]",
+		},
+		{
+			name: "a network name with a line break",
+			change: func(c *Config) {
+				c.Network.WifiSSID = "Lobby\n\tkey_mgmt=NONE"
+			},
+			wantField: "network.wifi_ssid",
+		},
+		{
+			name: "a wifi key with a line break",
+			change: func(c *Config) {
+				c.Network.WifiSSID = "Lobby"
+				c.Network.WifiPSK = "secret\n\tkey_mgmt=NONE"
+			},
+			wantField: "network.wifi_psk",
+		},
+		{
+			name: "a wifi key with a quotation mark is good",
+			change: func(c *Config) {
+				c.Network.WifiSSID = "Lobby \"guest\""
+				c.Network.WifiPSK = `it"s a secret`
+			},
+		},
 
 		{name: "bad rotation", change: func(c *Config) { c.Display.Rotation = 45 }, wantField: "display.rotation"},
 		{name: "negative rotation", change: func(c *Config) { c.Display.Rotation = -90 }, wantField: "display.rotation"},
