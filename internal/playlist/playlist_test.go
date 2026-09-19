@@ -242,6 +242,13 @@ func TestValidate(t *testing.T) {
 			wantField: "item[0].refresh_seconds",
 		},
 		{
+			// Render writes no mute key for a url item, so a playlist that holds
+			// one would lose it in silence at the next save.
+			name:      "mute on a url item",
+			playlist:  Playlist{Items: []Item{{URL: "https://a", Duration: 10, Mute: true}}},
+			wantField: "item[0].mute",
+		},
+		{
 			name:      "max_duration on a url item",
 			playlist:  Playlist{Items: []Item{{URL: "https://a", Duration: 10, MaxDuration: 60}}},
 			wantField: "item[0].max_duration",

@@ -116,6 +116,12 @@ func (p Playlist) Validate(opt Options) Errors {
 			if it.MaxDuration != 0 {
 				add(field+".max_duration", "belongs to a file item; a url item uses duration")
 			}
+			// Render writes no mute key for a url item, because a web page has no
+			// mute switch. Without this rule the key would go away in silence at
+			// the next save.
+			if it.Mute {
+				add(field+".mute", "belongs to a video item; a url item has no sound switch")
+			}
 			if it.Duration <= 0 && len(p.Items) > 1 {
 				add(field+".duration", "a url item in a playlist of more than one item needs a duration")
 			}

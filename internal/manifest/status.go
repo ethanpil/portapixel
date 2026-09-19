@@ -25,8 +25,10 @@ type Status struct {
 	MediaTotalBytes uint64  `json:"media_total_bytes"`
 	MediaFreeBytes  uint64  `json:"media_free_bytes"`
 
-	BrowserState     string `json:"browser_state"`   // starting | running | restarting | stopped | waiting-for-display
-	NavigationRung   string `json:"navigation_rung"` // dbus | webdriver | relaunch
+	// The words come from internal/device/browser: the State constants and the
+	// Name of the navigator that the ladder chose (contract section 7).
+	BrowserState     string `json:"browser_state"`   // stopped | starting | running | waiting-for-display | disabled
+	NavigationRung   string `json:"navigation_rung"` // cdp | relaunch
 	DisplayConnected bool   `json:"display_connected"`
 	ScreenOn         bool   `json:"screen_on"`
 
