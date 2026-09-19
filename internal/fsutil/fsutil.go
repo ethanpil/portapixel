@@ -1,15 +1,31 @@
 package fsutil
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
+	"syscall"
 )
 
 // chmodFile changes the mode of an open file. It is a variable, because a test
 // must be able to make the change fail on a machine that permits it.
 var chmodFile = func(f *os.File, perm os.FileMode) error { return f.Chmod(perm) }
+
+// modeRefused reports if err says that the filesystem cannot hold a file mode.
+// exFAT answers EPERM, because it takes the mode from the mount options; other
+// filesystems of that kind answer ENOTSUP or EINVAL. Windows has no POSIX modes
+// at all, so a failure there is always this case.
+func modeRefused(err error) bool {
+	if runtime.GOOS == "windows" {
+		return true
+	}
+	return errors.Is(err, syscall.EPERM) ||
+		errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, syscall.EINVAL)
+}
 
 // WriteFileAtomic writes data to path in a way that a power cut cannot damage.
 // It writes a temporary file in the same directory, syncs it, and then renames
@@ -39,10 +55,13 @@ func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
 	}
 	// A filesystem that has no file modes refuses this change. PPMEDIA is such a
 	// filesystem: exFAT takes the mode from the mount options and answers
-	// "operation not permitted". A mode is not worth a lost write, so a refusal
-	// is not an error here. os.CreateTemp makes the file with mode 0600, so the
-	// file that stays after a refusal has the safe mode, not a wide one.
-	chmodFile(f, perm)
+	// "operation not permitted". A mode is not worth a lost write there. Every
+	// other failure is an error: a file that keeps the mode 0600 of the
+	// temporary file when the caller asked for 0644 is a file that another user
+	// cannot read, and that fault must not be silent.
+	if err := chmodFile(f, perm); err != nil && !modeRefused(err) {
+		return fmt.Errorf("set the mode of %s: %w", tmp, err)
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", tmp, err)
 	}
