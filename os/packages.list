@@ -1,0 +1,147 @@
+# PortaPixel package set. This file is the only source of the installed packages.
+# os/install.sh reads it. Nothing else may add a package.
+#
+# FORMAT
+#   pkgname            # rationale      -> install on all architectures
+#   @x86_64 pkgname    # rationale      -> install on x86_64 only
+#   @aarch64 pkgname   # rationale      -> install on aarch64 only
+#   # text                              -> comment, ignored
+#   (blank line)                        -> ignored
+# One package per line. Each line needs a rationale comment. Put the tag first.
+#
+# VERIFIED on Alpine 3.23.2 (an x86_64 box, and an aarch64 apk root from the
+# same v3.23 repositories) on 2026-09-18. Every name below exists in main or
+# community, on both architectures.
+#
+# ALPINE 3.23 LANDMINE: Alpine splits the OpenRC init scripts into separate
+# "-openrc" subpackages. Install "chrony" alone and there is no
+# /etc/init.d/chronyd, so "rc-update add chronyd" fails. Every service we enable
+# therefore has its "-openrc" package listed next to the main package.
+#
+# THE DISPLAY STACK IS CHROMIUM AND CAGE, not cog and WPE WebKit. The plan asked
+# for cog plus wpewebkit. Neither package exists in Alpine 3.23 main or
+# community, and neither is in edge main, community or testing either (checked
+# on 2026-09-18). Only libwpe and libwpebackend-fdo are packaged, which is not
+# enough to run anything. The owner chose Chromium in a cage session instead.
+# cage is the ONLY compositor allowed here: never weston, sway or labwc.
+
+# ---------------------------------------------------------------- base system
+alpine-base                # busybox, OpenRC, /etc skeleton. The Alpine base (D1).
+busybox-openrc             # syslog and crond init scripts. syslog logs to RAM (D35).
+busybox-suid               # su, passwd and login. The daemon starts the browser as the kiosk user.
+openssh-server             # SSH is on by default (D23). It also brings ssh-keygen for the host keys.
+openssh-server-common-openrc  # the sshd init script. The main package holds no init script.
+chrony                     # real time sync. A Pi has no RTC (D40).
+chrony-openrc              # the chronyd init script.
+tzdata                     # IANA zone data for [device].timezone (D40).
+ca-certificates            # TLS trust for the fleet server and GitHub release checks.
+dbus                       # Chromium and the accessibility layer look for a bus. Without one they log errors on every start.
+dbus-openrc                # the dbus init script.
+
+# ------------------------------------------------------------ device handling
+# eudev, not mdev: we need stable /dev/dri and /dev/input nodes plus input
+# hotplug, which libinput inside cage needs (plan section 7).
+# LANDMINE: alpine-base pulls busybox-mdev-openrc, so both mdev and udev init
+# scripts are on disk. install.sh enables udev only. Never enable both.
+eudev                      # udev implementation without systemd.
+eudev-openrc               # the udev-postmount init script.
+udev-init-scripts          # udev rules and helpers.
+udev-init-scripts-openrc   # the udev, udev-trigger and udev-settle init scripts.
+
+# ------------------------------------------------------- storage and partition
+e2fsprogs                  # mkfs.ext4 and fsck.ext4 for PPROOT (plan section 5).
+exfatprogs                 # mkfs.exfat and fsck.exfat for PPMEDIA. exFAT has no grow tool (D36).
+dosfstools                 # fsck.vfat for PPBOOT.
+sgdisk                     # GPT edit for the first boot p3 recreate (D36). Its own package, not part of gptfdisk.
+sfdisk                     # partition table dump and restore. Backup path for the p3 dance.
+partx                      # tell the kernel about the new p3 without a reboot (D36). Its own package.
+parted                     # partprobe. Second way to re-read the partition table.
+mkinitfs                   # build the initramfs. The feature list gives medium independence (D53).
+zram-init                  # compressed RAM swap for the low tier (plan section 4). No flash wear.
+zram-init-openrc           # the zram-init init script. The daemon configures it on low tier only.
+
+# --------------------------------------------------------------- the browser
+# The daemon starts:  cage -s -- chromium --kiosk --ozone-platform=wayland ...
+# and drives it over the DevTools protocol on a localhost port. There is no
+# chromedriver: the DevTools port is the control path.
+# The Ozone Wayland backend is compiled in: the binary carries
+# ui/ozone/platform/wayland/* and libwayland is linked inside it, which is why
+# libwayland-client is not in its dependency list (checked 2026-09-18).
+chromium                   # the browser. It brings its own ffmpeg, GTK and NSS.
+cage                       # single window Wayland kiosk compositor on DRM/KMS through wlroots. The only compositor allowed.
+seatd                      # the seat daemon. cage takes DRM master through libseat as the unprivileged kiosk user.
+seatd-openrc               # the seatd init script.
+wlr-randr                  # set the output mode and the rotation inside the cage session (D10, D49).
+# chromium-chromedriver is deliberately NOT installed. The daemon uses the
+# DevTools protocol. Do not re-add it without an explicit ask.
+# The GStreamer packages are gone with WPE WebKit: Chromium decodes with its
+# own pipeline and the system ffmpeg libraries, which come in as dependencies.
+
+# --------------------------------------------------------------- graphics core
+mesa-dri-gallium           # the broad Mesa driver set. "Maximal drivers" goal (plan section 4).
+mesa-gbm                   # GBM buffer allocation. wlroots scans out through it.
+mesa-egl                   # EGL on DRM/KMS. cage renders with it. No X server anywhere (D3).
+mesa-gles                  # GLES2. Chromium composites through it.
+libdrm                     # KMS ioctls for the mode set and for DPMS.
+
+# --------------------------------------------------------------------- sound
+alsa-lib                   # ALSA client library. Direct ALSA, no PulseAudio, no PipeWire daemon (D11).
+alsa-utils                 # amixer and alsactl. The daemon sets the output and the volume.
+alsa-utils-openrc          # the alsa init script. It saves and restores the mixer state.
+alsa-ucm-conf              # use case manager profiles. Some HDMI and USB codecs need them.
+
+# ------------------------------------------------------------------- networking
+wpa_supplicant             # WiFi (D20). portapixel-net renders its configuration file.
+wpa_supplicant-openrc      # the wpa_supplicant init script.
+ifupdown-ng                # /etc/network/interfaces for DHCP and static addresses (D20).
+wireless-regdb             # regulatory database. Without it some cards refuse the 5 GHz channels.
+
+# ------------------------------------------------------------------------ fonts
+# Base plus CJK plus emoji only. The full Noto set is several hundred megabytes
+# and the fallback screen does not need Linear B (plan section 7).
+font-noto                  # Latin, Greek, Cyrillic and the common symbol blocks.
+font-noto-cjk              # Chinese, Japanese and Korean text on live web pages.
+font-noto-emoji            # emoji, which real web pages use everywhere.
+
+# ------------------------------------------------------------------------- misc
+curl                       # field debug convenience. The documented rescan hook uses it.
+v4l-utils                  # ships cec-ctl for the CEC screen power path (D31).
+
+# --------------------------------------------------------------- x86_64 kernel
+@x86_64 linux-lts          # long term support kernel for generic PC hardware (D8).
+@x86_64 intel-ucode        # Intel CPU microcode. The boot loader puts it first in the initrd chain.
+@x86_64 amd-ucode          # AMD CPU microcode.
+
+# ------------------------------------------------------- x86_64 video decode
+@x86_64 libva              # VA-API client library for hardware video decode (D9).
+@x86_64 mesa-va-gallium    # VA-API driver for AMD and older Intel through Mesa.
+@x86_64 intel-media-driver # VA-API driver for Intel Gen9 and later (iHD).
+@x86_64 libva-intel-driver # VA-API driver for Intel before Gen9 (i965).
+
+# --------------------------------------------------------- x86_64 firmware set
+# Curated but generous, per the "maximal drivers" goal (plan section 4). One
+# line per family, so a size problem can be traced to a family.
+@x86_64 linux-firmware-i915    # Intel graphics DMC and GuC blobs. Without them i915 loses its display power states.
+@x86_64 linux-firmware-xe      # Intel Xe graphics (Meteor Lake and later).
+@x86_64 linux-firmware-amdgpu  # AMD GPU. Modern Radeon and APU display needs it.
+@x86_64 linux-firmware-radeon  # older Radeon that the radeon driver handles.
+@x86_64 linux-firmware-nvidia  # nouveau signed firmware. NVIDIA renders through nouveau, software decode (D9).
+@x86_64 linux-firmware-intel   # Intel WiFi (iwlwifi). The plan called this "linux-firmware-iwlwifi", which does not exist.
+@x86_64 linux-firmware-ath9k_htc  # Atheros USB WiFi. PCIe ath9k needs no firmware, so there is no linux-firmware-ath9k.
+@x86_64 linux-firmware-ath10k  # Qualcomm Atheros 802.11ac WiFi.
+@x86_64 linux-firmware-ath11k  # Qualcomm Atheros WiFi 6.
+@x86_64 linux-firmware-ath12k  # Qualcomm Atheros WiFi 7.
+@x86_64 linux-firmware-brcm    # Broadcom WiFi. Common in thin clients and mini PCs.
+@x86_64 linux-firmware-rtw88   # Realtek 802.11ac WiFi, very common on cheap USB adapters.
+@x86_64 linux-firmware-rtw89   # Realtek WiFi 6.
+@x86_64 linux-firmware-rtlwifi # older Realtek WiFi.
+@x86_64 linux-firmware-mediatek # MediaTek WiFi, which includes the mt76 blobs.
+@x86_64 linux-firmware-rtl_nic # Realtek wired Ethernet. Many boards do not link without it.
+@x86_64 linux-firmware-realtek # Realtek audio codec blobs.
+@x86_64 linux-firmware-cirrus  # Cirrus audio codec blobs, used by recent laptop class boards.
+
+# ------------------------------------------------------------ aarch64 (Pi) set
+@aarch64 linux-rpi         # the Raspberry Pi kernel. One flavour covers Zero 2 W to Pi 5 (D8).
+@aarch64 raspberrypi-bootloader   # start*.elf, bootcode.bin, fixup files and the DTBs for PPBOOT (plan section 6).
+@aarch64 linux-firmware-brcm      # Pi WiFi and Bluetooth blobs.
+@aarch64 linux-firmware-cypress   # Pi 3 and Pi 4 Cypress and Infineon WiFi blobs.
