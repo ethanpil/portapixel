@@ -4,6 +4,10 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Add screen power, mDNS, the A/B updater and install-to-disk to the daemon (308462d to bc3e060).
+- Give each status warning a code. Add the all-day schedule rule and the WiFi country (aa6db83, a207985, 514020e).
+- Fix the player syntax error and the black screen at boot. Record the M0 results (15a6754, 82dcaca).
+- Move the safe-name rule to `internal/slug` (1d0b653).
 - Add `portapixel-server` and its deployment files (00213b6 to b6d61f7).
 - Fix 29 code review findings in the daemon and the player (8f4431f to b25a1cb).
 - Add the device admin UI and its development server (7d3d12d, 915aa73).

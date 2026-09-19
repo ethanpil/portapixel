@@ -24,7 +24,7 @@ something that cost you time. Remove an entry when it is no longer true.
 |---|---|
 | M0 bring-up spike | Done in QEMU only. No real hardware was available. See section 4. |
 | v0.1 boot and play | In work |
-| v0.2 the appliance | Not started |
+| v0.2 the appliance | In work. The daemon side is built: power, mdns, updater, installer. No hardware check yet. |
 | v0.3 the fleet | Not started |
 
 ## 3. Divergences from the plan
@@ -36,6 +36,8 @@ something that cost you time. Remove an entry when it is no longer true.
 | D39: browser tmpfs about 96 MB | About 256 MB. | A Chromium profile is larger than a WebKit one. |
 | D6, D7: vendored Bootstrap for the two admin UIs | One hand-written stylesheet, `web/shared/pp.css`. No Bootstrap. | The wireframes give a full custom design (IBM Plex, moss green, `oklch` colours). Bootstrap below it would be more code, not less. Open decision for the maintainer. |
 | Fonts from Google Fonts (wireframes) | IBM Plex Sans and Mono as local `woff2` files in `web/shared/fonts/` | A device on a closed network cannot get remote fonts. The licence is OFL. |
+| D52: a sideload bundle names its version | The version comes from the staged binary, after the signature check. | The release assets are `portapixeld-<arch>`, `<name>.minisig` and `SHA256SUMS`. Not one of the three names holds a version, and a person who downloads them from GitHub has three loose files. Running a binary that minisign already proved is safe; a naming rule would be one more thing to get wrong. |
+| Plan section 15: stage in `releases/<ver>.staging` | A download does. A sideload stages in `releases/.sideload.staging`. | A sideload does not know the version until the binary is verified (the row above). |
 
 ## 4. M0 results
 
@@ -130,6 +132,24 @@ checked with a screenshot of the virtual display or with the ops log.
 - A day that is not in `power_days` has no on-period. The screen stays off that day.
 - A `playlist.toml` with no items is not a fault. The editor makes one before the first
   item.
+- Rule: the screen-off order is the display first and the browser second. The DPMS path
+  is `wlr-randr` inside the cage session, so a browser that stopped first takes the
+  compositor with it and the display stays on all night. `internal/device/power` owns
+  both steps for that one reason.
+- A manual `screen-on` or `screen-off` holds until the screen schedule crosses an EDGE.
+  A hold that ended at the next tick made the button useless.
+- Rule: a `[[schedule]]` rule has both times or neither. Both empty is the whole day,
+  which is how "weekends: this playlist" is written. Before this, such a rule matched
+  nothing at all and the person saw the default playlist with no word about why.
+- `status.warnings` is a list of `{code, message}`. The UI matches the code. It matched
+  the first words of the message before, and one better sentence broke a banner.
+- The player probes MediaCapabilities one time and sends the answer with its FIRST
+  heartbeat. The daemon caches it in `status.codecs`, so the admin UI warns about the
+  screen and not about the laptop of the person who looks at it (D12).
+- `POST /api/rescan` also looks for a release bundle in `_update/`. The daemon owns that
+  rule, so `httpd` calls `Deps.Rescan` and not `Library.Rescan`.
+- The install progress hub replays its last event. The admin UI opens the stream after
+  the POST answered, so a `done` event that went out first would never reach the page.
 - A static address goes to `wlan0` when an SSID is set, else to `eth0`.
 - The `opslog` tests take about 20 s because they write many lines to a real file.
 - `internal/config` imports `time/tzdata` (about 450 KB). Without it, time zone checks
