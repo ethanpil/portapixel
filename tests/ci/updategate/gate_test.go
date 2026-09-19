@@ -82,14 +82,12 @@ func newSigner(t *testing.T) signer {
 	return signer{public: pub, secret: priv}
 }
 
-// publicText is the key in the one line form that -X writes into the binary.
+// publicText is the key in the ONE LINE form, which is the base64 line of a
+// minisign.pub file with no comment line. -ldflags -X cannot carry a newline, so
+// the repository variable MINISIGN_PUBLIC_KEY holds this form too.
 func (s signer) publicText(t *testing.T) string {
 	t.Helper()
-	text, err := s.public.MarshalText()
-	if err != nil {
-		t.Fatalf("write the public key: %v", err)
-	}
-	return string(text)
+	return s.public.String()
 }
 
 // sign makes a PREHASHED signature, which is the only kind that

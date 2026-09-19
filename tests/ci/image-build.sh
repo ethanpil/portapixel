@@ -31,7 +31,9 @@ case "$ARCH" in x86_64|aarch64) ;; *) die "ARCH must be x86_64 or aarch64" ;; es
 # the busybox one cannot limit the size, which the fallback path needs.
 # alpine-keys carries /usr/share/apk/keys/<arch>, and apk-tools 3 refuses the
 # index of another architecture without those keys.
-PKGS="gptfdisk util-linux losetup e2fsprogs dosfstools exfatprogs mkinitfs cpio alpine-keys"
+# "sgdisk" is its own package. The gptfdisk package holds gdisk and cgdisk only,
+# and build-image.sh calls sgdisk (CONTEXT.md section 4).
+PKGS="sgdisk util-linux losetup e2fsprogs dosfstools exfatprogs mkinitfs cpio alpine-keys"
 if [ "$ARCH" = x86_64 ]; then
 	PKGS="$PKGS syslinux grub grub-efi"
 fi
