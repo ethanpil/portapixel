@@ -115,5 +115,12 @@ say "boot $FW, serial expect, host port $PORT -> guest 80"
 # The disk is virtio on purpose: the cmdline module list carries virtio_blk.
 # Attach it on a bus that the initramfs cannot probe and the test fails for the
 # wrong reason (mountnas lesson).
-exec expect "$(dirname "$0")/boot-smoke.exp" \
-	"$WORK/disk.qcow2" "$PORT" "$MEM" "$SCALE" "$ACCEL" "$BIOS" "$GPU"
+#
+# "expect", not "exec expect". An exec REPLACES this shell, so the EXIT trap
+# above never runs and $WORK stays behind. With a .img.gz input that directory
+# holds the unpacked image, so each run leaked four gigabytes. Measured: four
+# work directories left on the test box, two of them 4.0 GB.
+rc=0
+expect "$(dirname "$0")/boot-smoke.exp" \
+	"$WORK/disk.qcow2" "$PORT" "$MEM" "$SCALE" "$ACCEL" "$BIOS" "$GPU" || rc=$?
+exit "$rc"

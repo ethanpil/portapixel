@@ -31,15 +31,34 @@ if ! command -v shellcheck >/dev/null 2>&1; then
 	exit 1
 fi
 
+# The roots to search. "deploy" belongs here: deploy/portapixel-server.initd is a
+# shipped OpenRC script, and it was the one shell file in the repository that no
+# gate ever read. It carried four real faults that this list now finds.
+ROOTS="os scripts tests deploy"
+
 # `|| :` so a file that does not match cannot fail the $() under set -e.
-files=$(find os scripts tests -type f | while IFS= read -r f; do
+# shellcheck disable=SC2086  # $ROOTS is a deliberate word list of directories
+files=$(find $ROOTS -type f | while IFS= read -r f; do
 	head -n1 "$f" | grep -qE '^#!/(bin/sh|sbin/openrc-run)' && printf '%s\n' "$f" || :
 done)
 [ -n "$files" ] || { echo "FAIL: shebang discovery found no scripts"; exit 1; }
 
+# A shipped script with a shebang we do not expect is a gap in the gate, not a
+# file to pass over. bash and ash are both wrong here: the device has busybox ash
+# and every script must parse as POSIX sh.
+# shellcheck disable=SC2086
+badshebang=$(find $ROOTS -type f | while IFS= read -r f; do
+	head -n1 "$f" | grep -qE '^#!.*(bash|/bin/ash|env +sh)' && printf '%s\n' "$f" || :
+done)
+if [ -n "$badshebang" ]; then
+	echo "FAIL: these scripts must use #!/bin/sh, not bash or ash:"
+	echo "$badshebang"
+	fail=1
+fi
+
 # shellcheck disable=SC2086  # $files is a newline list of repository paths
 shellcheck -s sh -S warning -e SC1091,SC2034,SC3043,SC3045,SC3033 \
-	$files os/overlay/etc/conf.d/* ||
+	$files os/overlay/etc/conf.d/* deploy/portapixel-server.confd ||
 	fail=1
 # shellcheck disable=SC2086
 echo "shellcheck: $(printf '%s\n' $files | wc -l | tr -d ' ') shebang scripts + conf.d"
@@ -62,14 +81,15 @@ echo "parse check: all scripts parse as sh"
 CR="$(printf '\r')"   # $'\r' is a bash idiom, not POSIX sh
 # Image and font data can hold the byte 0x0D. busybox grep has no -I option that
 # works, so the file name decides which files are binary.
-BINARY='\.(jpg|jpeg|png|gif|ico|woff2|ppm|pcap)$'
-crlf="$(grep -lr "$CR" os scripts tests 2>/dev/null | grep -vE "$BINARY" || true)"
+BINARY='\.(jpg|jpeg|png|gif|ico|woff2|ppm|pcap|mp4|webm|gz|img|qcow2|zip|pdf|ttf|otf)$'
+# shellcheck disable=SC2086  # $ROOTS is a deliberate word list of directories
+crlf="$(grep -lr "$CR" $ROOTS 2>/dev/null | grep -vE "$BINARY" || true)"
 if [ -n "$crlf" ]; then
 	echo "FAIL: CRLF line ends found:"
 	echo "$crlf"
 	fail=1
 else
-	echo "line ends: LF everywhere under os/, scripts/, tests/"
+	echo "line ends: LF everywhere under $ROOTS"
 fi
 
 # ----------------------------------------------------- the package list format
