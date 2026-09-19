@@ -74,6 +74,18 @@ something that cost you time. Remove an entry when it is no longer true.
   fail on a host with no zone database. The system database still wins on Alpine.
 - The API shows a secret as `********`. A PUT that sends this mask keeps the old secret.
   An empty string clears it. A blank mask would make it impossible to clear a WiFi key.
+- Rule: a bad value in `portapixel.toml` never costs the user the rest of the file.
+  `config.Load` repairs each bad field to its default and keeps all other values. It
+  gives the list in `Result.Repaired`. The shadow copy is only for a file that is missing
+  or that is not TOML. A repaired config never goes into the shadow.
+- Rule: no code writes the config to the media root when `Load` reports `FromShadow`,
+  `FromDefault` or `Repaired`. The first review made `Load` refuse a file with one bad
+  value. Then `provision` wrote the defaults on top of the user's WiFi key on first boot.
+- Rule: a bad hand edit while the daemon runs keeps the config that runs. The shadow
+  fallback is for the daemon start only.
+- `/media/` serves by an allowlist of media extensions, not by a denylist. The atomic
+  write makes `portapixel.toml.tmp<random>` in the media root. After a power cut that
+  file can stay, and a denylist on `.toml` does not catch it.
 - `config.Load` never returns an error. It always gives a config that works (D38). The
   caller reads `FromShadow`, `FromDefault` and `Warning`.
 - `config.ChangeClass` has three classes: `live`, `browser` (restart the browser) and

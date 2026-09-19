@@ -4,6 +4,11 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix the remaining review findings in `web/shared` (4396d0f).
+- Ignore a refused chmod only on a filesystem without modes. Add `TotalBytes` (6148e24).
+- Repair bad config values one field at a time (7091201).
+- Make the session cookie slide. Export `IsLoopback` (fd92eab).
+- Refuse a bad object hash and a legacy signature (953ced2).
 - Fix 15 code review findings in the foundation and `web/shared` (a8deb1c).
 - Add the device daemon for v0.1 (0ee122c).
 - Add the player SPA and its mock daemon (e6f02e5).
