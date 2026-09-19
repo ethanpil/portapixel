@@ -23,15 +23,19 @@ const maxNameLen = 64
 // the object outside the store. The caller skips an item that gives an error
 // here and writes an ops log line.
 func ObjectName(sha, origName string) (string, error) {
-	if !isSHA256(sha) {
+	if !IsSHA256(sha) {
 		return "", fmt.Errorf("%q is not a SHA-256 value of 64 lower case hex characters", sha)
 	}
 	return sha[:8] + "-" + SafeName(origName), nil
 }
 
-// isSHA256 reports if sha is 64 lower case hex characters. HashFile gives that
+// IsSHA256 reports if sha is 64 lower case hex characters. HashFile gives that
 // form, so the two ends of a download compare the same thing.
-func isSHA256(sha string) bool {
+//
+// It is exported because the fleet server needs the same rule: a hash from a URL
+// path becomes a file name in the media store, and a value such as "../../etc"
+// must stop before anything opens a file.
+func IsSHA256(sha string) bool {
 	if len(sha) != 64 {
 		return false
 	}
