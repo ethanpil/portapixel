@@ -286,7 +286,10 @@ item is `/media/_fleet/media/<object>`.
 ```
 
 `state` is `playing`, `fallback` or `handoff`. `frames` is a requestAnimationFrame
-counter that only grows (D45). The reply is `{"ok": true}`.
+counter that only grows in one page life (D45). A new page starts at 0: the watchdog
+must read a lower value as a reset, not as a stall. An optional `"note"` string gives one
+line when something needs attention, for example a skipped item. The daemon writes a new
+note to the ops log. The reply is `{"ok": true}`.
 
 `POST /api/player/url-item` with `{"index": 2}`: the SPA stops. The daemon navigates to
 the URL, waits for the dwell time, then opens `/player?k=...&resume=3`. A reply of

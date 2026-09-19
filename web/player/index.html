@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>PortaPixel player</title>
+<!-- The design tokens and the local IBM Plex fonts come from the one shared
+     stylesheet. player.css comes after it and pins the player look. -->
+<link rel="stylesheet" href="/shared/pp.css">
+<link rel="stylesheet" href="/player/player.css">
+</head>
+<body>
+
+<!-- The stage. Two layers on black. One layer shows the item that plays now.
+     The other layer holds the item that comes next. -->
+<div class="pl-stage" id="stage">
+  <div class="pl-layer" data-layer="a"></div>
+  <div class="pl-layer" data-layer="b"></div>
+</div>
+
+<!-- The fallback screen (D18). It is a view of this same page. The player
+     shows it when there is no playable content. -->
+<div class="pl-fb" id="fallback" hidden>
+  <div class="pl-fb__shift" id="fb-shift">
+
+    <header class="pl-fb__brand">
+      <svg class="pl-fb__mark" viewBox="0 0 24 24" aria-hidden="true">
+        <rect x="1" y="1" width="22" height="22" rx="6"></rect>
+      </svg>
+      <span class="pl-fb__word">PortaPixel</span>
+    </header>
+
+    <div class="pl-fb__grid">
+      <div class="pl-fb__left">
+        <div>
+          <div class="pl-fb__name" id="fb-name">PortaPixel</div>
+          <div class="pl-fb__id" id="fb-id">&nbsp;</div>
+        </div>
+
+        <dl class="pl-fb__facts">
+          <div class="pl-fb__fact">
+            <dt>Open this address in a browser</dt>
+            <dd class="pl-fb__url" id="fb-url">&nbsp;</dd>
+          </div>
+          <div class="pl-fb__fact">
+            <dt>IP addresses</dt>
+            <dd class="pl-fb__ips" id="fb-ips">&nbsp;</dd>
+          </div>
+        </dl>
+
+        <dl class="pl-fb__pair" id="fb-pair" hidden>
+          <dt>Pairing code</dt>
+          <dd class="pl-fb__code" id="fb-code"></dd>
+        </dl>
+
+        <p class="pl-fb__msg">No content yet. Open the address above in a browser to add some.</p>
+      </div>
+
+      <div class="pl-fb__right">
+        <div class="pl-fb__qr" id="fb-qrbox"><img id="fb-qr" alt=""></div>
+        <div class="pl-fb__clock">
+          <div class="pl-fb__time" id="fb-time">&nbsp;</div>
+          <div class="pl-fb__date" id="fb-date">&nbsp;</div>
+        </div>
+      </div>
+    </div>
+
+    <footer class="pl-fb__warn" id="fb-warn"></footer>
+
+  </div>
+</div>
+
+<script type="module" src="/player/player.js"></script>
+</body>
+</html>

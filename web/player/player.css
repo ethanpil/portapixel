@@ -1,0 +1,267 @@
+/* PortaPixel player stylesheet.
+   The player fills the screen of a television. Content plays on black.
+
+   The fallback screen uses the design tokens of /shared/pp.css, so it looks
+   like the rest of the product. A television is always a dark room screen,
+   thus this file pins the dark value of each token that it uses. The values
+   are the dark values of pp.css. Only the accents are a little brighter,
+   because the background here is pure black.
+
+   Contents:
+     1. Tokens
+     2. Base
+     3. Stage and layers
+     4. Fallback screen
+     5. Portrait and small screens
+*/
+
+/* -------------------------------------------------------------- 1. Tokens */
+
+:root {
+  color-scheme: dark;
+
+  --pp-bg: #000;
+  --pp-ink: oklch(0.96 0.006 85);
+  --pp-surface: oklch(0.235 0.009 80);
+  --pp-border: oklch(0.33 0.010 80);
+  --pp-muted: oklch(0.74 0.010 80);
+  --pp-quiet: oklch(0.58 0.010 80);
+  --pp-link: oklch(0.82 0.11 150);
+  --pp-brand: oklch(0.60 0.115 150);
+  --pp-brand-tint: oklch(0.30 0.045 150);
+  --pp-brand-tint-border: oklch(0.43 0.06 150);
+  --pp-brand-tint-ink: oklch(0.92 0.09 150);
+
+  /* One unit for every size on the fallback screen. It follows the size of
+     the screen, so the screen looks the same at 720p, 1080p, 4K and in
+     portrait. It gives about 15 px at 1920x1080 and about 31 px at 4K. */
+  --u: calc(0.6vw + 0.36vh);
+}
+
+/* ---------------------------------------------------------------- 2. Base */
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  overflow: hidden;
+  background: #000;
+  color: var(--pp-ink);
+  font-family: var(--pp-font);
+  /* The device has no mouse. Hide the pointer. */
+  cursor: none;
+}
+
+/* ---------------------------------------------------- 3. Stage and layers */
+
+.pl-stage {
+  position: fixed;
+  inset: 0;
+  overflow: hidden;
+  background: #000;
+}
+
+/* Both layers fill the screen. Only the front layer is visible. The player
+   sets opacity, transform and transition from JavaScript, because the
+   playlist gives the transition and its time. */
+.pl-layer {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  will-change: opacity, transform;
+}
+
+.pl-layer > img,
+.pl-layer > video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
+/* ----------------------------------------------------- 4. Fallback screen */
+
+.pl-fb {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  /* 5 % on each side keeps every part of the screen away from the overscan
+     area of an old television. */
+  padding: 5vh 5vw;
+  background: #000;
+  color: var(--pp-ink);
+  font-size: calc(var(--u) * 1.6);
+  line-height: 1.35;
+}
+.pl-fb[hidden] { display: none; }
+
+/* The whole layout moves a few pixels every few minutes. A still picture for
+   weeks can burn a screen. */
+.pl-fb__shift {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 2.2);
+  transition: transform 3s ease-in-out;
+}
+
+.pl-fb__brand {
+  display: flex;
+  align-items: center;
+  gap: calc(var(--u) * 0.85);
+}
+.pl-fb__mark {
+  width: calc(var(--u) * 2.1);
+  height: calc(var(--u) * 2.1);
+  flex: none;
+  fill: var(--pp-brand);
+}
+.pl-fb__word {
+  font-size: calc(var(--u) * 2);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+/* The two columns stand in the middle of the free space. The brand is at the
+   top and the warnings are at the bottom, so the picture stays balanced. */
+.pl-fb__grid {
+  flex: 1;
+  display: flex;
+  gap: calc(var(--u) * 4);
+  align-items: center;
+  min-height: 0;
+}
+.pl-fb__left {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: calc(var(--u) * 1.9);
+}
+.pl-fb__right {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: calc(var(--u) * 1.4);
+}
+
+.pl-fb__name {
+  font-size: calc(var(--u) * 4);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pl-fb__id {
+  font-family: var(--pp-mono);
+  font-size: calc(var(--u) * 1.5);
+  color: var(--pp-muted);
+  margin-top: calc(var(--u) * 0.3);
+}
+
+.pl-fb__facts, .pl-fb__pair { margin: 0; }
+.pl-fb__fact + .pl-fb__fact { margin-top: calc(var(--u) * 1.4); }
+
+.pl-fb dt {
+  font-size: calc(var(--u) * 1.15);
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--pp-quiet);
+}
+.pl-fb dd { margin: calc(var(--u) * 0.35) 0 0; }
+
+.pl-fb__url {
+  font-family: var(--pp-mono);
+  font-size: calc(var(--u) * 2.5);
+  color: var(--pp-link);
+  overflow-wrap: anywhere;
+}
+.pl-fb__ips {
+  font-family: var(--pp-mono);
+  font-size: calc(var(--u) * 1.7);
+  color: var(--pp-ink);
+}
+
+.pl-fb__code {
+  display: inline-block;
+  padding: calc(var(--u) * 0.7) calc(var(--u) * 1.4);
+  background: var(--pp-brand-tint);
+  border: 1px solid var(--pp-brand-tint-border);
+  border-radius: calc(var(--u) * 0.7);
+  color: var(--pp-brand-tint-ink);
+  font-family: var(--pp-mono);
+  font-size: calc(var(--u) * 4);
+  font-weight: 500;
+  letter-spacing: 0.14em;
+}
+
+.pl-fb__msg {
+  margin: 0;
+  max-width: 34ch;
+  font-size: calc(var(--u) * 1.85);
+  color: var(--pp-muted);
+}
+
+/* The QR code needs a light background. A code on black does not scan. */
+.pl-fb__qr {
+  width: calc(var(--u) * 19);
+  padding: calc(var(--u) * 0.7);
+  background: #fff;
+  border-radius: calc(var(--u) * 0.7);
+}
+.pl-fb__qr img { width: 100%; height: auto; }
+.pl-fb__qr[hidden] { display: none; }
+
+.pl-fb__clock { text-align: right; }
+.pl-fb__time {
+  font-size: calc(var(--u) * 4.6);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  line-height: 1.05;
+}
+.pl-fb__date {
+  font-size: calc(var(--u) * 1.5);
+  color: var(--pp-muted);
+}
+
+/* Two lines of warnings are enough. More than that is a wall of text on a
+   screen that a person looks at from far away. */
+.pl-fb__warn {
+  font-size: calc(var(--u) * 1.25);
+  line-height: 1.4;
+  color: var(--pp-quiet);
+  min-height: 1.4em;
+  max-height: 2.8em;
+  overflow: hidden;
+}
+
+/* --------------------------------------------- 5. Portrait and small screens */
+/* A portrait screen has no room for two columns. The QR code and the clock go
+   below the device facts, side by side. */
+
+@media (max-aspect-ratio: 1 / 1) {
+  .pl-fb__grid {
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: space-between;
+    gap: calc(var(--u) * 2.4);
+  }
+  .pl-fb__right {
+    flex-direction: row;
+    align-items: flex-end;
+    justify-content: space-between;
+    width: 100%;
+    gap: calc(var(--u) * 2);
+  }
+  .pl-fb__qr { width: calc(var(--u) * 16); }
+  .pl-fb__msg { max-width: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pl-fb__shift { transition: none; }
+}
