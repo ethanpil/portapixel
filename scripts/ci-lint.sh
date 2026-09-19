@@ -60,9 +60,13 @@ echo "parse check: all scripts parse as sh"
 # These files run on Alpine. A carriage return breaks a shebang and an OpenRC
 # script in ways that are hard to read in an error message.
 CR="$(printf '\r')"   # $'\r' is a bash idiom, not POSIX sh
-if grep -lr "$CR" os scripts tests 2>/dev/null | grep -q .; then
+# Image and font data can hold the byte 0x0D. busybox grep has no -I option that
+# works, so the file name decides which files are binary.
+BINARY='\.(jpg|jpeg|png|gif|ico|woff2|ppm|pcap)$'
+crlf="$(grep -lr "$CR" os scripts tests 2>/dev/null | grep -vE "$BINARY" || true)"
+if [ -n "$crlf" ]; then
 	echo "FAIL: CRLF line ends found:"
-	grep -lr "$CR" os scripts tests
+	echo "$crlf"
 	fail=1
 else
 	echo "line ends: LF everywhere under os/, scripts/, tests/"
