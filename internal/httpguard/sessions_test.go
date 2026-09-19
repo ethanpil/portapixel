@@ -106,8 +106,81 @@ func TestSessionExpiry(t *testing.T) {
 	if s.Valid(r) {
 		t.Fatal("a session that nobody used for eight days must be gone")
 	}
-	if len(s.expires) != 0 {
-		t.Fatalf("the store holds %d dead sessions", len(s.expires))
+	if len(s.sessions) != 0 {
+		t.Fatalf("the store holds %d dead sessions", len(s.sessions))
+	}
+}
+
+// TestSessionCookieSlides covers the browser side of the sliding expiry. The
+// server expiry moves forward with each request, but the browser drops the
+// cookie at the MaxAge of the last Set-Cookie, so a user who works every day
+// would still be logged out on the seventh day.
+func TestSessionCookieSlides(t *testing.T) {
+	s := NewSessions()
+	at := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return at }
+
+	c := login(t, s)
+	h := s.Require(okHandler)
+
+	// call sends one request through Require and gives the cookie that came
+	// back, or nil when the answer set no cookie.
+	call := func(t *testing.T) *http.Cookie {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+		r.AddCookie(c)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("the request gave %d, want 200", w.Code)
+		}
+		for _, got := range w.Result().Cookies() {
+			if got.Name == CookieName {
+				return got
+			}
+		}
+		return nil
+	}
+
+	tests := []struct {
+		name       string
+		wait       time.Duration
+		wantCookie bool
+	}{
+		{name: "a request just after the login sets no cookie", wait: time.Minute},
+		{name: "a request an hour later gives the cookie again", wait: cookieRefresh, wantCookie: true},
+		{name: "the next request sets no cookie", wait: time.Minute},
+		{name: "a request six days later gives the cookie again", wait: 6 * 24 * time.Hour, wantCookie: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			at = at.Add(tt.wait)
+			got := call(t)
+			if tt.wantCookie {
+				if got == nil {
+					t.Fatal("the answer must carry the session cookie again")
+				}
+				if got.Value != c.Value || got.MaxAge != int(sessionLife/time.Second) {
+					t.Fatalf("cookie = %+v, want the same token and the full life", got)
+				}
+				if !got.HttpOnly || got.SameSite != http.SameSiteStrictMode || got.Path != "/" {
+					t.Fatalf("the cookie lost a flag: %+v", got)
+				}
+				return
+			}
+			if got != nil {
+				t.Fatalf("the answer must not set a cookie on every request, got %+v", got)
+			}
+		})
+	}
+
+	// The session is still live long after the login, so the browser that kept
+	// the sliding cookie is still logged in.
+	at = at.Add(6 * 24 * time.Hour)
+	r := httptest.NewRequest(http.MethodGet, "/api/config", nil)
+	r.AddCookie(c)
+	if !s.Valid(r) {
+		t.Fatal("the session must still live while it is in use")
 	}
 }
 

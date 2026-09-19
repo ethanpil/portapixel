@@ -1,7 +1,6 @@
 package httpguard
 
 import (
-	"net"
 	"sync"
 	"time"
 )
@@ -136,10 +135,6 @@ func (l *Limiter) sweep() {
 }
 
 // limiterKey gives the address without the port, because the port changes with
-// each connection.
-func limiterKey(remoteAddr string) string {
-	if host, _, err := net.SplitHostPort(remoteAddr); err == nil {
-		return host
-	}
-	return remoteAddr
-}
+// each connection. It uses the one helper of the package, so that the limiter
+// and the host allowlist never disagree about what one address is.
+func limiterKey(remoteAddr string) string { return stripPort(remoteAddr) }

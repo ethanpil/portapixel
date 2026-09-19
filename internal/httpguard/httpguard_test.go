@@ -140,6 +140,65 @@ func TestDenyAnswersJSON(t *testing.T) {
 	}
 }
 
+// TestIsLoopback covers the exported predicate. It must take the form that
+// RemoteAddr uses and a bare address as well, and it must give the same answer
+// for the two spellings of an IPv6 address.
+func TestIsLoopback(t *testing.T) {
+	tests := []struct {
+		name string
+		addr string
+		want bool
+	}{
+		{name: "loopback with a port", addr: "127.0.0.1:41234", want: true},
+		{name: "loopback with no port", addr: "127.0.0.1", want: true},
+		{name: "another loopback address", addr: "127.0.0.5:80", want: true},
+		{name: "IPv6 loopback with a port", addr: "[::1]:41234", want: true},
+		{name: "IPv6 loopback in brackets with no port", addr: "[::1]", want: true},
+		{name: "bare IPv6 loopback", addr: "::1", want: true},
+		{name: "a LAN address", addr: "192.168.1.9:41234"},
+		{name: "a LAN address with no port", addr: "192.168.1.9"},
+		{name: "an IPv6 address that is not loopback", addr: "[2001:db8::1]:80"},
+		{name: "a name", addr: "localhost:80"},
+		{name: "a name that looks like an address", addr: "127.0.0.1.example.com:80"},
+		{name: "empty", addr: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsLoopback(tt.addr); got != tt.want {
+				t.Fatalf("IsLoopback(%q) = %v, want %v", tt.addr, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestStripPortIsTheOneHelper makes sure the host allowlist, the loopback check
+// and the login limiter all cut an address the same way. Two spellings of one
+// IPv6 address must never make two limiter keys.
+func TestStripPortIsTheOneHelper(t *testing.T) {
+	tests := []struct {
+		name string
+		addr string
+		want string
+	}{
+		{name: "IPv4 with a port", addr: "192.168.1.9:41234", want: "192.168.1.9"},
+		{name: "IPv4 with no port", addr: "192.168.1.9", want: "192.168.1.9"},
+		{name: "IPv6 with a port", addr: "[::1]:41234", want: "::1"},
+		{name: "IPv6 in brackets with no port", addr: "[::1]", want: "::1"},
+		{name: "bare IPv6", addr: "::1", want: "::1"},
+		{name: "a name with a port", addr: "lobby.local:8080", want: "lobby.local"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := stripPort(tt.addr); got != tt.want {
+				t.Fatalf("stripPort(%q) = %q, want %q", tt.addr, got, tt.want)
+			}
+			if got := limiterKey(tt.addr); got != tt.want {
+				t.Fatalf("limiterKey(%q) = %q, want %q", tt.addr, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestPasswordEqual(t *testing.T) {
 	tests := []struct {
 		name  string

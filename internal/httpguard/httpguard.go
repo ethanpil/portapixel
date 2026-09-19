@@ -70,8 +70,10 @@ func hostAllowed(host string, allowed []string) bool {
 	return false
 }
 
-// stripPort removes the port from a host value. It keeps a bare IPv6 address
-// whole.
+// stripPort removes the port from a host value and the brackets from an IPv6
+// address. It is the one helper of its kind in this package: the host
+// allowlist, the loopback check and the login limiter must all cut an address
+// the same way, or one of them would count "[::1]" and "::1" as two addresses.
 func stripPort(host string) string {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		return h
@@ -100,7 +102,7 @@ func RequireHeader(next http.Handler) http.Handler {
 // the player endpoints (D46).
 func LoopbackOnly(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !isLoopback(r.RemoteAddr) {
+		if !IsLoopback(r.RemoteAddr) {
 			deny(w, http.StatusForbidden, "this endpoint answers the device only")
 			return
 		}
@@ -108,14 +110,12 @@ func LoopbackOnly(next http.Handler) http.Handler {
 	})
 }
 
-// isLoopback reports if addr, in the form that RemoteAddr uses, is a loopback
-// address.
-func isLoopback(addr string) bool {
-	host := addr
-	if h, _, err := net.SplitHostPort(addr); err == nil {
-		host = h
-	}
-	ip := net.ParseIP(strings.Trim(host, "[]"))
+// IsLoopback reports if addr is a loopback address. It takes the form that
+// RemoteAddr uses ("127.0.0.1:41234", "[::1]:41234") and also an address with
+// no port ("127.0.0.1", "::1", "[::1]"). A name, an empty value and an address
+// of any other kind all give false.
+func IsLoopback(addr string) bool {
+	ip := net.ParseIP(stripPort(addr))
 	return ip != nil && ip.IsLoopback()
 }
 
