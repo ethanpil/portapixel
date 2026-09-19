@@ -38,6 +38,11 @@ start_pre() {
 	# (D39), so the directories are made again here.
 	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/profile"
 	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/cache"
+	# HOME of the browser. Chromium writes dot directories into HOME, so it must
+	# be on the capped tmpfs and not on the flash (D39). The daemon gives this
+	# path in HOME; it does not make the directory, and Chromium does not make it
+	# either.
+	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/home"
 	# XDG_RUNTIME_DIR for the cage session. /run is a tmpfs: it is empty now.
 	# The mode must be 0700 or Wayland refuses to use it.
 	checkpath -d -m 0755 /run/user
