@@ -1,0 +1,214 @@
+package health
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/ethanpil/portapixel/internal/config"
+)
+
+// fakeRoots makes a small /proc, /sys, /etc and share directory.
+type fakeRoots struct {
+	src Sources
+}
+
+func newRoots(t *testing.T) *fakeRoots {
+	t.Helper()
+	base := t.TempDir()
+	f := &fakeRoots{src: Sources{
+		ProcRoot:  filepath.Join(base, "proc"),
+		SysRoot:   filepath.Join(base, "sys"),
+		EtcRoot:   filepath.Join(base, "etc"),
+		ShareRoot: filepath.Join(base, "share"),
+		MediaRoot: filepath.Join(base, "media"),
+		StateDir:  filepath.Join(base, "state"),
+	}}
+	for _, dir := range []string{f.src.ProcRoot, f.src.SysRoot, f.src.EtcRoot, f.src.ShareRoot, f.src.MediaRoot, f.src.StateDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return f
+}
+
+func (f *fakeRoots) write(t *testing.T, path, content string) {
+	t.Helper()
+	full := filepath.Join(path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func (f *fakeRoots) proc(t *testing.T, name, content string) {
+	f.write(t, filepath.Join(f.src.ProcRoot, name), content)
+}
+
+func TestStatusReadsTheSystemFiles(t *testing.T) {
+	f := newRoots(t)
+	f.proc(t, "uptime", "123456.78 987654.32\n")
+	f.proc(t, "loadavg", "0.42 0.31 0.25 1/123 4567\n")
+	f.proc(t, "meminfo", "MemTotal:        4014520 kB\nMemFree:          123456 kB\nMemAvailable:    3012345 kB\n")
+	f.write(t, filepath.Join(f.src.SysRoot, "class", "thermal", "thermal_zone0", "temp"), "48312\n")
+	f.write(t, filepath.Join(f.src.SysRoot, "class", "thermal", "thermal_zone1", "temp"), "51987\n")
+	f.write(t, filepath.Join(f.src.EtcRoot, "portapixel-release"), "PORTAPIXEL_VERSION=0.1.0\nALPINE_RELEASE=3.23.2\nARCH=x86_64\n")
+	f.write(t, filepath.Join(f.src.ShareRoot, "packages.manifest"), "chromium-149.0\ncage-0.2.1\n")
+
+	cfg := config.Default()
+	cfg.Device.Name = "Lobby Screen"
+	cfg.Device.Timezone = "America/New_York"
+	cfg.Web.Password = "a better password"
+
+	got := New(f.src).Status(Inputs{
+		Config:           cfg,
+		DeviceID:         "px-1a2b3c4d",
+		BrowserState:     "running",
+		NavigationRung:   "cdp",
+		DisplayConnected: true,
+		ScreenOn:         true,
+		ClockSynced:      true,
+	})
+
+	if got.UptimeSeconds != 123456 {
+		t.Errorf("uptime = %d", got.UptimeSeconds)
+	}
+	if got.Load != 0.42 {
+		t.Errorf("load = %v", got.Load)
+	}
+	if got.RAMTotalBytes != 4014520*1024 || got.RAMFreeBytes != 3012345*1024 {
+		t.Errorf("ram = %d / %d", got.RAMFreeBytes, got.RAMTotalBytes)
+	}
+	if got.TempC != 51.987 {
+		t.Errorf("temperature = %v, want the highest zone", got.TempC)
+	}
+	if got.ImageVersion != "0.1.0" {
+		t.Errorf("image version = %q", got.ImageVersion)
+	}
+	if len(got.PackageManifestHash) != 64 {
+		t.Errorf("package manifest hash = %q", got.PackageManifestHash)
+	}
+	if got.MDNSName != "lobby-screen.local" {
+		t.Errorf("mdns name = %q", got.MDNSName)
+	}
+	if got.LastSyncResult != "never" {
+		t.Errorf("last sync result = %q", got.LastSyncResult)
+	}
+	if len(got.Warnings) != 0 {
+		t.Errorf("warnings = %v", got.Warnings)
+	}
+}
+
+func TestStatusWithNoSystemFiles(t *testing.T) {
+	// Every number is zero and nothing panics. This is the Windows case.
+	f := newRoots(t)
+	got := New(f.src).Status(Inputs{Config: config.Default(), DeviceID: "px-00000000", ClockSynced: true})
+	if got.UptimeSeconds != 0 || got.RAMTotalBytes != 0 || got.TempC != 0 {
+		t.Errorf("status = %+v", got)
+	}
+	if got.DeviceID != "px-00000000" {
+		t.Errorf("device id = %q", got.DeviceID)
+	}
+}
+
+func TestMDNSNameOfANewDevice(t *testing.T) {
+	f := newRoots(t)
+	got := New(f.src).Status(Inputs{Config: config.Default(), DeviceID: "px-1a2b3c4d"})
+	if got.MDNSName != "portapixel-3c4d.local" {
+		t.Errorf("mdns name = %q", got.MDNSName)
+	}
+}
+
+func TestWarnings(t *testing.T) {
+	f := newRoots(t)
+	// The default root password: the same hash in both files.
+	f.write(t, filepath.Join(f.src.EtcRoot, "shadow"), "root:$6$abc$hash:19000:0:::::\nkiosk:!::0:::::\n")
+	f.write(t, filepath.Join(f.src.StateDir, RootHashFile), "$6$abc$hash\n")
+
+	cfg := config.Default() // the default web password and UTC
+	got := New(f.src).Status(Inputs{
+		Config:           cfg,
+		DeviceID:         "px-1a2b3c4d",
+		ConfigFromShadow: true,
+		ClockSynced:      false,
+		Problems:         []string{`The playlist "bad" is skipped: bad playlist file`},
+	})
+
+	want := []string{"web password", "root password", "time zone", "clock", "last good copy", "bad"}
+	joined := strings.Join(got.Warnings, "\n")
+	for _, w := range want {
+		if !strings.Contains(joined, w) {
+			t.Errorf("the warnings do not name %q:\n%s", w, joined)
+		}
+	}
+}
+
+func TestRootPasswordWarningNeedsBothFiles(t *testing.T) {
+	f := newRoots(t)
+	r := New(f.src)
+	if r.rootPasswordIsDefault() {
+		t.Error("the warning appeared with no files at all")
+	}
+	// A changed password: the hashes are different.
+	f.write(t, filepath.Join(f.src.EtcRoot, "shadow"), "root:$6$new$hash:19000:0:::::\n")
+	f.write(t, filepath.Join(f.src.StateDir, RootHashFile), "$6$abc$hash\n")
+	if r.rootPasswordIsDefault() {
+		t.Error("the warning appeared after the password changed")
+	}
+}
+
+func TestTier(t *testing.T) {
+	tests := []struct {
+		name     string
+		tier     string
+		memTotal string
+		model    string
+		want     string
+	}{
+		{"the configuration wins", "low", "MemTotal: 8000000 kB\n", "", "low"},
+		{"high is high", "high", "MemTotal: 400000 kB\n", "Raspberry Pi 3 Model B", "high"},
+		{"little memory is low", "auto", "MemTotal: 500000 kB\n", "", "low"},
+		{"a slow Pi is low", "auto", "MemTotal: 4000000 kB\n", "Raspberry Pi 3 Model B Plus Rev 1.3", "low"},
+		{"a Zero 2 is low", "auto", "MemTotal: 4000000 kB\n", "Raspberry Pi Zero 2 W Rev 1.0", "low"},
+		{"a Pi 4 is high", "auto", "MemTotal: 4000000 kB\n", "Raspberry Pi 4 Model B Rev 1.4", "high"},
+		{"no facts at all is high", "auto", "", "", "high"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newRoots(t)
+			if tt.memTotal != "" {
+				f.proc(t, "meminfo", tt.memTotal)
+			}
+			if tt.model != "" {
+				f.proc(t, "device-tree/model", tt.model+"\x00")
+			}
+			cfg := config.Default()
+			cfg.Device.Tier = tt.tier
+			if got := New(f.src).Tier(cfg); got != tt.want {
+				t.Errorf("Tier = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHosts(t *testing.T) {
+	cfg := config.Default()
+	cfg.Device.Name = "Lobby Screen"
+	hosts := Hosts(cfg, "px-1a2b3c4d", 8099)
+
+	joined := strings.Join(hosts, " ")
+	for _, want := range []string{"localhost", "127.0.0.1", "lobby-screen.local", "localhost:8099"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the allowlist has no %q: %v", want, hosts)
+		}
+	}
+
+	// A device with the factory name announces the name with the ID in it.
+	factory := Hosts(config.Default(), "px-1a2b3c4d", 80)
+	if !strings.Contains(strings.Join(factory, " "), "portapixel-3c4d.local") {
+		t.Errorf("the allowlist has no mDNS name: %v", factory)
+	}
+}

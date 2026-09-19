@@ -1,0 +1,9 @@
+# PortaPixel writes this file from portapixel.toml.
+# Your changes are lost at the next boot. Edit portapixel.toml instead.
+
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet static
+	address 10.0.0.9/8
