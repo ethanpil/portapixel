@@ -1,0 +1,4 @@
+[Icon Theme]
+Name=Default
+Comment=The pointer of this device is transparent.
+Inherits=portapixel-blank
