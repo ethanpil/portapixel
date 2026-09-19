@@ -56,6 +56,16 @@ chroot /m /bin/sh -c 'echo "root:portapixel" | chpasswd'
 cp /etc/network/interfaces /m/etc/network/interfaces
 cp /etc/apk/repositories /m/etc/apk/repositories
 
+# The kernel flavour. The virt ISO installs linux-virt, and os/packages.list
+# names linux-lts for x86_64. Two kernels in one tree make install.sh refuse the
+# box, and it is right to refuse: it cannot know which one the boot loader names.
+# A PC install from the standard ISO runs linux-lts, so make this guest the same
+# kind of box and let install.sh see one kernel.
+apk --root /m add linux-lts
+apk --root /m del linux-virt
+chroot /m update-extlinux
+ls /m/boot
+
 # Put everything that the next phase needs ON THE DISK. The installed system
 # then needs no 9p share at all. The first attempt mounted the share in the live
 # ISO and got "Resource busy" on the installed system, and one file system less

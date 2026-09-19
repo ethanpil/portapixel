@@ -235,18 +235,39 @@ virtio_blk
 virtio_pci
 ext4
 xhci-hcd|xhci_hcd'
+# A driver that the kernel holds INSIDE itself needs no file in the initramfs.
+# The Raspberry Pi kernel is built that way for usb-storage and for others, and
+# the first aarch64 build in CI stopped here for that reason. What D53 asks is
+# that the kernel can find the root on every medium, so a built-in driver is a
+# pass and the message says which of the two it was.
+BUILTIN="$MNT/lib/modules/$KVER/modules.builtin"
 echo "$REQUIRED" | while IFS= read -r want; do
 	found=0
+	how=""
 	oldifs="$IFS"; IFS='|'
 	for alt in $want; do
 		# "|| :" matters: without it a miss on the FIRST name makes the loop
 		# return non-zero, set -e ends the subshell, and the second name is
 		# never even tried.
-		echo "$LIST" | grep -q "/$alt\.ko" && found=1 || :
+		echo "$LIST" | grep -q "/$alt\.ko" && { found=1; how="a module in the initramfs"; } || :
+		if [ "$found" = 0 ] && [ -f "$BUILTIN" ]; then
+			grep -q "/$alt\.ko\$" "$BUILTIN" && { found=1; how="built into the kernel"; } || :
+		fi
 	done
 	IFS="$oldifs"
-	[ "$found" = 1 ] || die "the initramfs has no $want module (D53)"
-	printf '    ok: %s\n' "$want"
+	if [ "$found" != 1 ]; then
+		# Say where the driver is NOT, so the next step is clear: another
+		# mkinitfs feature, another kernel, or a name that this kernel changed.
+		printf 'the kernel tree holds these files for %s:\n' "$want" >&2
+		oldifs="$IFS"; IFS='|'
+		for alt in $want; do
+			find "$MNT/lib/modules" -name "$alt.ko*" >&2 2>/dev/null || :
+			grep "/$alt\.ko\$" "$BUILTIN" >&2 2>/dev/null || :
+		done
+		IFS="$oldifs"
+		die "the image can neither load nor hold the $want driver (D53)"
+	fi
+	printf '    ok: %s (%s)\n' "$want" "$how"
 done || exit 1
 
 # ------------------------------------------------------------- 8. the boot loader

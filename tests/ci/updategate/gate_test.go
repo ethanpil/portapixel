@@ -326,19 +326,24 @@ func TestSwapAndHealthGate(t *testing.T) {
 			t.Fatalf("the pending marker holds %q, want %q", pending, newVersion)
 		}
 
-		// The daemon of the new release writes the marker. Run the real daemon
-		// with the browser off and prove the NAME of the marker, because a name
-		// that does not match rolls a good release back for ever (item 19).
-		marker := runDaemonUntilMarker(t, filepath.Join(root, updater.ReleasesDir, newVersion, "portapixeld"), root)
-		if got, want := filepath.Base(marker), newVersion+updater.OKSuffix; got != want {
-			t.Fatalf("the daemon wrote %q, and the gate waits for %q", got, want)
-		}
+		// The daemon of the new release and the gate run AT THE SAME TIME, the
+		// way the OpenRC service starts them. The gate removes a marker of an
+		// earlier install before it waits, so a marker that is already there
+		// proves nothing: the new binary has to write it again.
+		stop := startDaemon(t, filepath.Join(root, updater.ReleasesDir, newVersion, "portapixeld"), root)
+		defer stop()
 
-		// The gate must pass now.
-		rc, log := runHealthGate(t, root, 20)
+		rc, log := runHealthGate(t, root, 60)
 		if rc != 0 {
-			t.Fatalf("the health gate answered %d with a marker in place:\n%s", rc, log)
+			t.Fatalf("the health gate answered %d while the new daemon was up:\n%s", rc, log)
 		}
+		// The NAME of the marker is the point. A name that does not match rolls a
+		// good release back for ever (final review item 19).
+		marker := filepath.Join(root, updater.HealthDir, newVersion+updater.OKSuffix)
+		if _, err := os.Stat(marker); err != nil {
+			t.Fatalf("the daemon wrote no %s%s: %v", newVersion, updater.OKSuffix, err)
+		}
+		t.Logf("the health marker is %s", filepath.Base(marker))
 		if _, err := os.Stat(filepath.Join(root, updater.PendingFile)); !os.IsNotExist(err) {
 			t.Fatal("the gate left the pending marker in place")
 		}
@@ -448,9 +453,13 @@ func TestRefusals(t *testing.T) {
 
 // --------------------------------------------------------------- the two runners
 
-// runDaemonUntilMarker starts the real daemon with the browser off and waits for
-// the health marker. It gives the path of the marker that appeared.
-func runDaemonUntilMarker(t *testing.T, binary, root string) string {
+// startDaemon starts the real daemon of a release with the browser off. It gives
+// the function that stops it again and prints its log.
+//
+// The daemon writes <releases>/health/<its own version>.ok when it is up. That is
+// the file that the health gate waits for, so the daemon and the gate must run at
+// the same time, the way the OpenRC service starts them.
+func startDaemon(t *testing.T, binary, root string) func() {
 	t.Helper()
 	work := t.TempDir()
 	for _, dir := range []string{"media", "state", "run"} {
@@ -473,26 +482,16 @@ func runDaemonUntilMarker(t *testing.T, binary, root string) string {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start the daemon: %v", err)
 	}
-	defer func() {
+	stopped := false
+	return func() {
+		if stopped {
+			return
+		}
+		stopped = true
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 		t.Logf("daemon log:\n%s", log.String())
-	}()
-
-	deadline := time.Now().Add(90 * time.Second)
-	for time.Now().Before(deadline) {
-		entries, err := os.ReadDir(filepath.Join(root, updater.HealthDir))
-		if err == nil {
-			for _, e := range entries {
-				if strings.HasSuffix(e.Name(), updater.OKSuffix) {
-					return filepath.Join(root, updater.HealthDir, e.Name())
-				}
-			}
-		}
-		time.Sleep(time.Second)
 	}
-	t.Fatalf("the daemon wrote no health marker in 90 s:\n%s", log.String())
-	return ""
 }
 
 // runHealthGate runs the real os/overlay health-gate.sh against a release root.

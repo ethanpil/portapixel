@@ -90,13 +90,27 @@ if {$phase eq "install"} {
 }
 
 # --------------------------------------------------- 2. the on-box install (D51)
+# The output goes to a file and the exit code comes back in a marker. A regular
+# expression that watched the live output matched HALF a line of a message and
+# ended the test with three characters of it (CI run 35431889421).
 set timeout 2400
-send "sh /root/vanilla-onbox.sh 2>&1 | tail -n 60\r"
+send "sh /root/vanilla-onbox.sh >/tmp/onbox.log 2>&1; echo RC\"=\"$?\r"
 expect {
-	"ONBOX-INSTALL-DONE" { send_user "\n==> os/install.sh finished on the live system\n" }
-	-re {install.sh: (.*)} { die "install.sh refused: $expect_out(1,string)" }
-	timeout              { die "the on-box install did not finish in 40 minutes" }
-	eof                  { die "the guest stopped during the install" }
+	-re {RC=(\d+)} {
+		set rc $expect_out(1,string)
+		send_user "\n==> the on-box install answered $rc\n"
+		if {$rc != 0} {
+			set timeout 120
+			send "tail -n 40 /tmp/onbox.log\r"
+			expect {
+				-re {[#$] } { }
+				timeout     { }
+			}
+			die "os/install.sh failed on the live system; its last lines are above"
+		}
+	}
+	timeout { die "the on-box install did not finish in 40 minutes" }
+	eof     { die "the guest stopped during the install" }
 }
 
 # ------------------------------------------------------------- 3. the reboot
