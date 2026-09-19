@@ -23,9 +23,13 @@ something that cost you time. Remove an entry when it is no longer true.
 | Milestone | State |
 |---|---|
 | M0 bring-up spike | Done in QEMU only. No real hardware was available. See section 4. |
-| v0.1 boot and play | In work |
-| v0.2 the appliance | In work. The daemon side is built: power, mdns, updater, installer. No hardware check yet. |
-| v0.3 the fleet | Not started |
+| v0.1 boot and play | Built and reviewed. Proven in QEMU with screenshots. No real hardware check yet. |
+| v0.2 the appliance | Built and reviewed. CEC, DPMS and install-to-disk have no hardware check yet. |
+| v0.3 the fleet | Built and reviewed. Proven with two machines in the lab (`tests/qemu/lab`). |
+| v1.0 hardening | Not started: the 30 day soak, the hardware checklist, the release key. |
+
+The aarch64 image was never built: the test container has no qemu-user binfmt. The first
+build is in GitHub Actions. No Raspberry Pi has started this image.
 
 ## 3. Divergences from the plan
 
@@ -112,6 +116,28 @@ checked with a screenshot of the virtual display or with the ops log.
 - The mkinitfs feature for SATA is `ata`. There is no `sata` feature.
 - Do not add the `kms` mkinitfs feature. It copies all GPU firmware into the initramfs
   (167 MB against 18.5 MB). The root filesystem loads the GPU driver later.
+- `mv -f` of a new link onto a link to a directory moves the new link INTO that directory.
+  Use `mv -fT` to replace the link. busybox has `-T`. The health gate test found this.
+- busybox `xargs -0` runs its command one time with no input. `find -exec ... +` does not.
+- Do not trust the status of `cp -a` to exFAT. exFAT refuses chown, so a complete copy
+  reports a fault. Check the copy by file count and byte sum.
+- PPROOT has `commit=60`. A marker file is safe only after a `sync`. Write the marker and
+  sync it before the step that destroys data.
+- A size test must be good on the second boot. After a cut, the kernel already has the new
+  partition size. Compare with the size in the GPT, not with the old size.
+- OpenRC does not run `start_post` when the start fails. Arm a gate in `start_pre`.
+- `supervise-daemon` sends KILL after about 5 s unless `retry` is set. The daemon needs
+  more time to stop the browser: `retry="TERM/25/KILL/5"`.
+- The `acpid` package arrives as a dependency, but its service is not enabled.
+- The initramfs of Alpine 3.23 is gzip. A kernel module file is `.ko.gz` and its name has
+  hyphens: `xhci-pci.ko`, not `xhci_pci`.
+- Alpine has no `render` group. eudev puts `renderD*` in `video`.
+- `pkill -f <pattern>` also matches the SSH command that runs it. Stop a process by its
+  recorded PID.
+- In `expect`, send the answer in the block that matched. A `send` after an `expect` block
+  that stands alone was not reliable.
+- Two workers in one working tree see the edits of each other. A reviewer reported the
+  work of another worker as damage. Check the content before you act on such a report.
 - `ifupdown-ng` fails when `/etc/network/interfaces` does not exist. Then `networking`
   fails and OpenRC does not start `chronyd`. `install.sh` writes a safe DHCP default.
 - `syslinux --install` changes the FAT boot sector but not its backup copy, so
@@ -183,6 +209,24 @@ checked with a screenshot of the virtual display or with the ops log.
   the token of any device ID. Now a pending request lives in its own table. A paired row
   changes only when the admin approves, or when the request has a valid enrollment token
   and the same `hardware_id` as the row (a card that was flashed again).
+- A `.part` file in a directory that the caller removes at each attempt is not a resume.
+  The updater staged into `<version>.staging` and removed it in a defer, so a slow link
+  started from zero each time. A download now goes to `releases/.download/`.
+- `O_CREATE` on a device path is a bug. On devtmpfs it makes a file in RAM, and an
+  install reports success on a disk that it did not change. `partx` and `partprobe` do
+  not wait for the partition nodes: wait for them.
+- Make the decision and the action one step. `power.Set` read the state outside the
+  transition, answered OK and did nothing.
+- The content of a fleet manifest decides a write to flash. Its rules go to the scheduler
+  only. With one compare key, a schedule edit wrote each playlist again on each screen.
+- Do not wrap `http.ResponseWriter` to change the 404 of the router. The wrapper cannot
+  tell that 404 from the 404 of a handler, and it hides an interface that
+  `http.MaxBytesReader` needs. Register a catch-all route.
+- `internal/version.PublicKey` is a `var`. A build flag cannot set a `const`.
+- A second `Apply` of one release made `previous` equal to `current`, and `prune` then
+  removed the release that runs. `prune` never removes the running release now.
+- Three packages each had a copy of "how to call the fleet server". They are one package
+  now, `internal/fleet`. Ask this question early for each new client.
 - The clone rule must not read `last_seen`. The manifest poll of the same device sets it
   some seconds before the heartbeat. The first server saw each hardware repair as a
   clone, and the repair path was never used. The test passed because it did not poll and

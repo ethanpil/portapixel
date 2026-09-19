@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix the review findings in the OS layer (23f479c to e30b90e). The first boot grow of PPMEDIA is safe at each power cut. The health gate is fail safe. Add `acpid`.
 - Fix the review findings in the daemon, the updater, the installer and the sync client (6a3fd1e to 52cfee8). The device token goes to the paired server only. Commit 52cfee8 also holds the server code for the `token-revoked` answer; its message names only the contract.
 - Fix the review findings in the two admin UIs. Move their common code to `web/shared` (66d584c to b05b496).
 - Add the lab scripts for two test machines on a bridge (105b3b6).
