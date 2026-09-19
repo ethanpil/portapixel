@@ -1,0 +1,32 @@
+# One file to run the PortaPixel fleet server.
+#
+#   docker compose up -d
+#   docker compose logs portapixel-server     # the first run prints the password
+#
+# The first run makes server.toml in the volume, generates the admin password, and
+# prints it one time. Read it from the log above, then open the address below.
+#
+# Set public_url in the volume's server.toml (or PORTAPIXEL_PUBLIC_URL below) to
+# the address that the screens and your browser use. Without it the admin UI
+# answers on the loopback names only, which is the safe default against DNS
+# rebinding (D46).
+
+services:
+  portapixel-server:
+    image: ghcr.io/ethanpil/portapixel-server:latest
+    # To build from this repository instead of the published image:
+    # build:
+    #   context: ..
+    #   dockerfile: deploy/Dockerfile
+    container_name: portapixel-server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - portapixel-data:/data
+    # There is no HTTPS here. Put a reverse proxy in front, or set tls_cert and
+    # tls_key in server.toml and mount the two files. A screen sends its token on
+    # every call, so plain HTTP belongs on a closed network only.
+
+volumes:
+  portapixel-data:

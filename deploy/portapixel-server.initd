@@ -1,0 +1,46 @@
+#!/sbin/openrc-run
+# OpenRC service of the PortaPixel fleet server.
+#
+# Install it on Alpine:
+#   install -m 755 portapixel-server.initd /etc/init.d/portapixel-server
+#   install -m 644 portapixel-server.confd /etc/conf.d/portapixel-server
+#   install -m 755 portapixel-server /usr/local/bin/
+#   addgroup -S portapixel && adduser -S -D -H -G portapixel portapixel
+#   install -d -o portapixel -g portapixel -m 750 /var/lib/portapixel-server
+#   rc-update add portapixel-server default && rc-service portapixel-server start
+#
+# The first start prints the admin password. Read it:
+#   grep first /var/log/portapixel-server.log
+
+name="portapixel-server"
+description="PortaPixel fleet server"
+
+: ${data_dir:=/var/lib/portapixel-server}
+: ${listen:=:8080}
+: ${server_user:=portapixel}
+: ${server_group:=portapixel}
+
+command="/usr/local/bin/portapixel-server"
+command_args="run --data ${data_dir} --listen ${listen}"
+command_user="${server_user}:${server_group}"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/${RC_SVCNAME}.log"
+error_log="/var/log/${RC_SVCNAME}.log"
+
+# supervise-daemon starts the server again when it stops. The server holds no
+# state in memory that a restart loses: the sessions go, and one admin logs in
+# again.
+supervisor="supervise-daemon"
+respawn_delay=5
+respawn_max=0
+
+depend() {
+	need net
+	after firewall
+}
+
+start_pre() {
+	checkpath --directory --owner "${server_user}:${server_group}" --mode 0750 "${data_dir}"
+	checkpath --file --owner "${server_user}:${server_group}" --mode 0640 "${output_log}"
+}

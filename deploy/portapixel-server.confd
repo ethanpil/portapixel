@@ -1,0 +1,18 @@
+# Settings of the portapixel-server OpenRC service.
+#
+# These three values go on the command line. Everything else lives in
+# server.toml in the data directory: the public URL, the certificate, the
+# repository and the admin password hash.
+
+# The data directory. It holds server.toml, the database, the media store, the
+# release mirror and ops.log.
+data_dir="/var/lib/portapixel-server"
+
+# The listen address. ":8080" answers on every interface. Use "127.0.0.1:8080"
+# when a reverse proxy on this host is the only thing that talks to the server.
+listen=":8080"
+
+# The user that the server runs as. It needs no privilege: the port is above
+# 1024 and the only files that it writes are in the data directory.
+server_user="portapixel"
+server_group="portapixel"
