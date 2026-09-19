@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ethanpil/portapixel/internal/config"
+	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
 // fakeRoots makes a small /proc, /sys, /etc and share directory.
@@ -137,12 +138,84 @@ func TestWarnings(t *testing.T) {
 		Problems:         []string{`The playlist "bad" is skipped: bad playlist file`},
 	})
 
-	want := []string{"web password", "root password", "time zone", "clock", "last good copy", "bad"}
-	joined := strings.Join(got.Warnings, "\n")
-	for _, w := range want {
-		if !strings.Contains(joined, w) {
-			t.Errorf("the warnings do not name %q:\n%s", w, joined)
+	// The codes are the contract with the two admin UIs. The words are for a
+	// person, so a better sentence must never break a banner.
+	codes := map[string]string{}
+	for _, w := range got.Warnings {
+		codes[w.Code] = w.Message
+	}
+	for _, code := range []string{
+		manifest.WarnWebPassword, manifest.WarnRootPassword, manifest.WarnTimezoneUTC,
+		manifest.WarnClockUnsynced, manifest.WarnConfigShadow, manifest.WarnPlaylistProblem,
+	} {
+		if codes[code] == "" {
+			t.Errorf("the warnings hold no %q: %+v", code, got.Warnings)
 		}
+	}
+	if !strings.Contains(codes[manifest.WarnPlaylistProblem], "bad") {
+		t.Errorf("the playlist warning reads %q", codes[manifest.WarnPlaylistProblem])
+	}
+}
+
+// The code of the configuration warning says which fault it is, so the dashboard
+// can tell a repaired value from a hand edit that the daemon refused.
+func TestConfigWarningCode(t *testing.T) {
+	tests := []struct {
+		name string
+		code string
+		want string
+	}{
+		{"a repaired value", manifest.WarnConfigRepaired, manifest.WarnConfigRepaired},
+		{"a bad hand edit", manifest.WarnConfigBadEdit, manifest.WarnConfigBadEdit},
+		{"no code at all", "", manifest.WarnConfigRepaired},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newRoots(t)
+			got := New(f.src).Status(Inputs{
+				Config:            config.Default(),
+				ClockSynced:       true,
+				ConfigWarning:     "display.rotation was 45",
+				ConfigWarningCode: tt.code,
+			})
+			found := false
+			for _, w := range got.Warnings {
+				if w.Code == tt.want {
+					found = true
+				}
+			}
+			if !found {
+				t.Fatalf("the warnings hold no %q: %+v", tt.want, got.Warnings)
+			}
+		})
+	}
+}
+
+// The codec report comes from a web page, so the daemon keeps the values that it
+// knows and drops everything else.
+func TestCleanCodecs(t *testing.T) {
+	yes := true
+	in := manifest.CodecReport{
+		"h264":   {"1080": {Supported: true, Smooth: true, PowerEfficient: &yes}, "720": {}},
+		"hevc":   {"2160": {Supported: false}},
+		"madeUp": {"1080": {Supported: true}},
+		"vp9":    {"999": {Supported: true}},
+	}
+	got := CleanCodecs(in)
+	if len(got) != 2 {
+		t.Fatalf("codecs = %+v, want h264 and hevc only", got)
+	}
+	if len(got["h264"]) != 1 || !got["h264"]["1080"].Supported {
+		t.Errorf("h264 = %+v", got["h264"])
+	}
+	if _, ok := got["madeUp"]; ok {
+		t.Error("a codec name that this product does not know was kept")
+	}
+	if _, ok := got["vp9"]; ok {
+		t.Error("a codec with no size that this product knows was kept")
+	}
+	if CleanCodecs(nil) != nil {
+		t.Error("CleanCodecs(nil) gave a map")
 	}
 }
 

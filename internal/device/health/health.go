@@ -48,7 +48,16 @@ type Inputs struct {
 	Config           config.Config
 	ConfigFromShadow bool
 	ConfigWarning    string
-	DeviceID         string
+	// ConfigWarningCode names the fault of ConfigWarning:
+	// manifest.WarnConfigRepaired for a value that Load put back to its default,
+	// manifest.WarnConfigBadEdit for a hand edit that the daemon refused. An
+	// empty value with a warning text gets the repaired code.
+	ConfigWarningCode string
+	DeviceID          string
+	// HardwareChanged is the repair flag of the state file (D21).
+	HardwareChanged bool
+	// Codecs is the report of the player, or nil before the first heartbeat.
+	Codecs manifest.CodecReport
 
 	BrowserState     string
 	NavigationRung   string
@@ -68,6 +77,45 @@ type Inputs struct {
 	// sentence for a person.
 	Problems []string
 	Update   manifest.UpdateState
+}
+
+// The codec names and the picture heights that a codec report may hold. A report
+// comes from the player, which is a web page, so the daemon keeps the values that
+// it knows and drops the rest.
+var (
+	codecNames  = []string{"h264", "hevc", "vp9", "av1"}
+	codecHeight = []string{"1080", "2160"}
+)
+
+// CleanCodecs keeps the codec names and the sizes that this product knows.
+//
+// The report arrives in an HTTP body. Without this step a page could make the
+// daemon hold a map of any size and serve it again to every caller of
+// /api/status.
+func CleanCodecs(in manifest.CodecReport) manifest.CodecReport {
+	if in == nil {
+		return nil
+	}
+	out := make(manifest.CodecReport, len(codecNames))
+	for _, name := range codecNames {
+		bands, ok := in[name]
+		if !ok {
+			continue
+		}
+		kept := make(map[string]manifest.CodecSupport, len(codecHeight))
+		for _, height := range codecHeight {
+			if support, ok := bands[height]; ok {
+				kept[height] = support
+			}
+		}
+		if len(kept) > 0 {
+			out[name] = kept
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Reporter builds the status. It holds the facts that cannot change while the
@@ -147,6 +195,8 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 		ClockSynced:      in.ClockSynced,
 		Timezone:         in.Config.Device.Timezone,
 		ConfigFromShadow: in.ConfigFromShadow,
+		HardwareChanged:  in.HardwareChanged,
+		Codecs:           in.Codecs,
 		PairingCode:      in.PairingCode,
 		Update:           in.Update,
 	}
@@ -158,27 +208,45 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 }
 
 // warnings gives the loud messages of the dashboard and the fallback screen.
-func (r *Reporter) warnings(in Inputs) []string {
-	var out []string
+//
+// Each message carries a code. The UI matches the code, never the words, so a
+// better sentence cannot break a banner.
+func (r *Reporter) warnings(in Inputs) []manifest.Warning {
+	out := make([]manifest.Warning, 0, 4)
+	add := func(code, message string) {
+		out = append(out, manifest.Warning{Code: code, Message: message})
+	}
 	if in.Config.Web.Password == DefaultWebPassword {
-		out = append(out, "The web password is still the default one. Change it on the Settings page.")
+		add(manifest.WarnWebPassword, "The web password is still the default one. Change it on the Settings page.")
 	}
 	if r.rootPasswordIsDefault() {
-		out = append(out, "The root password is still the default one. Change it on the Settings page.")
+		add(manifest.WarnRootPassword, "The root password is still the default one. Change it on the Settings page.")
 	}
 	if in.Config.Device.Timezone == "UTC" {
-		out = append(out, "The time zone is UTC. Set your time zone, or the schedules use the wrong hours.")
+		add(manifest.WarnTimezoneUTC, "The time zone is UTC. Set your time zone, or the schedules use the wrong hours.")
 	}
 	if !in.ClockSynced {
-		out = append(out, "The clock is not synchronised yet. The default playlist plays until it is.")
+		add(manifest.WarnClockUnsynced, "The clock is not synchronised yet. The default playlist plays until it is.")
 	}
 	if in.ConfigFromShadow {
-		out = append(out, "portapixel.toml on the media partition is missing or bad. The device runs from the last good copy.")
+		add(manifest.WarnConfigShadow, "portapixel.toml on the media partition is missing or bad. The device runs from the last good copy.")
 	}
 	if in.ConfigWarning != "" && !in.ConfigFromShadow {
-		out = append(out, "The configuration file has a fault: "+in.ConfigWarning)
+		code := in.ConfigWarningCode
+		if code == "" {
+			code = manifest.WarnConfigRepaired
+		}
+		add(code, "The configuration file has a fault: "+in.ConfigWarning)
 	}
-	out = append(out, in.Problems...)
+	if in.HardwareChanged {
+		add(manifest.WarnHardwareChanged, "The hardware of this device changed. The device kept its name and its pairing, and it reports the new identity.")
+	}
+	if in.Update.State == manifest.UpdateRolledBack {
+		add(manifest.WarnUpdateRolledBack, "An update did not come up and the device went back to "+in.Update.Current+". It never tries that release again.")
+	}
+	for _, p := range in.Problems {
+		add(manifest.WarnPlaylistProblem, p)
+	}
 	return out
 }
 
