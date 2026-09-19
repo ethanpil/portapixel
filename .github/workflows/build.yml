@@ -244,6 +244,9 @@ jobs:
           PP_MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
         run: |
           set -eu
+          # The trap, not a line at the end: a step that fails must also take the
+          # key file away.
+          trap 'rm -f /dev/shm/minisign.key' EXIT INT TERM
           keyfile=""
           if [ -n "${PP_SECRET_KEY:-}" ]; then
             umask 077
@@ -251,7 +254,6 @@ jobs:
             printf '%s\n' "$PP_SECRET_KEY" >"$keyfile"
           fi
           PP_SECRET_KEY_FILE="$keyfile" sh tests/ci/sign-release.sh dist
-          rm -f /dev/shm/minisign.key
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
