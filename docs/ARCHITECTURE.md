@@ -45,6 +45,7 @@ internal/sigverify        minisign verify of a file against the embedded key.
 internal/updater          A/B release swap, health gate, rollback. Device and server use it.
 internal/httpguard        Host allowlist, CSRF header check, session store, login limiter.
 
+internal/device/slug      One safe-name rule. A playlist directory and a host name share it.
 internal/device/identity  Device ID derivation and repair semantics (D21).
 internal/device/library   Scan media root, parse playlists, hash cache, item warnings.
 internal/device/scheduler Rule evaluation each minute, clock-sync gate (D17, D40).

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/config"
+	"github.com/ethanpil/portapixel/internal/device/slug"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 )
 
@@ -72,8 +73,8 @@ func writeStatic(b *strings.Builder, iface string, cfg config.Config) {
 // WPASupplicant renders /etc/wpa_supplicant/wpa_supplicant.conf.
 //
 // With no SSID the file holds the header only. An empty file is better than an
-// old file: a device that no longer has WiFi settings must not keep joining the
-// network of last month.
+// old file. A device that no longer has WiFi settings must not join the network
+// of last month.
 //
 // The country code stays out. A wrong regulatory domain is worse than none, and
 // portapixel.toml has no country key to read it from.
@@ -127,28 +128,15 @@ func Hostname(cfg config.Config) []byte {
 	return []byte(Slug(cfg.Device.Name) + "\n")
 }
 
-// Slug makes a host name from a display name: lower case, letters, digits and
-// hyphens. mDNS and /etc/hostname both use it, so the name that the user types
-// in the web UI is the name that they type in a browser.
+// Slug makes a host name from a display name. mDNS and /etc/hostname both use
+// it, so the name that the user types in the web UI is the name that they type in
+// a browser. A name with nothing usable in it gives "portapixel": a host with no
+// name is a host that nobody can reach.
 func Slug(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
+	if out := slug.Make(name); out != "" {
+		return out
 	}
-	out := b.String()
-	for strings.Contains(out, "--") {
-		out = strings.ReplaceAll(out, "--", "-")
-	}
-	out = strings.Trim(out, "-")
-	if out == "" {
-		return "portapixel"
-	}
-	return out
+	return "portapixel"
 }
 
 // MDNSName gives the name that the device announces (D20). While the device
