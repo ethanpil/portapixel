@@ -86,6 +86,17 @@ The compose file gives the container 15 s to stop. The server stops gracefully i
 
 ## Path 2: Alpine with OpenRC
 
+Get three files onto the host first. All three are release assets of this
+project on GitHub:
+
+| File | What it is |
+|---|---|
+| `portapixel-server` | the server binary for your architecture |
+| `portapixel-server.initd` | the OpenRC service, from `deploy/` in this repository |
+| `portapixel-server.confd` | the settings file, from `deploy/` in this repository |
+
+Copy them to the host with `scp`, then run these commands as root:
+
 ```sh
 install -m 755 portapixel-server /usr/local/bin/
 install -m 755 portapixel-server.initd /etc/init.d/portapixel-server
@@ -95,12 +106,38 @@ adduser -S -D -H -G portapixel portapixel
 install -d -o portapixel -g portapixel -m 750 /var/lib/portapixel-server
 rc-update add portapixel-server default
 rc-service portapixel-server start
-grep -A4 "first run" /var/log/portapixel-server.log
 ```
 
+Then do these three steps, in this order:
+
+1. Read the admin password. The server writes it one time, at the first start.
+   The log file is `/var/log/portapixel-server.log`:
+
+   ```sh
+   grep -A6 "first run" /var/log/portapixel-server.log
+   ```
+
+2. Set the public URL. Put `public_url` in
+   `/var/lib/portapixel-server/server.toml`, or put `PORTAPIXEL_PUBLIC_URL` in
+   `/etc/conf.d/portapixel-server`. A screen reads this address from its
+   enrollment card, so give the name or the address of this host.
+
+3. Open the admin UI and log in. **The service needs no restart.** The server
+   builds the host allowlist on every request, so a new `public_url` is live at
+   once. Only a change in `/etc/conf.d/portapixel-server` needs
+   `rc-service portapixel-server restart`, because OpenRC reads that file at the
+   start.
+
 Change the data directory or the listen address in
-`/etc/conf.d/portapixel-server`. Set `public_url` in
-`/var/lib/portapixel-server/server.toml`, then start the service again.
+`/etc/conf.d/portapixel-server`.
+
+A plain Alpine host has no `curl`. Add it with `apk add curl` when you want the
+command line examples in this file. You can also leave the host as it is and
+reach the UI from your own machine through an SSH port forward:
+
+```sh
+ssh -L 8080:127.0.0.1:8080 thehost
+```
 
 ## Path 3: systemd
 
@@ -109,13 +146,15 @@ install -m 755 portapixel-server /usr/local/bin/
 install -m 644 portapixel-server.service /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable --now portapixel-server
-journalctl -u portapixel-server | grep -A4 "first run"
+journalctl -u portapixel-server | grep -A6 "first run"
 ```
 
 The unit uses `DynamicUser=yes` and `StateDirectory=`, so there is no account to
 make and no directory to own. The state directory is
-`/var/lib/portapixel-server`. Set `public_url` in the `server.toml` of that
-directory, then start the unit again.
+`/var/lib/portapixel-server`. `DynamicUser=yes` puts the real files in
+`/var/lib/private/portapixel-server`, which only root can read: name that path
+when you make a backup. Set `public_url` in the `server.toml` of the state
+directory. The unit needs no restart for that value.
 
 ## The environment
 
@@ -156,10 +195,18 @@ Leave the list empty when no proxy is in front.
 
 ## Add screens
 
-The Enrollment page makes an invite token and shows a `[server]` block. Paste the
-block into `portapixel.toml` on any number of cards before the first boot. Each
-screen then registers itself under its own hardware ID (D25). A screen can also
-show a six-character code that you approve on the Screens page.
+There are three ways, and all three end on the Screens page.
+
+1. **An enrollment token.** The Enrollment page makes an invite token and shows a
+   `[server]` block. Paste the block into `portapixel.toml` on any number of cards
+   before the first boot. Each screen then registers itself under its own hardware
+   ID (D25).
+2. **A pairing code.** A screen with no token shows a six-character code on its
+   fallback screen. Approve the code on the Screens page.
+3. **The pairing card on the screen itself.** Open the admin UI of the screen,
+   go to Settings, and type the address of this server in the pairing card. The
+   screen then asks the server to pair (`POST /api/pair`). Use this way when you
+   have the screen in front of you and the card is already flashed.
 
 A code waits 24 hours. After that the screen shows a new code, and at most 200
 screens can wait at one time.

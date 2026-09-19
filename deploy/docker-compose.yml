@@ -28,12 +28,17 @@ services:
       # The address that a browser and a screen use. Change it to your own name
       # and start the container again. Until you do, open the UI on the host
       # itself at http://localhost:8080/ or through an SSH port forward.
-      PORTAPIXEL_PUBLIC_URL: "http://localhost:8080"
-      # The reverse proxies that this server believes. The default is the bridge
-      # network of Docker, which is where a proxy container reaches it from. With
-      # no proxy in front, set it to an empty value: a wrong entry lets a caller
-      # choose the address that the rate limiters count.
-      PORTAPIXEL_TRUSTED_PROXIES: "172.16.0.0/12"
+      # A screen reads this address from its enrollment card, so "localhost" tells
+      # every screen to call itself and no screen can ever enroll. The server
+      # already allows the loopback names on its own, so this value exists for the
+      # SCREENS. Put the name or the address of this host here.
+      PORTAPIXEL_PUBLIC_URL: "http://CHANGE-ME-TO-YOUR-HOST:8080"
+      # The reverse proxies that this server believes, and NOTHING else. Empty is
+      # the only safe default: with a network listed here, any caller from that
+      # network chooses the address that the login and enrollment rate limiters
+      # count, so the five-attempt admin lock never closes. Fill this in only when
+      # a proxy really is in front, and name the proxy as narrowly as you can.
+      PORTAPIXEL_TRUSTED_PROXIES: ""
     # The server stops gracefully in 8 s. Docker must give it more than that, or
     # it kills the process in the middle of a download that it was protecting.
     stop_grace_period: 15s

@@ -1,0 +1,15 @@
+# Keep the Docker build context small and keep secrets out of a build layer.
+# "COPY . ." would otherwise ship the git history, every built binary and any
+# local signing key into the build stage.
+.git
+.github
+*.exe
+*.img
+*.img.gz
+*.qcow2
+*.key
+*.minisig
+out/
+ppvm/
+web/**/node_modules
+tests/qemu/lab

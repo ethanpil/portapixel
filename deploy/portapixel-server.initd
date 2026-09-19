@@ -15,15 +15,18 @@
 name="portapixel-server"
 description="PortaPixel fleet server"
 
-: ${data_dir:=/var/lib/portapixel-server}
-: ${listen:=:8080}
-: ${server_user:=portapixel}
-: ${server_group:=portapixel}
+: "${data_dir:=/var/lib/portapixel-server}"
+: "${listen:=:8080}"
+: "${server_user:=portapixel}"
+: "${server_group:=portapixel}"
 
 command="/usr/local/bin/portapixel-server"
-command_args="run --data ${data_dir} --listen ${listen}"
+# The quotes are inside the string on purpose: supervise-daemon puts this through
+# eval, so a data directory with a space in it would become two arguments. The
+# server would then make a second, empty database and print a new admin password
+# while the real data stayed where it was.
+command_args="run --data \"${data_dir}\" --listen \"${listen}\""
 command_user="${server_user}:${server_group}"
-command_background="yes"
 pidfile="/run/${RC_SVCNAME}.pid"
 output_log="/var/log/${RC_SVCNAME}.log"
 error_log="/var/log/${RC_SVCNAME}.log"
@@ -40,7 +43,14 @@ respawn_max=0
 retry="TERM/15/KILL/5"
 
 depend() {
-	need net
+	# "use", not "need". The server listens on a port, which needs no interface
+	# to be up. ifupdown-ng exits non-zero when ANY configured interface fails, so
+	# one unplugged second card, or a DHCP server that is slow, makes "net" fail.
+	# With "need" OpenRC would then leave the fleet server stopped, and it does
+	# not start it again when the link comes back. "use" keeps the ordering and
+	# drops the condition.
+	use net
+	need localmount
 	after firewall
 }
 

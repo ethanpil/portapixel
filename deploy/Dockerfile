@@ -22,6 +22,10 @@ RUN GOARCH=${TARGETARCH:-amd64} go build \
         -ldflags "-s -w -X github.com/ethanpil/portapixel/internal/version.Version=${VERSION}" \
         -o /out/portapixel-server ./cmd/portapixel-server
 
+# An empty directory to copy into the run stage, so /data exists in the image
+# with the right owner. See the note in the run stage.
+RUN mkdir -p /out/data
+
 # The run stage. Distroless "static" holds the CA certificates and the time zone
 # database and nothing else: no shell, no package manager, no libc.
 #
@@ -32,11 +36,17 @@ FROM gcr.io/distroless/static-debian12:nonroot
 
 COPY --from=build /out/portapixel-server /portapixel-server
 
-# The image runs as the "nonroot" user of the base image, which is 65532. The
-# volume must belong to that user:
-#   docker run -v portapixel-data:/data ...   (docker makes it with the right owner)
-#   chown -R 65532:65532 /your/host/directory (a bind mount needs this)
-USER nonroot:nonroot
+# /data MUST exist in the image, and it must belong to the user that runs.
+# Docker copies the owner and the mode of the path in the IMAGE onto a new named
+# volume. With no such path the volume is made as root, the server runs as 65532,
+# and the first write of server.toml fails with "permission denied". The
+# container then restarts for ever and the documented Docker path never works.
+# A bind mount takes its owner from the host, so that case still needs:
+#   chown -R 65532:65532 /your/host/directory
+COPY --from=build --chown=65532:65532 /out/data /data
+
+# The "nonroot" user of the base image is 65532.
+USER 65532:65532
 
 VOLUME /data
 EXPOSE 8080
