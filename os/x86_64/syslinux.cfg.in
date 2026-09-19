@@ -1,0 +1,18 @@
+# PortaPixel BIOS boot. build-image.sh puts the contents of cmdline.base in
+# place of @CMDLINE@ and writes the result to PPBOOT:/syslinux.cfg.
+#
+# The BIOS chain is: firmware -> gptmbr.bin in the protective MBR -> the
+# syslinux VBR in the PPBOOT partition -> this file. All three pieces are
+# needed. See the three debugging lessons in the mountnas notes.
+
+SERIAL 0 115200
+PROMPT 0
+TIMEOUT 10
+DEFAULT portapixel
+
+LABEL portapixel
+	LINUX /vmlinuz-lts
+	# CPU microcode first in the chain, then the real initramfs. The kernel
+	# takes the vendor blob that matches the CPU.
+	INITRD /intel-ucode.img,/amd-ucode.img,/initramfs-lts
+	APPEND @CMDLINE@

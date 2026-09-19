@@ -1,0 +1,45 @@
+# PortaPixel Raspberry Pi firmware settings. This file is the only source
+# (plan section 6). build-image.sh copies it to PPBOOT with no change.
+#
+# One aarch64 image covers Pi Zero 2 W, Pi 2 v1.2, Pi 3, Pi 4, Pi 5 and the
+# Compute Modules. The Pi firmware picks the right device tree for the board, so
+# no per-model file is needed (D8).
+
+[all]
+# Alpine names the kernel and the initramfs after the flavour.
+kernel=vmlinuz-rpi
+initramfs initramfs-rpi followkernel
+
+# 64 bit only. There is no armv7 or ARMv6 image (D8).
+arm_64bit=1
+
+# The KMS driver for the VideoCore GPU. cage draws through wlroots on DRM/KMS
+# (D3), so this overlay is what makes a picture possible at all.
+dtoverlay=vc4-kms-v3d
+# Two framebuffers, which KMS needs for a page flip.
+max_framebuffers=2
+
+# Use the whole panel. A TV that adds a black border makes signage look broken.
+disable_overscan=1
+
+# Serial console on the GPIO header. It is the last way into a box with no
+# network (plan section 5). The kernel resolves "serial0" in cmdline.txt through
+# the device tree, so the same line works on every Pi model.
+enable_uart=1
+
+# The 3.5 mm audio jack, for [audio].output = "analog" (D11). HDMI audio needs
+# nothing here: it comes through the vc4 driver.
+dtparam=audio=on
+
+# No rainbow splash and no boot delay: the screen must show content, not our
+# boot (D18).
+disable_splash=1
+boot_delay=0
+
+# NOT set, on purpose:
+#   hdmi_force_hotplug  -- it makes a fake connector. "No display" must stay a
+#                          real wait state that recovers on hotplug (D44).
+#   hdmi_group/hdmi_mode -- the EDID is trusted. A display that lies is fixed
+#                          with the [display].video_mode setting (D49).
+#   gpu_mem             -- the KMS driver takes what it needs. A fixed split
+#                          only wastes RAM on a 512 MB Pi Zero 2 W.

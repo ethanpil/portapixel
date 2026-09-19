@@ -1,0 +1,1 @@
+root=LABEL=PPROOT rootfstype=ext4 rootwait modules=sd-mod,usb-storage,mmc_block,sdhci,sdhci_pci,nvme,ext4 console=tty1 console=serial0,115200

@@ -1,0 +1,30 @@
+# PortaPixel UEFI boot. build-image.sh puts the contents of cmdline.base in
+# place of @CMDLINE@ and writes the result to PPBOOT:/boot/grub/grub.cfg.
+#
+# grub-install --removable --no-nvram writes the loader to the fallback path
+# /EFI/BOOT/BOOTX64.EFI, which is what a removable medium needs. grub-install
+# does not write this file (mountnas lesson).
+
+set timeout=1
+set default=0
+
+insmod part_gpt
+insmod fat
+insmod ext2
+insmod all_video
+
+# Find PPBOOT by label, so the same image boots from any medium (D53).
+search --no-floppy --label PPBOOT --set=root
+
+# Serial console as well as the screen, for a headless box.
+serial --unit=0 --speed=115200
+terminal_input console serial
+terminal_output console serial
+
+menuentry "PortaPixel" {
+	linux /vmlinuz-lts @CMDLINE@
+	# CPU microcode must come FIRST in the initrd chain: the kernel reads it
+	# before it unpacks the real initramfs. Both vendors are listed and the
+	# kernel takes the one that matches the CPU.
+	initrd /intel-ucode.img /amd-ucode.img /initramfs-lts
+}
