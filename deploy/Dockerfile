@@ -42,9 +42,12 @@ VOLUME /data
 EXPOSE 8080
 
 # The check asks the server for itself. The image holds no curl and no wget, so
-# the binary does the work (portapixel-server selftest --url).
+# the binary does the work.
+#
+# "--url auto" reads the listen address of the configuration. A person who changes
+# --listen or PORTAPIXEL_LISTEN does not also have to change this line.
 HEALTHCHECK --interval=30s --timeout=6s --start-period=10s --retries=3 \
-    CMD ["/portapixel-server", "selftest", "--url", "http://127.0.0.1:8080"]
+    CMD ["/portapixel-server", "selftest", "--data", "/data", "--url", "auto"]
 
 ENTRYPOINT ["/portapixel-server"]
 CMD ["run", "--data", "/data", "--listen", ":8080"]

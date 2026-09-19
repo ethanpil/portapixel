@@ -20,6 +20,10 @@ Type=exec
 ExecStart=/usr/local/bin/portapixel-server run --data /var/lib/portapixel-server --listen :8080
 Restart=on-failure
 RestartSec=5
+# The server stops gracefully in 8 s: a download of a large video gets that time.
+# systemd must give it more than that, or it kills the process in the middle of the
+# work that the grace period protects.
+TimeoutStopSec=15
 
 # DynamicUser makes the account and gives it the state directory. There is no
 # user to add and no directory to chown, and the account cannot be logged in to.
@@ -27,9 +31,9 @@ DynamicUser=yes
 StateDirectory=portapixel-server
 StateDirectoryMode=0750
 
-# The server writes its data directory and nothing else. It needs no privilege:
-# the port is above 1024, and the media, the database and the mirror are all in
-# the state directory.
+# The server writes its data directory and nothing else. It needs no privilege.
+# The port is above 1024. The media, the database and the mirror are all in the
+# state directory.
 NoNewPrivileges=yes
 PrivateTmp=yes
 PrivateDevices=yes

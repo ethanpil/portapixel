@@ -34,6 +34,10 @@ error_log="/var/log/${RC_SVCNAME}.log"
 supervisor="supervise-daemon"
 respawn_delay=5
 respawn_max=0
+# The server stops gracefully in 8 s: a download of a large video gets that time.
+# supervise-daemon waits about 5 s by default, so it would kill the process in the
+# middle of the work that the grace period protects.
+retry="TERM/15/KILL/5"
 
 depend() {
 	need net
