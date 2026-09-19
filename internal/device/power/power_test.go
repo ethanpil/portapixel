@@ -354,3 +354,72 @@ func TestFirstOutput(t *testing.T) {
 		})
 	}
 }
+
+// A manual command that meets a transition of the schedule must wait for it and
+// then act on the state that the transition left.
+//
+// Before this the command read the state from before the transition, saw the state
+// that it asked for, answered 200 and did nothing at all. The manual hold then kept
+// the screen in the state of the transition until the next schedule edge, which is
+// hours away.
+func TestSetWaitsForATransitionThatRuns(t *testing.T) {
+	r := newRecorder()
+	r.answers[randrTool] = randrOutput
+
+	// The display call of the loop blocks until the test lets it go.
+	inCall := make(chan struct{})
+	release := make(chan struct{})
+	blocking := &blockingRunner{inner: r, inCall: inCall, release: release}
+
+	want := true
+	c := New(Options{
+		Method:     func() string { return MethodDPMS },
+		ShouldBeOn: func(time.Time) bool { return want },
+		Now:        time.Now,
+		Run:        blocking,
+		Browser:    r,
+	})
+	c.Start()
+
+	// The schedule crosses an edge and the loop starts to switch the screen off.
+	want = false
+	go c.step()
+	<-inCall
+
+	// The admin asks for the screen on while the display call runs.
+	done := make(chan error, 1)
+	go func() { done <- c.Set(true, "the admin asked for the screen on") }()
+
+	// Nothing may answer before the transition ends.
+	select {
+	case err := <-done:
+		t.Fatalf("Set() answered %v while a transition was running", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("Set() = %v", err)
+	}
+	if !c.ScreenOn() {
+		t.Error("the screen is off after a command that asked for it on")
+	}
+}
+
+// blockingRunner holds the first call inside the runner, so that a test can make
+// two goroutines meet in the middle of a transition.
+type blockingRunner struct {
+	inner   Runner
+	inCall  chan struct{}
+	release chan struct{}
+	held    bool
+}
+
+func (b *blockingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	if !b.held && name == randrTool && len(args) > 1 {
+		b.held = true
+		close(b.inCall)
+		<-b.release
+	}
+	return b.inner.Run(ctx, name, args...)
+}

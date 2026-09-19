@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"github.com/ethanpil/portapixel/internal/opslog"
 )
@@ -29,6 +30,15 @@ const (
 // mbrCodeBytes is the size of the MBR boot code. The bytes after it are the
 // partition table of the protective MBR, so a copy must stop here.
 const mbrCodeBytes = 440
+
+// partitionWait is how long the install waits for the kernel to make the partition
+// nodes of the new table. partitionPoll is the rest between two looks. Five seconds
+// is generous: the kernel needs milliseconds, and a disk that needs longer is a disk
+// that we must not write to.
+const (
+	partitionWait = 5 * time.Second
+	partitionPoll = 100 * time.Millisecond
+)
 
 // ErrBusy says that an install runs already. Two installs on one machine would
 // write over each other.
@@ -60,6 +70,10 @@ type Done struct {
 // carry the same three labels, so taking the stick out is the step that decides
 // which disk the machine uses (D54).
 const FinalInstruction = "Power the machine off. Take the USB stick out. Start the machine again and let it boot from the disk."
+
+// FailedInstruction is what a person must know after an install that stopped in the
+// middle. The disk holds part of a system and cannot start, and the stick still can.
+const FailedInstruction = "The disk holds only part of the system and cannot start. Keep the USB stick in the machine and start the install again."
 
 // Options are the parameters of an Installer.
 type Options struct {
@@ -129,6 +143,12 @@ func (i *Installer) Check(device, confirm string) (Layout, Disk, error) {
 	if device == layout.Device {
 		return Layout{}, Disk{}, fmt.Errorf("%s is the disk that this system runs from", device)
 	}
+	// The second test, and a different one. See Installer.InUse.
+	if mount, err := i.InUse(device); err != nil {
+		return Layout{}, Disk{}, err
+	} else if mount != "" {
+		return Layout{}, Disk{}, fmt.Errorf("%s holds a filesystem that this system has mounted on %s", device, mount)
+	}
 
 	disks, err := i.Disks()
 	if err != nil {
@@ -186,10 +206,17 @@ func (i *Installer) Run(ctx context.Context, device, confirm string, send func(n
 		i.mu.Unlock()
 	}()
 
-	err := i.run(ctx, device, confirm, send)
+	written := false
+	err := i.run(ctx, device, confirm, send, func() { written = true })
 	if err != nil {
 		i.log("install.fail", device+": "+err.Error())
-		send("done", Done{Error: err.Error()})
+		out := Done{Error: err.Error()}
+		if written {
+			// The disk holds part of a system. A person who takes the stick out now
+			// has a machine that does not start, and nothing else would say so.
+			out.Instruction = FailedInstruction
+		}
+		send("done", out)
 		return
 	}
 	i.log("install.done", device+" holds a copy of this system")
@@ -198,7 +225,7 @@ func (i *Installer) Run(ctx context.Context, device, confirm string, send func(n
 
 // run is the work. Each step gives its own progress band to the reporter, so one
 // step cannot move the bar backwards.
-func (i *Installer) run(ctx context.Context, device, confirm string, send func(string, any)) error {
+func (i *Installer) run(ctx context.Context, device, confirm string, send func(string, any), wrote func()) error {
 	at := 0
 	// step reports the start of a phase and gives a function that reports the
 	// progress inside it.
@@ -227,6 +254,13 @@ func (i *Installer) run(ctx context.Context, device, confirm string, send func(s
 	i.log("install.start", fmt.Sprintf("%s (%s, %d MB) from %s", device, disk.Model, disk.SizeBytes>>20, layout.Device))
 
 	step("the same labels and types as the stick")
+	// The last look before the first write. Minutes can pass between the POST and
+	// this line: the person can plug a disk in or out, and a service can mount
+	// something. Every refusal is read again here, against the world as it is now.
+	if _, _, err := i.Check(device, confirm); err != nil {
+		return err
+	}
+	wrote()
 	if err := i.writeTable(ctx, device, layout); err != nil {
 		return err
 	}
@@ -271,13 +305,20 @@ func (i *Installer) writeTable(ctx context.Context, device string, layout Layout
 		"-n", "3:0:0", "-t", "3:" + mediaType, "-c", "3:" + MediaLabel,
 		device,
 	}
-	if i.opt.Arch == "amd64" {
-		// The legacy BIOS bootable attribute, GPT bit 2. The MBR boot code of
-		// syslinux boots only a partition that carries it (os/build-image.sh).
-		args = append([]string{"--attributes=1:set:2"}, args...)
-	}
 	if _, err := i.opt.Run.Run(ctx, "sgdisk", args...); err != nil {
 		return fmt.Errorf("write the partition table of %s: %w", device, err)
+	}
+	if i.opt.Arch == "amd64" {
+		// The legacy BIOS bootable attribute, GPT bit 2. The MBR boot code of
+		// syslinux boots only a partition that carries it.
+		//
+		// A call of its own, and after the table. sgdisk works through its options in
+		// the order that it reads them, so an attribute in front of the -n options
+		// named a partition that did not exist yet. os/build-image.sh does the same
+		// two steps.
+		if _, err := i.opt.Run.Run(ctx, "sgdisk", "--attributes=1:set:2", device); err != nil {
+			return fmt.Errorf("set the boot attribute of %s: %w", device, err)
+		}
 	}
 
 	// The kernel must read the new table before the partition devices exist. partx
@@ -288,7 +329,37 @@ func (i *Installer) writeTable(ctx context.Context, device string, layout Layout
 			return fmt.Errorf("the kernel did not read the new partition table of %s: %w", device, second)
 		}
 	}
-	return nil
+	return i.waitForPartitions(ctx, device)
+}
+
+// waitForPartitions waits until the kernel made the three partition nodes.
+//
+// partx and partprobe ask the kernel to read the table; they do not wait for the
+// nodes. A write before the nodes exist made an ordinary file in memory, and the
+// install then reported success on a disk that held an empty table (see openTarget).
+func (i *Installer) waitForPartitions(ctx context.Context, device string) error {
+	deadline := time.Now().Add(partitionWait)
+	for {
+		missing := ""
+		for n := 1; n <= 3; n++ {
+			path := i.PartitionPath(device, n)
+			if _, err := os.Stat(path); err != nil {
+				missing = path
+				break
+			}
+		}
+		if missing == "" {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("the kernel did not make %s in %s", missing, partitionWait)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(partitionPoll):
+		}
+	}
 }
 
 // copyMedia mounts the new media partition and walks the files across.

@@ -6,8 +6,10 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
+	"runtime"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/fsutil"
 )
 
 // blockSize is the size of one read and one write of a partition copy. 4 MiB is
@@ -24,6 +26,31 @@ const syncEvery = 64 << 20
 // an event for each block sends a thousand events a second.
 const reportEvery = 500 * time.Millisecond
 
+// openTarget opens a partition or a disk for writing. It never makes the file.
+//
+// The flag O_CREATE was here once, and it made a whole install that wrote nothing.
+// The kernel needs a moment to make the partition nodes after the new table, and a
+// write to /dev/sdb1 before that moment made an ordinary file on devtmpfs, which is
+// memory. Every step after it worked, the UI said "Power the machine off", and the
+// disk held an empty partition table.
+//
+// On the device the target must be a block device as well. A test on another system
+// works on ordinary files that it made itself, so the node test is for Linux.
+func openTarget(to string) (*os.File, error) {
+	info, err := os.Stat(to)
+	if err != nil {
+		return nil, fmt.Errorf("%s is not there: %w", to, err)
+	}
+	if runtime.GOOS == "linux" && info.Mode()&os.ModeDevice == 0 {
+		return nil, fmt.Errorf("%s is not a block device", to)
+	}
+	out, err := os.OpenFile(to, os.O_WRONLY, 0o644)
+	if err != nil {
+		return nil, fmt.Errorf("open %s: %w", to, err)
+	}
+	return out, nil
+}
+
 // clone copies size bytes from one device to another. It is the dd of this package.
 //
 // The two partitions have the same size, so a block copy needs to know nothing
@@ -36,11 +63,9 @@ func clone(ctx context.Context, from, to string, size int64, report func(done, t
 	}
 	defer in.Close()
 
-	// The target is opened and not made: on a device it is a partition that the
-	// kernel already reports. A test gives an ordinary file, which it made itself.
-	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE, 0o644)
+	out, err := openTarget(to)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", to, err)
+		return err
 	}
 	defer out.Close()
 
@@ -107,9 +132,9 @@ func copyHead(from, to string, n int64) error {
 		return fmt.Errorf("read the first %d bytes of %s: %w", n, from, err)
 	}
 
-	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE, 0o644)
+	out, err := openTarget(to)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", to, err)
+		return err
 	}
 	defer out.Close()
 	if _, err := out.WriteAt(head, 0); err != nil {
@@ -154,7 +179,12 @@ func copyTree(ctx context.Context, from, to string, report func(done, total int6
 			// cannot hold one anyway.
 			return nil
 		}
-		if err := copyFileSync(path, target); err != nil {
+		if err := fsutil.CopyFileSync(path, target); err != nil {
+			// A file that this account may not read is not a reason to stop a whole
+			// install.
+			if os.IsPermission(err) {
+				return nil
+			}
 			return err
 		}
 		done += info.Size()
@@ -182,32 +212,4 @@ func treeBytes(root string) (int64, error) {
 		return 0, fmt.Errorf("read %s: %w", root, err)
 	}
 	return total, nil
-}
-
-// copyFileSync copies one file and syncs it. It streams: a video of 2 GB must not
-// go through the memory of a device that has 512 MB.
-func copyFileSync(from, to string) error {
-	in, err := os.Open(from)
-	if err != nil {
-		if strings.Contains(err.Error(), "permission") {
-			// A file that we may not read is not a reason to stop a whole install.
-			return nil
-		}
-		return fmt.Errorf("open %s: %w", from, err)
-	}
-	defer in.Close()
-
-	out, err := os.OpenFile(to, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return fmt.Errorf("create %s: %w", to, err)
-	}
-	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
-		return fmt.Errorf("copy %s: %w", from, err)
-	}
-	if err := out.Sync(); err != nil {
-		out.Close()
-		return fmt.Errorf("sync %s: %w", to, err)
-	}
-	return out.Close()
 }

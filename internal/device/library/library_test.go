@@ -811,8 +811,8 @@ func TestHashCacheKeepsDirtyAfterAFailedWrite(t *testing.T) {
 	if err := c.save(); err == nil {
 		t.Fatal("save gave no error for a path that cannot be written")
 	}
-	if !c.dirty {
-		t.Fatal("a failed write cleared the dirty flag; the cache can never be saved again")
+	if c.version == c.saved {
+		t.Fatal("a failed write counted as saved; the cache can never be saved again")
 	}
 
 	// The path works again, so the entry is saved.
@@ -820,8 +820,8 @@ func TestHashCacheKeepsDirtyAfterAFailedWrite(t *testing.T) {
 	if err := c.save(); err != nil {
 		t.Fatal(err)
 	}
-	if c.dirty {
-		t.Fatal("a write that worked left the dirty flag")
+	if c.version != c.saved {
+		t.Fatal("a write that worked did not count as saved")
 	}
 	again := loadCache(f.state)
 	if _, ok := again.entries["default/a.jpg"]; !ok {

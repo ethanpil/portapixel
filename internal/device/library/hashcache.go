@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -44,7 +45,11 @@ type hashCache struct {
 	mu      sync.Mutex
 	path    string
 	entries map[string]cacheEntry
-	dirty   bool
+	// version counts the changes. save compares it with the value that it copied
+	// before the write: a put that landed while the file was written must not look
+	// like a cache that is already on the disk.
+	version int
+	saved   int
 	// failed is true after a write that did not work. The failure goes in the ops
 	// log once and not at every pass.
 	failed bool
@@ -80,18 +85,32 @@ func (c *hashCache) get(rel string, size, modNS int64) (string, bool) {
 	return e.SHA256, true
 }
 
-// find gives the path of a file that holds this hash, among the files that the
-// cache knows. The caller checks that the file is still the file that we hashed.
-func (c *hashCache) find(sha string) (rel string, size, modNS int64, ok bool) {
+// candidate is one entry of the cache that holds a wanted hash.
+type candidate struct {
+	rel   string
+	size  int64
+	modNS int64
+}
+
+// find gives every file that the cache says holds this hash. The caller checks
+// which of them is still the file that we hashed.
+//
+// Every candidate and not the first one. A map has no order. With one live file and
+// one stale entry of the same content, the first answer was a coin flip. Half of the
+// polls then downloaded a video of 1 GB that was already on the card.
+func (c *hashCache) find(sha string) []candidate {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var out []candidate
 	for k, e := range c.entries {
 		if strings.EqualFold(e.SHA256, sha) {
-			return k, e.Size, e.ModNS, true
+			out = append(out, candidate{rel: k, size: e.Size, modNS: e.ModNS})
 		}
 	}
-	return "", 0, 0, false
+	// One order, so two calls give one answer.
+	sort.Slice(out, func(a, b int) bool { return out[a].rel < out[b].rel })
+	return out
 }
 
 // put adds a hash.
@@ -100,7 +119,7 @@ func (c *hashCache) put(rel string, size, modNS int64, sha string) {
 	defer c.mu.Unlock()
 
 	c.entries[rel] = cacheEntry{Size: size, ModNS: modNS, SHA256: sha}
-	c.dirty = true
+	c.version++
 }
 
 // keep removes every entry that is not in the live set. Without it the cache
@@ -118,7 +137,7 @@ func (c *hashCache) keep(live map[string]bool, skip []string) {
 			continue
 		}
 		delete(c.entries, k)
-		c.dirty = true
+		c.version++
 	}
 }
 
@@ -135,15 +154,18 @@ func hasAnyPrefix(value string, prefixes []string) bool {
 // caller can say it once. The cache is an optimisation: a device that cannot write
 // it still plays.
 //
-// The dirty flag goes away only after a write that worked. A flag that went away
-// first made one failed write into a cache that nobody could save again. The
-// device then hashed the whole card at every boot and kept nothing.
+// The version counter and not a flag. The lock is free while the file is written, so
+// a put can land in the middle. A flag that went to false afterwards would say that
+// the change is on the disk, and it is not. A write that failed also keeps the
+// counter, so the next pass tries again: one failed write once made a cache that
+// nobody could save again, and the device then hashed the whole card at every boot.
 func (c *hashCache) save() error {
 	c.mu.Lock()
-	if !c.dirty {
+	if c.version == c.saved {
 		c.mu.Unlock()
 		return nil
 	}
+	version := c.version
 	data, err := json.Marshal(c.entries)
 	c.mu.Unlock()
 	if err != nil {
@@ -154,19 +176,27 @@ func (c *hashCache) save() error {
 		return err
 	}
 	c.mu.Lock()
-	c.dirty = false
+	c.saved = version
 	c.mu.Unlock()
 	return nil
 }
 
-// CachedSHA gives the hash of a file under the media root, if the cache holds a
-// hash for this exact file. rel is the path under the media root, with forward
-// slashes between the names.
+// CachedSHA gives the hash of a file, if the cache holds a hash for this exact
+// file. abs is an absolute path, and a path that is not under the media root gives
+// no answer.
+//
+// It takes an absolute path for the same reason that NoteSHA does: the key of the
+// cache is the path under the media root, and every caller that made that key
+// itself made it without the guard against a path outside the root.
 //
 // The fleet client asks before it reads a video of 1 GB again. An object of the
 // fleet store counts as present only when its hash matches, and the cache already
 // holds that answer for every object that a fleet playlist names (D24).
-func (l *Library) CachedSHA(rel string, size, modNS int64) (string, bool) {
+func (l *Library) CachedSHA(abs string, size, modNS int64) (string, bool) {
+	rel := l.rel(abs)
+	if rel == "" {
+		return "", false
+	}
 	return l.cache.get(rel, size, modNS)
 }
 
@@ -177,18 +207,17 @@ func (l *Library) CachedSHA(rel string, size, modNS int64) (string, bool) {
 // never fetched again (plan section 12). The file can be in a local playlist, and
 // then the fleet client copies it in place of a download.
 func (l *Library) FindSHA(sha string) (string, bool) {
-	rel, size, modNS, ok := l.cache.find(sha)
-	if !ok {
-		return "", false
+	for _, c := range l.cache.find(sha) {
+		abs := filepath.Join(l.opt.MediaRoot, filepath.FromSlash(c.rel))
+		// The cache can name a file that changed or went away since the last pass. A
+		// copy of the wrong bytes would give an object that fails its hash check.
+		info, err := os.Stat(abs)
+		if err != nil || info.IsDir() || info.Size() != c.size || info.ModTime().UnixNano() != c.modNS {
+			continue
+		}
+		return abs, true
 	}
-	abs := filepath.Join(l.opt.MediaRoot, filepath.FromSlash(rel))
-	// The cache can name a file that changed or went away since the last pass. A
-	// copy of the wrong bytes would give an object that fails its hash check.
-	info, err := os.Stat(abs)
-	if err != nil || info.IsDir() || info.Size() != size || info.ModTime().UnixNano() != modNS {
-		return "", false
-	}
-	return abs, true
+	return "", false
 }
 
 // NoteSHA records the hash of a file that another package wrote under the media

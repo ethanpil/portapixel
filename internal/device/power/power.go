@@ -68,6 +68,14 @@ type Options struct {
 type Controller struct {
 	opt Options
 
+	// applyMu holds one transition at a time. The state of the screen is decided
+	// and applied under it, so a command from a person and the schedule loop cannot
+	// read the same old state and both act on it.
+	//
+	// It is not mu. A transition talks to cec-ctl or wlr-randr and can take seconds,
+	// and /api/status must answer in that time.
+	applyMu sync.Mutex
+
 	mu sync.Mutex
 	// on is the state that the controller last applied.
 	on bool
@@ -126,6 +134,9 @@ func (c *Controller) Method() string {
 func (c *Controller) Start() {
 	want := c.opt.ShouldBeOn(c.opt.Now())
 
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+
 	c.mu.Lock()
 	c.lastWant = want
 	already := c.on == want
@@ -157,6 +168,9 @@ func (c *Controller) Run(done <-chan struct{}) {
 func (c *Controller) step() {
 	want := c.opt.ShouldBeOn(c.opt.Now())
 
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+
 	c.mu.Lock()
 	edge := want != c.lastWant
 	c.lastWant = want
@@ -179,7 +193,15 @@ func (c *Controller) step() {
 
 // Set is the manual command: screen-on and screen-off from the API, and later
 // from the fleet queue. It overrides the schedule until the next schedule edge.
+//
+// It waits for a transition that runs. Without that wait the command read the state
+// from before a transition that was still in the display call, saw the state that it
+// asked for, answered 200 and did nothing. The manual hold then kept the screen in
+// the state of the transition until the next schedule edge, hours later.
 func (c *Controller) Set(on bool, reason string) error {
+	c.applyMu.Lock()
+	defer c.applyMu.Unlock()
+
 	c.mu.Lock()
 	c.manual = true
 	same := c.on == on
@@ -191,7 +213,9 @@ func (c *Controller) Set(on bool, reason string) error {
 	return c.apply(on, reason)
 }
 
-// apply makes one transition and writes one ops log line.
+// apply makes one transition and writes one ops log line. The caller holds
+// applyMu: the decision to make a transition and the transition itself are one
+// step.
 //
 // The order is the reason that this package exists. Going off, the display is
 // switched first and the browser second: the DPMS path talks to the compositor of

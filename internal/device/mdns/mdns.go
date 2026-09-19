@@ -92,10 +92,6 @@ func (a *Announcer) Run(done <-chan struct{}) {
 	}
 }
 
-// Host gives the name that the device announces now, or "" when it announces
-// nothing.
-func (a *Announcer) Host() string { return a.host }
-
 // refresh announces again when the name or the addresses changed.
 func (a *Announcer) refresh() {
 	host := strings.TrimSuffix(strings.TrimSpace(a.opt.Name()), ".")

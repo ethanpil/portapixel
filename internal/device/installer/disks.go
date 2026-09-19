@@ -134,6 +134,56 @@ func (i *Installer) Source() (Layout, error) {
 	return out, nil
 }
 
+// InUse gives the mount point of a partition of this disk that the kernel has
+// mounted, or "".
+//
+// It is the second lock on the door of D54, beside the test against the disk that
+// "/" comes from. One test reads one line of the mount list, and a boot chain that
+// mounts "/" from an initramfs, an overlay or a label can make that line say
+// something else. A disk that carries ANY mounted filesystem is a disk in use: the
+// system partition, the media partition, and a data disk of the person as well.
+func (i *Installer) InUse(device string) (string, error) {
+	data, err := os.ReadFile(filepath.Join(i.opt.ProcRoot, "mounts"))
+	if err != nil {
+		return "", fmt.Errorf("read the mount list: %w", err)
+	}
+	disk := filepath.Base(device)
+	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
+			continue
+		}
+		source := filepath.Base(fields[0])
+		if source != disk && !isPartitionOf(disk, source) {
+			continue
+		}
+		return fields[1], nil
+	}
+	return "", nil
+}
+
+// isPartitionOf reports if a device name is a partition of a disk: "sdb1" of "sdb"
+// and "nvme0n1p2" of "nvme0n1". A disk whose name ends with a digit takes a "p"
+// in front of the number, which is why a plain prefix test is not enough.
+func isPartitionOf(disk, name string) bool {
+	rest, found := strings.CutPrefix(name, disk)
+	if !found || rest == "" {
+		return false
+	}
+	if disk[len(disk)-1] >= '0' && disk[len(disk)-1] <= '9' {
+		var ok bool
+		if rest, ok = strings.CutPrefix(rest, "p"); !ok || rest == "" {
+			return false
+		}
+	}
+	for _, r := range rest {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // rootPartition gives the device that the kernel mounted on "/".
 func (i *Installer) rootPartition() (string, error) {
 	data, err := os.ReadFile(filepath.Join(i.opt.ProcRoot, "mounts"))

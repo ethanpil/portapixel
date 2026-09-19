@@ -47,9 +47,27 @@ func Slug(title string) string {
 	return out
 }
 
+// refuseWhenManaged is the content lock of D48, in the mechanism and not in a
+// route decorator.
+//
+// While the device is paired, the fleet server owns the content: the playlists, the
+// items and the media files. Every write method of this package passes here, so a
+// route that somebody adds later cannot open the door again by accident. The HTTP
+// layer keeps its own guard as the fast path, which answers before a body of 5 MB
+// is read.
+func (l *Library) refuseWhenManaged() error {
+	if l.opt.Paired() {
+		return ErrManaged
+	}
+	return nil
+}
+
 // CreatePlaylist makes a directory and an empty playlist.toml. It gives the
 // directory name, which is the name that the API and the schedule rules use.
 func (l *Library) CreatePlaylist(title string) (string, error) {
+	if err := l.refuseWhenManaged(); err != nil {
+		return "", err
+	}
 	name := Slug(title)
 	if name == "" {
 		return "", ErrBadName
@@ -79,6 +97,9 @@ func (l *Library) CreatePlaylist(title string) (string, error) {
 // The schedule rules and playback.default_playlist name a playlist by its
 // directory name, so the daemon must correct them. Options.OnRename does that.
 func (l *Library) RenamePlaylist(name, title string) (string, error) {
+	if err := l.refuseWhenManaged(); err != nil {
+		return "", err
+	}
 	dir, p, parsed, err := l.localPlaylist(name)
 	if err != nil {
 		return "", err
@@ -114,6 +135,9 @@ func (l *Library) RenamePlaylist(name, title string) (string, error) {
 
 // DeletePlaylist removes a playlist directory and everything in it.
 func (l *Library) DeletePlaylist(name string) error {
+	if err := l.refuseWhenManaged(); err != nil {
+		return err
+	}
 	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return err
@@ -133,6 +157,9 @@ func (l *Library) DeletePlaylist(name string) error {
 // A playlist that breaks a rule gives playlist.Errors, which the API sends as
 // 422 with one message for each field.
 func (l *Library) SavePlaylist(name string, p playlist.Playlist) error {
+	if err := l.refuseWhenManaged(); err != nil {
+		return err
+	}
 	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return err
@@ -160,6 +187,9 @@ func (l *Library) SavePlaylist(name string, p playlist.Playlist) error {
 // declared is Content-Length, or a value below zero when the size is not known.
 // The upload never takes the last SpaceReserve bytes of the partition.
 func (l *Library) AddMedia(name, filename string, r io.Reader, declared int64) (string, int64, error) {
+	if err := l.refuseWhenManaged(); err != nil {
+		return "", 0, err
+	}
 	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return "", 0, err
@@ -324,6 +354,9 @@ func listableMedia(name string) bool {
 // DeleteMedia removes one file from a playlist directory. It does not change
 // playlist.toml: the admin UI saves the playlist after it.
 func (l *Library) DeleteMedia(name, file string) error {
+	if err := l.refuseWhenManaged(); err != nil {
+		return err
+	}
 	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return err

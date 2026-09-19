@@ -12,9 +12,14 @@ import (
 )
 
 // fakeRunner records every program call and can make one of them fail.
+//
+// after runs when a call worked. The kernel of a real machine makes the partition
+// nodes some time after partx, and the install waits for them, so the fake has to
+// make them as well.
 type fakeRunner struct {
 	calls []string
 	fail  map[string]bool
+	after func(name string, args []string)
 }
 
 func newRunner() *fakeRunner { return &fakeRunner{fail: map[string]bool{}} }
@@ -23,6 +28,9 @@ func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) ([]by
 	f.calls = append(f.calls, strings.TrimSpace(name+" "+strings.Join(args, " ")))
 	if f.fail[name] {
 		return []byte("the tool says no"), fmt.Errorf("exit status 1")
+	}
+	if f.after != nil {
+		f.after(name, args)
 	}
 	return nil, nil
 }
@@ -77,9 +85,18 @@ func newMachine(t *testing.T) *machine {
 	write(t, filepath.Join(m.dev, "sda2"), m.rootBody)
 	write(t, filepath.Join(m.dev, "sda"), m.mbrBody)
 
-	// The target disk and the devices that its partitions will be.
+	// The target disk. Its partition nodes are NOT there: a real kernel makes them
+	// after it has read the new table, and the install must wait for them.
 	m.block("sdb", 2<<30, false, false, "Samsung", "SSD 860 EVO")
 	write(t, filepath.Join(m.dev, "sdb"), make([]byte, 512))
+	m.run.after = func(name string, args []string) {
+		if name != "partx" && name != "partprobe" {
+			return
+		}
+		for n := 1; n <= 3; n++ {
+			write(t, filepath.Join(m.dev, fmt.Sprintf("sdb%d", n)), nil)
+		}
+	}
 
 	// The kernel says that the root filesystem is the second partition of the
 	// stick.
@@ -414,6 +431,8 @@ func TestCloneRefusesAShortSource(t *testing.T) {
 	from := filepath.Join(dir, "from")
 	to := filepath.Join(dir, "to")
 	write(t, from, []byte("only a few bytes"))
+	// The target is there already: clone never makes it (see openTarget).
+	write(t, to, nil)
 
 	err := clone(context.Background(), from, to, 1<<20, nil)
 	if err == nil {
@@ -457,4 +476,84 @@ func same(t *testing.T, path string, want []byte) {
 	if !bytes.Equal(got, want) {
 		t.Errorf("%s does not hold the same bytes as the source", path)
 	}
+}
+
+// A partition node that the kernel has not made yet must stop the install. With
+// O_CREATE the copy made an ordinary file in memory, every step after it worked, and
+// the UI told the person to take the stick out of a machine that cannot start.
+func TestInstallStopsWhenAPartitionNodeIsMissing(t *testing.T) {
+	m := newMachine(t)
+	m.run.after = nil // the kernel makes no nodes
+
+	done := m.install(t)
+	if done.OK {
+		t.Fatal("the install reported success on a disk with no partition nodes")
+	}
+	if !strings.Contains(done.Error, "did not make") {
+		t.Errorf("the error is %q", done.Error)
+	}
+	if done.Instruction != FailedInstruction {
+		t.Errorf("the instruction is %q, and the person must learn that the disk cannot start", done.Instruction)
+	}
+	if _, err := os.Stat(filepath.Join(m.dev, "sdb1")); err == nil {
+		t.Error("the install made a file where a partition node must be")
+	}
+}
+
+// A disk that carries a mounted filesystem is a disk in use. It is the second lock
+// on the door, beside the test against the disk that "/" comes from.
+func TestCheckRefusesADiskWithAMountedPartition(t *testing.T) {
+	m := newMachine(t)
+	write(t, filepath.Join(m.proc, "mounts"), []byte(
+		"proc /proc proc rw 0 0\n"+
+			filepath.Join(m.dev, "sda2")+" / ext4 rw,noatime 0 0\n"+
+			filepath.Join(m.dev, "sdb1")+" /mnt/data ext4 rw 0 0\n"))
+
+	target := filepath.ToSlash(filepath.Join(m.dev, "sdb"))
+	_, _, err := m.inst.Check(target, target)
+	if err == nil {
+		t.Fatal("Check() took a disk that holds a mounted filesystem")
+	}
+	if !strings.Contains(err.Error(), "/mnt/data") {
+		t.Errorf("the refusal is %q and must name the mount point", err)
+	}
+}
+
+// The boot attribute goes on after the partitions exist. sgdisk works through its
+// options in the order that it reads them, so an attribute in front of the -n
+// options named a partition that was not there yet.
+func TestTheBootAttributeComesAfterTheTable(t *testing.T) {
+	m := newMachine(t)
+	if done := m.install(t); !done.OK {
+		t.Fatalf("the install failed: %s", done.Error)
+	}
+
+	table, attributes := -1, -1
+	for i, call := range m.run.calls {
+		switch {
+		case strings.HasPrefix(call, "sgdisk -n "):
+			table = i
+		case strings.Contains(call, "--attributes=1:set:2"):
+			attributes = i
+		}
+	}
+	if table < 0 || attributes < 0 {
+		t.Fatalf("the calls are %s", m.run.joined())
+	}
+	if attributes < table {
+		t.Errorf("the boot attribute was set before the partitions were made: %s", m.run.joined())
+	}
+}
+
+// install runs one install onto sdb and gives the last event.
+func (m *machine) install(t *testing.T) Done {
+	t.Helper()
+	target := filepath.ToSlash(filepath.Join(m.dev, "sdb"))
+	var done Done
+	m.inst.Run(context.Background(), target, target, func(name string, data any) {
+		if name == "done" {
+			done = data.(Done)
+		}
+	})
+	return done
 }
