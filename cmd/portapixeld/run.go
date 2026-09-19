@@ -1286,6 +1286,13 @@ func setRootPassword(stateDir, password string) error {
 	return nil
 }
 
+// markerReassert is how often the daemon writes the health marker again while an
+// update waits for its answer. It is not one second: the marker goes to the flash,
+// and the gate looks for it every two seconds.
+//
+// It is a var so that a test can lower it.
+var markerReassert = 5 * time.Second
+
 // writeHealthMarker writes <releases>/health/<version>.ok when the device is up.
 // The update gate watches for this file and rolls back without it (plan section
 // 15).
@@ -1296,34 +1303,69 @@ func setRootPassword(stateDir, password string) error {
 // A write that fails is tried again at the next tick. One try was wrong. A moment
 // of no space, or a partition that is still read-only, leaves no marker. The
 // update gate then rolls back a release that works.
+//
+// The daemon then writes the marker AGAIN every few seconds, for as long as
+// .swap-pending names this release. One write was a race that rolled a good
+// release back: the gate cleared a stale marker after it started, so a daemon
+// that was quick lost its marker and the gate then waited for a file that nobody
+// would write again. health-gate.sh clears the stale marker in start_pre now,
+// before the daemon starts, and this loop is the second lock on the same door.
+//
+// The loop ends when the pending marker goes away, which is what the gate does
+// when it passes. A device in its steady state writes nothing to the flash (D2).
 func (d *daemon) writeHealthMarker(done <-chan struct{}) {
+	path := filepath.Join(d.paths.releases, updater.HealthDir, version.Version+updater.OKSuffix)
+	// The content names the run that wrote the marker. A marker of an earlier boot
+	// then reads differently from this one, so an operator who looks at the file can
+	// tell the two apart.
+	body := []byte(fmt.Sprintf("version=%s pid=%d start=%s\n",
+		version.Version, os.Getpid(), time.Now().UTC().Format(time.RFC3339)))
+
 	t := time.NewTicker(time.Second)
 	defer t.Stop()
 
 	said := false
+	written := false
 	for {
 		select {
 		case <-done:
 			return
 		case <-t.C:
-			if !d.sup.Started() {
+			if !written && !d.sup.Started() {
 				continue
 			}
-			path := filepath.Join(d.paths.releases, "health", version.Version+".ok")
-			err := os.WriteFile(path, []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o644)
-			if err == nil {
+			err := os.WriteFile(path, body, 0o644)
+			if err != nil {
+				if !said {
+					// Once. A line at every second for an hour would empty the log.
+					said = true
+					d.log.Log("health.marker.fail", err.Error()+"; the daemon tries again every second")
+				}
+				continue
+			}
+			if !written {
+				written = true
 				d.mu.Lock()
 				d.markerDone = true
 				d.mu.Unlock()
-				return
+				t.Reset(markerReassert)
 			}
-			if !said {
-				// Once. A line at every second for an hour would empty the log.
-				said = true
-				d.log.Log("health.marker.fail", err.Error()+"; the daemon tries again every second")
+			if !d.swapPending() {
+				return
 			}
 		}
 	}
+}
+
+// swapPending reports if <releases>/.swap-pending names this release. It is the
+// one test that says if an update still waits for the health marker of this
+// daemon.
+func (d *daemon) swapPending() bool {
+	data, err := os.ReadFile(filepath.Join(d.paths.releases, updater.PendingFile))
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(string(data)) == version.Version
 }
 
 // runtimeDir gives XDG_RUNTIME_DIR of the browser account. cage and Wayland need

@@ -8,11 +8,32 @@
 # "previous". It marks the release bad, so the updater never installs it again.
 # Then it restarts the service.
 #
-# With no pending marker the script exits at once. It runs on every start of
+# TWO MODES, and the order of the two is the whole protocol:
+#   arm    remove a stale marker of this version. The OpenRC service runs this in
+#          start_pre, BEFORE it starts the daemon, and it waits for it.
+#   wait   watch for the marker and roll back without it. The service runs this
+#          in the background, at the same time as the daemon.
+# The default mode is wait.
+#
+# Why the arm mode exists: the wait mode removed the stale marker itself, after
+# the service had already started both. A daemon that won that race wrote its
+# marker first, the gate then removed it, waited the whole timeout and rolled a
+# GOOD release back, marked bad for ever. A protocol in which the order of two
+# processes decides the answer is not a protocol. Nothing removes a marker after
+# the daemon starts now, and the daemon writes the marker again every few seconds
+# while the pending marker names its version.
+#
+# With no pending marker both modes exit at once. This runs on every start of
 # portapixeld, so it must stay cheap.
 set -u
 
 . /usr/libexec/portapixel/oplog.sh
+
+MODE="${1:-wait}"
+case "$MODE" in
+arm|wait) ;;
+*) printf 'health-gate.sh: unknown mode %s; use "arm" or "wait"\n' "$MODE" >&2; exit 2 ;;
+esac
 
 PENDING="$PP_RELEASES/.swap-pending"     # holds the version that must prove itself
 HEALTH="$PP_RELEASES/health"
@@ -20,14 +41,6 @@ BOOTS="$HEALTH/gate-boots"               # how many starts this pending version 
 TIMEOUT="${PP_HEALTH_TIMEOUT:-120}"
 
 [ -f "$PENDING" ] || exit 0
-
-# One gate at a time. The service starts this script in the background on every
-# start of portapixeld. Without this lock, a restart during a pending update
-# gives two gates one pending marker to share.
-LOCK="${PP_RUN:-/run/portapixel}/health-gate.lock"
-mkdir -p "${PP_RUN:-/run/portapixel}" 2>/dev/null || true
-mkdir "$LOCK" 2>/dev/null || exit 0
-trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
 
 VER="$(head -n1 "$PENDING" 2>/dev/null)"
 # A version becomes a file name below, so hold it to the shape internal/updater
@@ -39,6 +52,28 @@ case "$VER" in
 	exit 0
 	;;
 esac
+
+# ------------------------------------------------------------------- the arm mode
+# A stale marker from an earlier install of this same version would let the gate
+# pass at once, with nothing proved. The new binary has to write the marker again.
+#
+# This runs in start_pre and the service waits for it, so the marker is gone
+# before the daemon can write one. Nothing removes a marker after that point.
+if [ "$MODE" = arm ]; then
+	rm -f "$HEALTH/$VER.ok"
+	sync
+	oplog update.gate.arm "version=$VER; the daemon has to write the marker again"
+	exit 0
+fi
+
+# ------------------------------------------------------------------ the wait mode
+# One gate at a time. The service starts this script in the background on every
+# start of portapixeld. Without this lock, a restart during a pending update
+# gives two gates one pending marker to share.
+LOCK="${PP_RUN:-/run/portapixel}/health-gate.lock"
+mkdir -p "${PP_RUN:-/run/portapixel}" 2>/dev/null || true
+mkdir "$LOCK" 2>/dev/null || exit 0
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
 
 # The timeout comes from /etc/conf.d/portapixeld, which a person can edit.
 # ":-" only covers an empty value. A value such as "120s" makes every test below
@@ -64,16 +99,17 @@ sync
 
 oplog update.gate.start "version=$VER timeout=${TIMEOUT}s start=$boots"
 
-# A stale marker from an earlier install of this same version would let the gate
-# pass at once, with nothing proved. The new binary has to write it again.
-rm -f "$HEALTH/$VER.ok"
-
+# NOTHING removes "$HEALTH/$VER.ok" below. The arm mode did that before the daemon
+# started. A removal here is the race that rolled a good release back.
 waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
 	if [ -f "$HEALTH/$VER.ok" ]; then
+		# The marker names the run that wrote it: version, pid and start time. Put
+		# it in the log, so a pass can be read back from the ops log alone.
+		mark="$(head -n1 "$HEALTH/$VER.ok" 2>/dev/null)"
 		rm -f "$PENDING" "$BOOTS"
 		sync
-		oplog update.gate.pass "version=$VER after=${waited}s"
+		oplog update.gate.pass "version=$VER after=${waited}s marker=$mark"
 		exit 0
 	fi
 	sleep 2

@@ -14,6 +14,8 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/opslog"
+	"github.com/ethanpil/portapixel/internal/updater"
+	"github.com/ethanpil/portapixel/internal/version"
 	"slices"
 )
 
@@ -321,4 +323,101 @@ func TestPairingFields(t *testing.T) {
 			t.Errorf("%s must stay with the local admin", field)
 		}
 	}
+}
+
+// The daemon side of the health gate protocol (plan section 15).
+//
+// One write of the marker was a race that rolled a GOOD release back: the gate
+// removed a stale marker after both had started, so a daemon that was quick lost
+// its marker and nothing wrote it again. health-gate.sh removes a stale marker in
+// start_pre now, and the daemon writes the marker again every few seconds for as
+// long as .swap-pending names its release.
+func TestHealthMarkerComesBackWhileASwapIsPending(t *testing.T) {
+	old := markerReassert
+	markerReassert = 50 * time.Millisecond
+	defer func() { markerReassert = old }()
+
+	releases, state := t.TempDir(), t.TempDir()
+	if err := os.MkdirAll(filepath.Join(releases, updater.HealthDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pending := filepath.Join(releases, updater.PendingFile)
+	marker := filepath.Join(releases, updater.HealthDir, version.Version+updater.OKSuffix)
+	if err := os.WriteFile(pending, []byte(version.Version+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &daemon{
+		paths: paths{releases: releases, state: state},
+		log:   opslog.New(filepath.Join(state, opsLogName)),
+	}
+	// A daemon with no browser counts as up, which is what --browser-cmd none does.
+	d.sup = browser.New(browser.Options{
+		Command: browser.CommandConfig{Override: browser.DisableCommand},
+		Log:     d.log,
+	})
+
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() { d.writeHealthMarker(done); close(stopped) }()
+	defer close(done)
+
+	body := waitForMarker(t, marker, "the first health marker")
+	// The content names the run that wrote it, so a marker of an earlier boot can
+	// be told apart from this one.
+	for _, want := range []string{"version=" + version.Version, "pid=", "start="} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the marker holds %q and must name %s", body, want)
+		}
+	}
+
+	// Anything at all takes the marker away. It must come back.
+	removeMarker(t, marker)
+	waitForMarker(t, marker, "the health marker again")
+
+	// The pending marker goes away, which is what the gate does when it passes.
+	// The daemon then stops writing: a device in its steady state writes nothing
+	// to the flash (D2).
+	if err := os.Remove(pending); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-stopped:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the daemon still writes the health marker with no pending update")
+	}
+	removeMarker(t, marker)
+	time.Sleep(10 * markerReassert)
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("the daemon wrote the health marker again after the update passed")
+	}
+}
+
+// removeMarker takes the health marker away. It tries again for a moment: on
+// Windows a file that the daemon writes at this instant cannot be removed.
+func removeMarker(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		if err := os.Remove(path); err == nil {
+			return
+		} else if time.Now().After(deadline) {
+			t.Fatalf("cannot remove %s: %v", path, err)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// waitForMarker waits for the health marker and gives its content.
+func waitForMarker(t *testing.T, path, what string) string {
+	t.Helper()
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if body, err := os.ReadFile(path); err == nil && len(body) > 0 {
+			return string(body)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for %s", what)
+	return ""
 }

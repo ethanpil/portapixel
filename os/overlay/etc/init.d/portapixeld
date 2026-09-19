@@ -63,9 +63,15 @@ start_pre() {
 	# pending, so a normal boot pays nothing. It runs in the background, so it
 	# never holds up the first picture.
 	if [ -f "${PP_RELEASES}/.swap-pending" ]; then
+		# The arm step FIRST, and this start waits for it. It removes a stale
+		# health marker of the pending version, and it must happen before the
+		# daemon can write one. When the removal was inside the background gate,
+		# a daemon that was quick lost its marker and the gate rolled a GOOD
+		# release back and marked it bad for ever.
+		/usr/libexec/portapixel/health-gate.sh arm || true
 		start-stop-daemon --start --background \
 			--make-pidfile --pidfile "$gate_pidfile" \
-			--exec /usr/libexec/portapixel/health-gate.sh || true
+			--exec /usr/libexec/portapixel/health-gate.sh -- wait || true
 	fi
 	if [ ! -x "$command" ]; then
 		eerror "no daemon binary at $command"

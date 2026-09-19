@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ethanpil/portapixel/internal/updater"
 	"github.com/ethanpil/portapixel/internal/version"
 )
 
@@ -67,8 +68,7 @@ func main() {
 	case "install-to-disk":
 		os.Exit(installToDiskCommand(args))
 	case "version":
-		fmt.Printf("portapixeld %s %s\n", version.Version, version.Arch())
-		os.Exit(0)
+		os.Exit(versionCommand(args))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -77,6 +77,30 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+}
+
+// versionCommand prints the build identity.
+//
+// The line with no flag is for a person and its shape never changes:
+// "portapixeld <version> <arch>". "--json" prints the machine-readable form that
+// internal/updater reads before it installs a release. A program must never take
+// a field of the human line by its position: the first updater took the last
+// field and compared the processor name with the release name.
+func versionCommand(args []string) int {
+	if len(args) == 1 && args[0] == "--json" {
+		info := updater.BinaryInfo{Name: "portapixeld", Version: version.Version, Arch: version.Arch()}
+		data, err := info.JSON()
+		if err != nil {
+			return fail("cannot say which version this build is: %v", err)
+		}
+		os.Stdout.Write(data)
+		return 0
+	}
+	if len(args) > 0 {
+		return fail("version takes no argument but --json")
+	}
+	fmt.Printf("portapixeld %s %s\n", version.Version, version.Arch())
+	return 0
 }
 
 func usage() {
@@ -88,7 +112,7 @@ Usage:
   portapixeld render-net [flags]  write the network files from portapixel.toml
   portapixeld provision [flags]   the first boot steps that own TOML
   portapixeld install-to-disk DEV clone the running system to a disk (D54)
-  portapixeld version
+  portapixeld version [--json]    the build identity. --json is for a program.
 
 Run "portapixeld <subcommand> -h" for the flags of a subcommand.
 `)
