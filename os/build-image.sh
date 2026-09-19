@@ -70,6 +70,14 @@ if [ "$ARCH" = x86_64 ]; then
 	for t in syslinux grub-install; do
 		command -v "$t" >/dev/null 2>&1 || die "the build host needs $t (syslinux, grub-efi)"
 	done
+	# The data files these two need. A host with grub but no grub-efi passes the
+	# command test and then fails at grub-install, with the loop device attached
+	# and both partitions mounted.
+	for f in /usr/share/syslinux/ldlinux.c32 /usr/share/syslinux/gptmbr.bin; do
+		[ -f "$f" ] || die "the build host needs $f (apk add syslinux)"
+	done
+	[ -d /usr/lib/grub/x86_64-efi ] ||
+		die "the build host needs /usr/lib/grub/x86_64-efi (apk add grub-efi)"
 fi
 
 # Loop devices. An unprivileged LXC container has none at all, and there is no
@@ -86,13 +94,29 @@ MNT=""
 BOOTMNT=""
 cleanup() {
 	set +e
-	[ -n "$BOOTMNT" ] && { umount "$BOOTMNT" 2>/dev/null; rmdir "$BOOTMNT" 2>/dev/null; }
-	[ -n "$MNT" ] && { umount "$MNT" 2>/dev/null; rmdir "$MNT" 2>/dev/null; }
-	[ -n "$LOOP" ] && losetup -d "$LOOP" 2>/dev/null
-	for d in $EXTRA_LOOPS; do losetup -d "$d" 2>/dev/null; done
+	# A busy mount point makes umount fail, and then "losetup -d" fails as well
+	# and the loop device leaks with no word about it. Try a lazy umount second,
+	# and say so when even that leaves something behind.
+	for m in "$BOOTMNT" "$MNT"; do
+		[ -n "$m" ] || continue
+		umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
+		mountpoint -q "$m" && printf 'build-image.sh: WARNING: %s is still mounted\n' "$m" >&2
+		rmdir "$m" 2>/dev/null
+	done
+	for d in $LOOP $EXTRA_LOOPS; do
+		[ -n "$d" ] || continue
+		losetup -d "$d" 2>/dev/null ||
+			printf 'build-image.sh: WARNING: the loop device %s is still attached\n' "$d" >&2
+	done
+	return 0
 }
 EXTRA_LOOPS=""
-trap cleanup EXIT INT TERM
+# A signal handler must END the script. With a plain "trap cleanup" the handler
+# cleans up and the script then GOES ON. It has no loop device and no mounts,
+# and gzip packs an image that only looks finished.
+trap cleanup EXIT
+trap 'cleanup; exit 130' INT
+trap 'cleanup; exit 143' TERM
 
 # --------------------------------------------------------------- 1. the image file
 say "make $OUT ($IMAGE_MB MB)"
@@ -172,6 +196,11 @@ sh "$SRC/install.sh" "$@"
 # ----------------------------------------------------------- 6. the size report
 say "size report"
 USED_MB="$(du -sm "$MNT" | awk '{ print $1 }')"
+# A du that failed gives an empty value. Arithmetic reads that as 0, and the
+# fullness gate below then passes any real size.
+case "$USED_MB" in
+''|*[!0-9]*) die "du gave no size for $MNT, so the PPROOT fullness gate cannot run" ;;
+esac
 PCT=$(( USED_MB * 100 / P2_MB ))
 printf '    PPROOT: %s MB of %s MB (%s%%)\n' "$USED_MB" "$P2_MB" "$PCT"
 if [ "$PCT" -gt "$ROOT_FULL_PCT" ]; then
@@ -183,7 +212,13 @@ fi
 # ------------------------------------------------- 7. assert the initramfs (D53)
 # The classic bug is "boots from USB but not from the internal disk". It must be
 # a build failure here, not a field report.
-KVER="$(ls "$MNT/lib/modules" | head -n1)"
+# install.sh has already refused a tree with more than one kernel, so there is
+# exactly one directory here. "find -maxdepth 1", not "ls | head -n1": ls sorts
+# names and a second kernel would give the wrong one with no word about it.
+KVER="$(find "$MNT/lib/modules" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; 2>/dev/null)"
+KCOUNT="$(printf '%s\n' "$KVER" | grep -c . || true)"
+[ "$KCOUNT" = 1 ] || die "expected one kernel in $MNT/lib/modules, found $KCOUNT:
+$KVER"
 FLAVOR="${KVER##*-}"
 INITRAMFS="$MNT/boot/initramfs-$FLAVOR"
 [ -f "$INITRAMFS" ] || die "no $INITRAMFS: install.sh did not build the initramfs"
@@ -196,7 +231,10 @@ sd_mod
 nvme
 mmc_block|sdhci
 ahci|libahci
-virtio_blk'
+virtio_blk
+virtio_pci
+ext4
+xhci-hcd|xhci_hcd'
 echo "$REQUIRED" | while IFS= read -r want; do
 	found=0
 	oldifs="$IFS"; IFS='|'
@@ -226,6 +264,17 @@ if [ "$ARCH" = x86_64 ]; then
 		[ -f "$MNT/boot/$u" ] || die "no $MNT/boot/$u: is the ucode package installed?"
 		cp "$MNT/boot/$u" "$BOOTMNT/"
 	done
+	# syslinux.cfg.in and grub.cfg.in name /vmlinuz-lts and /initramfs-lts. The
+	# real file names come from the kernel flavour. With another flavour, the
+	# boot loader names a file that is not there, and the build still reports
+	# success. Check instead of trusting.
+	for cfg in "$SRC/x86_64/syslinux.cfg.in" "$SRC/x86_64/grub.cfg.in"; do
+		grep -q "vmlinuz-$FLAVOR" "$cfg" ||
+			die "$cfg does not name vmlinuz-$FLAVOR, but the kernel is $KVER.
+ Update the boot loader template, or install the kernel flavour it names."
+		grep -q "initramfs-$FLAVOR" "$cfg" ||
+			die "$cfg does not name initramfs-$FLAVOR, but the kernel is $KVER."
+	done
 	sed "s|@CMDLINE@|$CMDLINE|" "$SRC/x86_64/syslinux.cfg.in" >"$BOOTMNT/syslinux.cfg"
 	# ldlinux.c32 must sit next to ldlinux.sys on the FAT root, and it must be
 	# put there while the partition is mounted. syslinux 6 chains
@@ -239,9 +288,9 @@ if [ "$ARCH" = x86_64 ]; then
 	grub-install --target=x86_64-efi --efi-directory="$BOOTMNT" \
 		--boot-directory="$BOOTMNT/boot" --removable --no-nvram >/dev/null
 	umount "$BOOTMNT"; rmdir "$BOOTMNT"; BOOTMNT=""
-	# syslinux --install takes a DEVICE, not a directory. Given a directory it
-	# writes no boot code at all and the FAT keeps its dummy VBR, which reads as
-	# "This is not a bootable disk" (mountnas lesson).
+	# syslinux --install takes a DEVICE, not a directory. Give it a directory and
+	# it writes no boot code at all. The FAT then keeps its dummy VBR, and the
+	# firmware says "This is not a bootable disk" (mountnas lesson).
 	syslinux --install "$P1"
 	# GPT aware MBR boot code. bs=440 count=1 touches the boot code only and
 	# leaves the partition table alone.
@@ -252,22 +301,63 @@ if [ "$ARCH" = x86_64 ]; then
 	fi
 else
 	say "boot loader: the Raspberry Pi firmware"
-	# The firmware, the kernel, the initramfs, the device trees and the
-	# overlays. raspberrypi-bootloader puts the firmware files in /boot.
-	for f in "$MNT"/boot/bootcode.bin "$MNT"/boot/*.elf "$MNT"/boot/fixup*.dat \
-		"$MNT/boot/vmlinuz-$FLAVOR" "$INITRAMFS" "$MNT"/boot/*.dtb; do
-		# "|| :" so a glob that matches nothing cannot make the loop return
-		# non-zero, which set -e would turn into an exit.
-		[ -f "$f" ] && cp "$f" "$BOOTMNT/" || :
+	# Copy a GROUP of files and count what arrived. A glob that matches nothing
+	# stays as the literal pattern in POSIX sh. "[ -f ] && cp || :" then passes
+	# over it with no word at all. A Pi image can lose every fixup file, every
+	# device tree or every overlay that way. The result is a black screen with no
+	# diagnostic, so each group below fails the build when it is empty.
+	#   $1 = a name for the message, $2.. = the paths or globs
+	copy_group() {
+		_name="$1"; shift
+		_n=0
+		for _f in "$@"; do
+			[ -f "$_f" ] || continue
+			cp "$_f" "$BOOTMNT/" || die "cannot copy $_f to PPBOOT"
+			_n=$((_n + 1))
+		done
+		[ "$_n" -gt 0 ] || die "no $_name in $MNT/boot.
+ Is raspberrypi-bootloader installed, and does it still use this layout?"
+		printf '    %s: %s file(s)\n' "$_name" "$_n"
+	}
+
+	# The Pi firmware looks for the device trees and the overlays beside
+	# config.txt on the boot partition. Alpine's linux-rpi has moved this
+	# directory between releases, so look in both places and fail when neither
+	# holds anything.
+	DTBDIR=""
+	for d in "$MNT/boot" "$MNT/boot/dtbs-rpi" "$MNT/boot/dtbs-rpi/broadcom"; do
+		if [ -n "$(find "$d" -maxdepth 1 -name 'bcm2*.dtb' 2>/dev/null | head -n1)" ]; then
+			DTBDIR="$d"
+			break
+		fi
 	done
-	if [ -d "$MNT/boot/overlays" ]; then
-		mkdir -p "$BOOTMNT/overlays"
-		cp "$MNT"/boot/overlays/* "$BOOTMNT/overlays/"
-	fi
+	[ -n "$DTBDIR" ] || die "no bcm2*.dtb anywhere under $MNT/boot.
+ The Pi firmware needs the device trees on PPBOOT. Look at what linux-rpi
+ installed and update this script."
+	OVLDIR=""
+	for d in "$MNT/boot/overlays" "$MNT/boot/dtbs-rpi/overlays"; do
+		[ -d "$d" ] && { OVLDIR="$d"; break; }
+	done
+	[ -n "$OVLDIR" ] || die "no overlays directory under $MNT/boot.
+ config.txt asks for the overlay vc4-kms-v3d. Without it there is no picture."
+
+	copy_group "the second stage firmware" "$MNT"/boot/bootcode.bin "$MNT"/boot/*.elf
+	copy_group "the fixup files" "$MNT"/boot/fixup*.dat
+	copy_group "the kernel" "$MNT/boot/vmlinuz-$FLAVOR"
+	copy_group "the initramfs" "$INITRAMFS"
+	copy_group "the device trees" "$DTBDIR"/bcm2*.dtb
+	mkdir -p "$BOOTMNT/overlays"
+	cp "$OVLDIR"/* "$BOOTMNT/overlays/" || die "cannot copy the overlays"
+	[ -f "$BOOTMNT/overlays/vc4-kms-v3d.dtbo" ] ||
+		die "PPBOOT has no overlays/vc4-kms-v3d.dtbo, which config.txt asks for."
 	cp "$SRC/rpi/config.txt" "$BOOTMNT/config.txt"
 	printf '%s\n' "$CMDLINE" >"$BOOTMNT/cmdline.txt"
-	[ -f "$BOOTMNT/bootcode.bin" ] || [ -f "$BOOTMNT/start4.elf" ] ||
-		die "no Pi firmware in $MNT/boot: is raspberrypi-bootloader installed?"
+	# config.txt names the kernel and the initramfs by flavour, the same drift
+	# the x86_64 branch checks above.
+	grep -q "vmlinuz-$FLAVOR" "$SRC/rpi/config.txt" ||
+		die "os/rpi/config.txt does not name vmlinuz-$FLAVOR, but the kernel is $KVER."
+	grep -q "initramfs-$FLAVOR" "$SRC/rpi/config.txt" ||
+		die "os/rpi/config.txt does not name initramfs-$FLAVOR, but the kernel is $KVER."
 	umount "$BOOTMNT"; rmdir "$BOOTMNT"; BOOTMNT=""
 fi
 
@@ -277,8 +367,8 @@ cp "$MNT/usr/share/portapixel/packages.manifest" \
 	"$(dirname "$OUT")/$(basename "$OUT" .img)-packages.manifest"
 
 umount "$MNT"; rmdir "$MNT"; MNT=""
-# An "if", not "[ ... ] && ...": with the fallback loop devices $LOOP is empty,
-# the test then returns non-zero and set -e would stop the build right here,
+# An "if", not "[ ... ] && ...". With the fallback loop devices $LOOP is empty.
+# The test then returns non-zero, and set -e would stop the build right here,
 # just before the compress step.
 if [ -n "$LOOP" ]; then
 	losetup -d "$LOOP"
@@ -289,6 +379,9 @@ EXTRA_LOOPS=""
 
 # ------------------------------------------------------------------ 10. compress
 say "compress"
-gzip -9 "$OUT"
+# -n leaves the name and the time out of the gzip header. Two builds of one
+# release must give the same bytes (D50), and a time stamp in the header would
+# make every build different.
+gzip -9n "$OUT"
 say "done: $OUT.gz"
 ls -l "$OUT.gz"
