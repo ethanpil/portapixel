@@ -97,6 +97,12 @@ done
 
 [ "$(id -u)" = 0 ] || die "run this script as root"
 
+# A fixed umask. Without it the umask of the caller sets the mode of every file
+# this script writes. Build on a host with umask 077, and only root can read the
+# /etc files of the image. sshd and the daemon then fail, and the messages do not
+# point back to here.
+umask 022
+
 # ------------------------------------------------------------------ validation
 if [ -n "$ROOT" ]; then
 	case "$ROOT" in /*) ;; *) ROOT="$PWD/$ROOT" ;; esac
@@ -116,11 +122,25 @@ x86_64|aarch64) ;;
 *) die "unsupported architecture: $ARCH" ;;
 esac
 
+# On-box mode changes a system somebody else owns. Prove it is the right kind of
+# system first, and say so in one clear sentence (D51).
+if [ -z "$ROOT" ]; then
+	[ -f /etc/alpine-release ] || die \
+		"this is not Alpine Linux: /etc/alpine-release is missing.
+ PortaPixel needs a sys-mode Alpine host. Use --root DIR to build an image tree
+ instead."
+	HOST_RELEASE="$(cat /etc/alpine-release)"
+	if [ -n "$ALPINE_RELEASE" ] && [ "$ALPINE_RELEASE" != "$HOST_RELEASE" ]; then
+		die "this host runs Alpine $HOST_RELEASE but --alpine-release says $ALPINE_RELEASE.
+ On-box mode pins the repositories to the release that is already installed.
+ Leave --alpine-release out, or upgrade the host first."
+	fi
+	ALPINE_RELEASE="$HOST_RELEASE"
+fi
 if [ -z "$ALPINE_RELEASE" ]; then
-	# On-box: take the release of the running system. In --root mode the caller
-	# must name it, because a release must never float (D50).
-	[ -z "$ROOT" ] || die "--root mode needs --alpine-release X.Y.Z"
-	ALPINE_RELEASE="$(cat /etc/alpine-release)"
+	# In --root mode the caller must name it, because a release must never
+	# float (D50).
+	die "--root mode needs --alpine-release X.Y.Z"
 fi
 case "$ALPINE_RELEASE" in
 [0-9]*.[0-9]*.[0-9]*) ;;
@@ -132,6 +152,27 @@ ALPINE_BRANCH="v$(echo "$ALPINE_RELEASE" | cut -d. -f1,2)"
 if [ -n "$MEDIA_PARTITION" ]; then
 	[ -z "$ROOT" ] || die "--media-partition works on the running system only"
 	[ -b "$MEDIA_PARTITION" ] || die "$MEDIA_PARTITION is not a block device"
+	# THIS OPTION DESTROYS DATA. It writes a new exFAT file system over whatever
+	# is on the partition. Refuse the cases that are always a mistake, then ask.
+	_mnt="$(awk -v d="$MEDIA_PARTITION" '$1 == d { print $2 }' /proc/mounts | tr '\n' ' ')"
+	[ -z "$_mnt" ] || die \
+		"$MEDIA_PARTITION is mounted at $_mnt. Unmount it first, or name another partition."
+	_rootdev="$(awk '$2 == "/" { print $1 }' /proc/mounts | tail -n1)"
+	[ "$MEDIA_PARTITION" != "$_rootdev" ] || die \
+		"$MEDIA_PARTITION is the running root file system. Refusing."
+	for _l in PPROOT PPBOOT; do
+		[ "$(findfs "LABEL=$_l" 2>/dev/null || true)" != "$MEDIA_PARTITION" ] || die \
+			"$MEDIA_PARTITION carries the label $_l, which belongs to a PortaPixel system. Refusing."
+	done
+	if [ "${PP_ASSUME_YES:-0}" != 1 ]; then
+		printf '\n'
+		printf 'WARNING: install.sh is about to write a new exFAT file system on\n'
+		printf '  %s\n' "$MEDIA_PARTITION"
+		printf 'Every file on that partition is lost. This cannot be undone.\n'
+		printf 'Type the device name again to go on: '
+		read -r _confirm || _confirm=""
+		[ "$_confirm" = "$MEDIA_PARTITION" ] || die "not confirmed; nothing was changed"
+	fi
 fi
 
 [ -f "$SRC/packages.list" ] || die "cannot find $SRC/packages.list"
@@ -156,10 +197,24 @@ say "media=$MEDIA_ROOT root=${ROOT:-/}"
 # moves on a new Alpine release and the installed base then drifts (D29, D50).
 say "pin the repositories to $ALPINE_BRANCH"
 mkdir -p "$ROOT/etc/apk/keys"
-cat >"$ROOT/etc/apk/repositories" <<EOF
-$MIRROR/$ALPINE_BRANCH/main
-$MIRROR/$ALPINE_BRANCH/community
+if [ -n "$ROOT" ]; then
+	# A new tree: we own the file. PP_MIRROR is a BUILD mirror, so the image
+	# keeps the public CDN and a field device never points at a build host.
+	cat >"$ROOT/etc/apk/repositories" <<EOF
+https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main
+https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/community
 EOF
+else
+	# On-box the file belongs to the owner of the system: a local mirror, a
+	# private repository or an extra branch. Add only what is missing (D51: never
+	# clobber what the owner set).
+	for _r in "$MIRROR/$ALPINE_BRANCH/main" "$MIRROR/$ALPINE_BRANCH/community"; do
+		if ! grep -qxF "$_r" "$ROOT/etc/apk/repositories" 2>/dev/null; then
+			say "add $_r to /etc/apk/repositories"
+			printf '%s\n' "$_r" >>"$ROOT/etc/apk/repositories"
+		fi
+	done
+fi
 
 if [ -n "$ROOT" ]; then
 	echo "$ARCH" >"$ROOT/etc/apk/arch"
@@ -195,9 +250,9 @@ $APK --arch "$ARCH" add --no-interactive $PKGS
 
 # ------------------------------------------------------------ 3. the kiosk user
 # The browser renders web pages from the internet. It must not run as root. The
-# kiosk user is the security boundary (D43). Write the account files directly,
-# so the same code works on a foreign architecture root where we cannot run
-# adduser, and where no post-install script can run either.
+# kiosk user is the security boundary (D43). Write the account files directly.
+# The same code then works in a foreign architecture root. adduser cannot run
+# there, and no post-install script can run there either.
 say "create the kiosk user"
 if ! grep -q '^kiosk:' "$ROOT/etc/group" 2>/dev/null; then
 	printf 'kiosk:x:%s:\n' "$KIOSK_GID" >>"$ROOT/etc/group"
@@ -276,8 +331,8 @@ if [ -f "$SRC/../LICENSES-THIRD-PARTY.md" ]; then
 fi
 
 # ----------------------------------------------------------------- 6. the fstab
-# One marked block, so an on-box install keeps the entries of the owner and a
-# second run replaces our block instead of adding a copy.
+# One marked block. An on-box install then keeps the entries of the owner, and a
+# second run replaces the PortaPixel block instead of adding a copy.
 #
 # NEVER use x-mount.mkdir here. busybox mount gives the option to the kernel,
 # which rejects it, and the mount fails at about three seconds into the boot
@@ -328,9 +383,14 @@ chmod 1777 "$ROOT/tmp"
 
 # On-box, format and mount the spare partition now (plan section 5).
 if [ -n "$MEDIA_PARTITION" ]; then
+	# Ask THIS device for its label, never the whole system. "findfs
+	# LABEL=PPMEDIA" answers with the first match anywhere. Leave a PortaPixel
+	# stick plugged in, and the test never matches the target. mkfs then ran on
+	# every run.
 	# findfs, not "blkid -s LABEL -o value": the busybox blkid takes no options
 	# at all, and the util-linux one is a separate package we do not install.
-	if [ "$(findfs LABEL=PPMEDIA 2>/dev/null || true)" != "$MEDIA_PARTITION" ]; then
+	_have="$(findfs LABEL=PPMEDIA 2>/dev/null || true)"
+	if [ "$_have" != "$MEDIA_PARTITION" ] || [ -z "$_have" ]; then
 		say "format $MEDIA_PARTITION as exFAT PPMEDIA"
 		mkfs.exfat -L PPMEDIA "$MEDIA_PARTITION"
 	fi
@@ -341,58 +401,99 @@ fi
 # -------------------------------------------------------------- 7. the initramfs
 # One feature list, set at the top of this file. The same image must boot from a
 # USB stick, an SD card, eMMC, SATA or NVMe (D53), and from a QEMU virtio disk.
-say "write the mkinitfs feature list"
-mkdir -p "$ROOT/etc/mkinitfs"
-printf 'features="%s"\n' "$MKINITFS_FEATURES" >"$ROOT/etc/mkinitfs/mkinitfs.conf"
+if [ -n "$ROOT" ]; then
+	say "write the mkinitfs feature list"
+	mkdir -p "$ROOT/etc/mkinitfs"
+	printf 'features="%s"\n' "$MKINITFS_FEATURES" >"$ROOT/etc/mkinitfs/mkinitfs.conf"
+else
+	# On-box, the host root can be on LVM, on LUKS or on a RAID set. Its feature
+	# list is what makes the host boot. Replace the list and rebuild the
+	# initramfs, and the host does not come back from the next reboot. The host
+	# already boots itself, so leave this alone.
+	say "keep the mkinitfs feature list of the host (on-box mode)"
+fi
 
-KVER="$(ls "$ROOT/lib/modules" 2>/dev/null | head -n1 || true)"
+# Exactly one kernel, or we cannot know which one the boot loader will name.
+# "ls | head -n1" is alphabetical order, not version order, so with two kernels
+# it can pick the one that is not installed in /boot.
+KVER="$(ls "$ROOT/lib/modules" 2>/dev/null || true)"
+KCOUNT="$(printf '%s\n' "$KVER" | grep -c . || true)"
 [ -n "$KVER" ] || die "no kernel found in $ROOT/lib/modules"
+[ "$KCOUNT" = 1 ] || die "found $KCOUNT kernels in $ROOT/lib/modules:
+$KVER
+ PortaPixel needs exactly one. Remove the kernels it must not use."
 # 6.18.52-0-lts -> lts, 6.12.85-0-rpi -> rpi. apk names the file after it.
 FLAVOR="${KVER##*-}"
-say "build initramfs-$FLAVOR for kernel $KVER"
 if [ -n "$ROOT" ]; then
+	say "build initramfs-$FLAVOR for kernel $KVER"
 	# -b takes every file from the target tree, so this also works when the
 	# target architecture is not the architecture of this host.
-	# -P puts the feature files of the TARGET first, so the module list comes
-	# from the mkinitfs of the image and not from the one on the build host.
+	# -P puts the feature files of the TARGET first. The module list then comes
+	# from the mkinitfs of the image, not from the one on the build host.
 	mkinitfs -b "$ROOT" -c "$ROOT/etc/mkinitfs/mkinitfs.conf" \
 		-P "$ROOT/etc/mkinitfs/features.d" \
 		-o "$ROOT/boot/initramfs-$FLAVOR" "$KVER"
 else
-	mkinitfs -c /etc/mkinitfs/mkinitfs.conf -o "/boot/initramfs-$FLAVOR" "$KVER"
+	# On-box: the host owns its initramfs. See the note above.
+	say "keep the initramfs of the host (on-box mode)"
 fi
 
 # ---------------------------------------------------------------- 8. the console
 # The screen belongs to the browser. No getty on tty1, ever (plan section 5).
-say "write the inittab"
-{
-	echo "# PortaPixel inittab. The display is for the cage session only: there"
-	echo "# is no getty on tty1."
-	echo "# Serial login stays on, because it is the last way in when the network"
-	echo "# is down."
-	echo "::sysinit:/sbin/openrc sysinit"
-	echo "::sysinit:/sbin/openrc boot"
-	echo "::wait:/sbin/openrc default"
-	if [ "$ARCH" = aarch64 ]; then
-		# The UART of a Pi has a different name on each model: ttyS0 on Pi 3
-		# and Pi 4, ttyAMA0 on Pi 2, ttyAMA10 on Pi 5. The cmdline ends with
-		# console=serial0,115200, which the Pi kernel resolves through the
-		# device tree, so /dev/console is the real UART on every model.
-		echo "::respawn:/sbin/getty -L 115200 console vt100"
-	else
-		echo "ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100"
-	fi
-	echo "::ctrlaltdel:/sbin/reboot"
-	echo "::shutdown:/sbin/openrc shutdown"
-	echo "::shutdown:/sbin/killall5 -9"
-} >"$ROOT/etc/inittab"
+# In --root mode the tree is ours and the whole file is ours to write. On-box the
+# inittab belongs to the owner of the system, and replacing it would take away
+# every getty and every respawn line they set. Use a marked block there, the same
+# way the fstab does.
+if [ -n "$ROOT" ]; then
+	say "write the inittab"
+	{
+		echo "# PortaPixel inittab. The display is for the cage session only: there"
+		echo "# is no getty on tty1."
+		echo "# Serial login stays on. It is the last way in when the network is down."
+		echo "::sysinit:/sbin/openrc sysinit"
+		echo "::sysinit:/sbin/openrc boot"
+		echo "::wait:/sbin/openrc default"
+		if [ "$ARCH" = aarch64 ]; then
+			# The UART of a Pi has a different name on each model. ttyS0 is on
+			# Pi 3 and Pi 4. ttyAMA0 is on Pi 2. ttyAMA10 is on Pi 5. The
+			# cmdline names console=serial0,115200, and the Pi kernel resolves
+			# that name through the device tree. /dev/console is then the real
+			# UART on every model.
+			# The id field holds "console" on purpose. Alpine's
+			# setup_inittab_console adds a getty for any console= device that
+			# has NO line with that id. An empty id matched nothing, so a
+			# SECOND getty went on the same UART and two prompts then fought
+			# over one serial line.
+			echo "console::respawn:/sbin/getty -L 115200 console vt100"
+		else
+			echo "ttyS0::respawn:/sbin/getty -L 115200 ttyS0 vt100"
+		fi
+		echo "::ctrlaltdel:/sbin/reboot"
+		echo "::shutdown:/sbin/openrc shutdown"
+		echo "::shutdown:/sbin/killall5 -9"
+	} >"$ROOT/etc/inittab"
+else
+	say "add the PortaPixel block to /etc/inittab"
+	INITTAB="$ROOT/etc/inittab"
+	[ -f "$INITTAB" ] || : >"$INITTAB"
+	{
+		awk -v b="$BEGIN" -v e="$END" '
+			$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }
+		' "$INITTAB"
+		echo "$BEGIN"
+		echo "# The display belongs to the browser: PortaPixel adds no getty on tty1."
+		echo "# The host keeps every getty it had, above this block."
+		echo "$END"
+	} >"$INITTAB.new"
+	mv "$INITTAB.new" "$INITTAB"
+fi
 
 # ------------------------------------------------------- 9. a default network
 # The daemon renders this file from the TOML at every boot (portapixel-net). It
-# still needs a good default, because ifupdown-ng fails to parse an empty or
-# missing file, "networking" then fails, and OpenRC refuses to start chronyd
-# after that. One missing file took the whole network down. Nothing about the
-# network may cascade like that (plan 3.3).
+# still needs a good default. ifupdown-ng fails to parse an empty or missing
+# file. "networking" then fails, and OpenRC refuses to start chronyd after that.
+# One missing file took the whole network down. Nothing about the network may
+# cascade like that (plan 3.3).
 if [ ! -s "$ROOT/etc/network/interfaces" ]; then
 	say "write a default /etc/network/interfaces"
 	mkdir -p "$ROOT/etc/network"
@@ -451,7 +552,11 @@ else
 fi
 
 # default: the rest. seatd must be up before the daemon starts cage.
-for s in udev-postmount dbus alsa chronyd sshd seatd; do rc_add "$s" default; done
+# acpid turns the ACPI power button into a clean poweroff. Without it, a
+# hypervisor shutdown order does nothing. A UPS that signals a low battery does
+# nothing either. The power then goes off under an exFAT card, which has no
+# journal.
+for s in udev-postmount dbus alsa chronyd sshd seatd acpid; do rc_add "$s" default; done
 rc_add portapixel-firstboot default
 rc_add portapixeld default
 
@@ -501,11 +606,26 @@ PORTAPIXEL_VERSION=$VERSION
 ALPINE_RELEASE=$ALPINE_RELEASE
 ARCH=$ARCH
 EOF
-echo portapixel >"$ROOT/etc/hostname"
+# Only name a tree we made. On-box the host name belongs to the owner of the
+# system, and a box that changes its name on install is a box somebody loses.
+if [ -n "$ROOT" ]; then
+	echo portapixel >"$ROOT/etc/hostname"
+fi
 
 # Every release publishes the exact package set it shipped (D50).
 say "write the package manifest"
+# Two builds of one release must give the same manifest (D50), so sort in the C
+# locale: another locale gives another order and the hash the device reports in
+# /api/status would then change with the build host.
+# Write to a temporary file first and test it. busybox ash has no pipefail, so
+# "apk | sort > file" hides a failure of apk. The build would then ship an empty
+# manifest and report success.
 # shellcheck disable=SC2086
-$APK info -v | sort >"$ROOT/usr/share/portapixel/packages.manifest"
+$APK info -v >"$ROOT/usr/share/portapixel/.manifest.tmp"
+[ -s "$ROOT/usr/share/portapixel/.manifest.tmp" ] ||
+	die "apk info gave no package list; refusing to ship an empty manifest (D50)"
+LC_ALL=C sort <"$ROOT/usr/share/portapixel/.manifest.tmp" \
+	>"$ROOT/usr/share/portapixel/packages.manifest"
+rm -f "$ROOT/usr/share/portapixel/.manifest.tmp"
 
 say "done. version $VERSION, arch $ARCH, alpine $ALPINE_RELEASE"

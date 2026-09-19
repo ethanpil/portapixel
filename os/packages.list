@@ -106,6 +106,15 @@ font-noto-emoji            # emoji, which real web pages use everywhere.
 # ------------------------------------------------------------------------- misc
 curl                       # field debug convenience. The documented rescan hook uses it.
 v4l-utils                  # ships cec-ctl for the CEC screen power path (D31).
+# The ACPI power button. Without acpid the kernel ignores the button, so a
+# hypervisor "graceful shutdown", a QEMU system_powerdown and a UPS shutdown all
+# do nothing. The host then cuts the power to a box with an exFAT card that has
+# no journal. The shipped /etc/acpi/handler.sh already runs poweroff for
+# button/power, so PortaPixel adds no handler of its own.
+# A Raspberry Pi has no ACPI at all. The daemon starts, finds no events and
+# costs nothing, so the package stays on both architectures.
+acpid                      # act on the ACPI power button and shut down cleanly.
+acpid-openrc               # the acpid init script. The main package holds no init script.
 
 # --------------------------------------------------------------- x86_64 kernel
 @x86_64 linux-lts          # long term support kernel for generic PC hardware (D8).
