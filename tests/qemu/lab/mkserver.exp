@@ -1,0 +1,65 @@
+#!/usr/bin/expect -f
+# mkserver.exp -- drive the unattended Alpine install of the pp-server VM.
+# install-server.sh calls this file.
+set iso  [lindex $argv 0]
+set disk [lindex $argv 1]
+set seed [lindex $argv 2]
+set tap  [lindex $argv 3]
+set mac  [lindex $argv 4]
+
+proc die {msg} {
+	send_user "\nFAIL: $msg\n"
+	exit 1
+}
+
+set cmd "qemu-system-x86_64 -accel kvm -cpu host -smp 1 -m 1024 -nographic \
+ -cdrom $iso -boot d \
+ -drive file=$disk,format=qcow2,if=virtio \
+ -netdev tap,id=n0,ifname=$tap,script=no,downscript=no \
+ -device virtio-net-pci,netdev=n0,mac=$mac \
+ -virtfs local,path=$seed,mount_tag=work,security_model=none,id=work"
+
+send_user "==> $cmd\n"
+eval spawn $cmd
+
+set timeout 300
+expect {
+	-re {localhost login: *$} { send "root\r" }
+	timeout { die "no login prompt" }
+	eof     { die "QEMU stopped early" }
+}
+expect {
+	-re {[#$] } { }
+	timeout { die "no shell" }
+}
+send "echo VM\"-UP\"\r"
+expect {
+	"VM-UP" { send_user "\n==> the installer VM is up\n" }
+	timeout { die "no shell output" }
+}
+
+send "modprobe 9pnet_virtio; mkdir -p /mnt/work; mount -t 9p -o trans=virtio,version=9p2000.L work /mnt/work && echo NINEP\"-OK\"\r"
+expect {
+	"NINEP-OK" { }
+	timeout    { die "cannot mount the 9p share" }
+}
+
+set timeout 1800
+send "sh /mnt/work/install-server-vm.sh; echo RC\"=\"\$?\r"
+expect {
+	-re {RC=(\d+)} {
+		set rc $expect_out(1,string)
+		if {$rc != 0} { die "install-server-vm.sh returned $rc" }
+	}
+	timeout { die "the install did not finish in 30 minutes" }
+	eof     { die "the installer VM died" }
+}
+
+send "sync; poweroff\r"
+set timeout 180
+expect {
+	eof     { }
+	timeout { }
+}
+send_user "\nPASS: the pp-server VM is installed\n"
+exit 0
