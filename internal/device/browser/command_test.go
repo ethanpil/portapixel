@@ -38,8 +38,21 @@ func TestBuildDefaultCommand(t *testing.T) {
 		"--noerrdialogs",
 		"--disable-infobars",
 		"--disable-session-crashed-bubble",
-		"--disable-features=Translate",
+		"--disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying",
 		"--password-store=basic",
+		// An unattended appliance must not talk to a server that its owner did
+		// not name, and must not do the background work of a desktop browser.
+		"--disable-background-networking",
+		"--disable-component-update",
+		"--disable-domain-reliability",
+		"--metrics-recording-only",
+		"--disable-sync",
+		"--disable-default-apps",
+		"--no-default-browser-check",
+		"--disable-breakpad",
+		"--gcm-checkin-url=http://127.0.0.1:1/",
+		"--gcm-registration-url=http://127.0.0.1:1/",
+		"--gcm-mcs-endpoint=http://127.0.0.1:1/",
 		"http://127.0.0.1/player?k=abc",
 	} {
 		if !strings.Contains(line, want) {
@@ -52,11 +65,30 @@ func TestBuildDefaultCommand(t *testing.T) {
 		t.Errorf("the URL is not the last argument: %v", cmd.Args)
 	}
 
+	// Chromium keeps the LAST --disable-features and drops the others, so a
+	// second one would silently turn Translate back on.
+	if n := strings.Count(line, "--disable-features="); n != 1 {
+		t.Errorf("the command line has %d --disable-features flags, want 1:\n%s", n, line)
+	}
+
+	// The sandbox is the reason that the browser runs as the kiosk user. No flag
+	// may take it away.
+	for _, never := range []string{"--no-sandbox", "--disable-gpu-sandbox", "--disable-setuid-sandbox"} {
+		if strings.Contains(line, never) {
+			t.Errorf("the command line holds %q:\n%s", never, line)
+		}
+	}
+
 	env := strings.Join(cmd.Env, " ")
 	for _, want := range []string{
 		"XDG_RUNTIME_DIR=/run/user/1300",
 		"WLR_LIBINPUT_NO_DEVICES=1",
 		"HOME=/var/cache/kiosk/home",
+		// The transparent cursor theme. Without it, cage draws a pointer in the
+		// middle of the screen and the picture is not clean.
+		"XCURSOR_THEME=portapixel-blank",
+		"XCURSOR_PATH=/usr/share/icons",
+		"XCURSOR_SIZE=24",
 	} {
 		if !strings.Contains(env, want) {
 			t.Errorf("the environment has no %q: %v", want, cmd.Env)
@@ -116,6 +148,17 @@ func TestBuildDisabled(t *testing.T) {
 	}
 	if _, err := cfg.Build("http://x/"); err == nil {
 		t.Fatal("Build gave a command for a switched off browser")
+	}
+}
+
+// The browser log must stay on the capped tmpfs. A development machine has no
+// cache directory and gets no file at all.
+func TestLogPath(t *testing.T) {
+	if got := (CommandConfig{CacheDir: "/var/cache/kiosk"}).LogPath(); got != "/var/cache/kiosk/browser.log" {
+		t.Errorf("LogPath = %q", got)
+	}
+	if got := (CommandConfig{}).LogPath(); got != "" {
+		t.Errorf("LogPath with no cache directory = %q", got)
 	}
 }
 

@@ -23,6 +23,11 @@ const URLPlaceholder = "%u"
 // is navigation rung 1.
 const DefaultDebugPort = 9222
 
+// gcmDeadEnd is where the three Google Cloud Messaging endpoints go. Nothing
+// listens on port 1 of the loopback address, so each call fails at once and no
+// packet leaves the device.
+const gcmDeadEnd = "http://127.0.0.1:1/"
+
 // CommandConfig says how to start the browser. It is the only place in the
 // program that knows the command line (ARCHITECTURE section 7).
 type CommandConfig struct {
@@ -59,6 +64,20 @@ func (c CommandConfig) Port() int {
 	return DefaultDebugPort
 }
 
+// LogName is the file in the browser cache directory that takes the output of
+// cage and of Chromium.
+const LogName = "browser.log"
+
+// LogPath gives that file. It is on the capped tmpfs with the profile and the
+// cache, never on the flash (D39). An empty CacheDir is a development machine,
+// which keeps no file.
+func (c CommandConfig) LogPath() string {
+	if c.CacheDir == "" {
+		return ""
+	}
+	return c.CacheDir + "/" + LogName
+}
+
 // Endpoint gives the base URL of the DevTools Protocol.
 func (c CommandConfig) Endpoint() string {
 	if c.DebugURL != "" {
@@ -81,6 +100,18 @@ func (c CommandConfig) Endpoint() string {
 //	--no-first-run ... --password-store=basic
 //	                                 every dialogue, bubble and keyring that
 //	                                 would appear over the content
+//	--disable-background-networking ... --gcm-mcs-endpoint
+//	                                 the background work of a desktop browser,
+//	                                 which an unattended appliance must not do
+//
+// About the background work. Measured in QEMU on 2026-09-19 with Chromium 149,
+// with a packet dump of the whole guest network. Without these flags the
+// browser calls six Google hosts in the first 20 s and then calls two of them
+// again every few minutes. With them, it calls www.google.com and
+// accounts.google.com one time each at start-up and nothing after that. Those
+// two calls come from the profile itself and no flag of Chromium 149 stops
+// them. --disable-client-side-phishing-detection is NOT in the list: that
+// switch is not in the Chromium 149 binary at all.
 //
 // About --remote-allow-origins: Chromium 111 and later answer 403 to a DevTools
 // WebSocket that carries an Origin header which this flag does not name.
@@ -129,8 +160,33 @@ func (c CommandConfig) Build(url string) (*exec.Cmd, error) {
 		"--noerrdialogs",
 		"--disable-infobars",
 		"--disable-session-crashed-bubble",
-		"--disable-features=Translate",
+		// ONE --disable-features flag. A second one replaces the first.
+		// Translate: the bar over the content. OptimizationHints: a call to
+		// optimizationguide-pa.googleapis.com every three minutes.
+		// NetworkTimeServiceQuerying: a call to clients2.google.com. chrony
+		// keeps the clock (D40).
+		"--disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying",
 		"--password-store=basic",
+		// The owner of the screen decides what the device connects to. These
+		// flags stop the traffic that a desktop browser makes by itself.
+		"--disable-background-networking",
+		"--disable-component-update",
+		"--disable-domain-reliability",
+		// Metrics stay in the process and go to no server.
+		"--metrics-recording-only",
+		// Nobody signs in, installs an app or picks a default browser here.
+		"--disable-sync",
+		"--disable-default-apps",
+		"--no-default-browser-check",
+		// A crash report helps nobody on a device with no person at it, and a
+		// dump file must not take room on the capped tmpfs.
+		"--disable-breakpad",
+		// Google Cloud Messaging. No flag stops it, but these three flags move
+		// its three endpoints. A closed loopback port refuses at once, so the
+		// device makes no call to android.clients.google.com or mtalk.google.com.
+		"--gcm-checkin-url=" + gcmDeadEnd,
+		"--gcm-registration-url=" + gcmDeadEnd,
+		"--gcm-mcs-endpoint=" + gcmDeadEnd,
 		url,
 	}
 	return c.command("cage", args...)
@@ -194,9 +250,19 @@ func (c CommandConfig) command(name string, args ...string) (*exec.Cmd, error) {
 // MAKES the socket and puts WAYLAND_DISPLAY in the environment of the program
 // that it starts, so Chromium gets the value anyway. Only a client that joins
 // the session from outside needs it (see toolEnv).
+//
+// XCURSOR_THEME, XCURSOR_PATH and XCURSOR_SIZE hide the mouse pointer. cage
+// 0.2.1 draws a pointer in the middle of the screen and has no flag to stop it.
+// The image carries the theme portapixel-blank, in which every cursor is one
+// transparent pixel (os/make-blank-cursor.sh). wlroots and Chromium both read
+// these variables, so one setting covers the pointer of the compositor and the
+// pointer of the page. XCURSOR_SIZE must name the size that the theme holds.
 func (c CommandConfig) env() []string {
 	env := []string{
 		"WLR_LIBINPUT_NO_DEVICES=1",
+		"XCURSOR_THEME=" + CursorTheme,
+		"XCURSOR_PATH=" + CursorPath,
+		"XCURSOR_SIZE=" + strconv.Itoa(CursorSize),
 	}
 	if c.RuntimeDir != "" {
 		env = append(env, "XDG_RUNTIME_DIR="+c.RuntimeDir)
@@ -220,6 +286,14 @@ func (c CommandConfig) toolEnv() []string {
 // WaylandDisplay is the socket name of the cage session. cage makes
 // wayland-0 in XDG_RUNTIME_DIR, and wlr-randr needs the same name.
 const WaylandDisplay = "wayland-0"
+
+// The transparent cursor theme in the image. os/make-blank-cursor.sh makes it
+// and os/install.sh copies it with the rest of the overlay.
+const (
+	CursorTheme = "portapixel-blank"
+	CursorPath  = "/usr/share/icons"
+	CursorSize  = 24
+)
 
 // home gives HOME for the browser. It must be on the capped tmpfs: Chromium
 // writes dot directories into HOME, and the flash must never take them (D39).
