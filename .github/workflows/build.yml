@@ -185,19 +185,25 @@ jobs:
           VERSION: ${{ needs.settings.outputs.version }}
         run: |
           set -eu
-          line="$(./dist/portapixeld-${{ matrix.arch }} version)"
-          echo "portapixeld version -> $line"
-          got="$(printf '%s\n' "$line" | awk '{ print $2 }')"
-          if [ "$got" != "$VERSION" ]; then
-            echo "FAIL: the binary says \"$got\" and the tag gives \"$VERSION\"."
-            echo "      The health gate waits for $VERSION.ok, so the two must agree."
-            exit 1
-          fi
+          # The updater reads the JSON answer, so this step reads it too. A word
+          # position in the line for a person is not a contract: the updater
+          # once read the processor name as the version.
+          for name in portapixeld portapixel-server; do
+            bin="./dist/$name-${{ matrix.arch }}"
+            "$bin" version
+            json="$("$bin" version --json)"
+            echo "$name version --json -> $json"
+            printf '%s' "$json" | grep -q "\"name\":\"$name\"" ||
+              { echo "FAIL: the binary does not say that it is $name"; exit 1; }
+            printf '%s' "$json" | grep -q "\"version\":\"$VERSION\"" || {
+              echo "FAIL: the binary does not say $VERSION."
+              echo "      The health gate waits for $VERSION.ok, so the two must agree."
+              exit 1
+            }
+            printf '%s' "$json" | grep -q "\"arch\":\"${{ matrix.arch }}\"" ||
+              { echo "FAIL: the binary does not say ${{ matrix.arch }}"; exit 1; }
+          done
           echo "ok: the health marker of this release is $VERSION.ok"
-          line="$(./dist/portapixel-server-${{ matrix.arch }} version)"
-          echo "portapixel-server version -> $line"
-          printf '%s\n' "$line" | grep -q "$VERSION" ||
-            { echo "FAIL: the server binary does not say $VERSION"; exit 1; }
 
       - name: the web assets are in the binary
         run: |
