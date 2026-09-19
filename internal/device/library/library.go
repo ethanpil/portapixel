@@ -117,7 +117,23 @@ type Options struct {
 	// manifest again: an upload, an edit of the active playlist, or a sideload
 	// and a rescan must reach the screen without a person restarting anything.
 	OnChange func()
+	// OnRename runs after a playlist directory took a new name. The daemon
+	// corrects the schedule rules and playback.default_playlist, which name a
+	// playlist by its directory name.
+	OnRename func(old, next string)
+	// ChangeDelay is how long a burst of changes waits before the scan. 0 uses
+	// changeDelay. A test sets a short value.
+	ChangeDelay time.Duration
 }
+
+// changeDelay is how long a burst of changes waits before the message to the
+// player. The editor sends one call for each file that a person drops in. A player
+// event for each of them takes the player back to item 0 twenty times.
+const changeDelay = 750 * time.Millisecond
+
+// maxNotifyWait is the longest that one message may wait behind a burst that
+// never stops.
+const maxNotifyWait = 5 * time.Second
 
 // Library scans the media root and holds the last snapshot. It is safe for use
 // by more than one goroutine.
@@ -131,6 +147,17 @@ type Library struct {
 	// wake tells the background goroutine that there is work. It holds one
 	// slot, so a burst of rescans makes one pass.
 	wake chan struct{}
+
+	// upload serialises the choice of an upload name and its staging file.
+	upload sync.Mutex
+
+	// pendMu guards the timer of the message that waits.
+	pendMu   sync.Mutex
+	pending  *time.Timer
+	burstEnd time.Time
+	// reserved holds the upload names that a call already took but has not
+	// written yet. Two uploads of one file name must take two names.
+	reserved map[string]bool
 }
 
 // New makes a Library and reads the hash cache. It does not scan: the caller
@@ -140,11 +167,75 @@ func New(opt Options) *Library {
 	if opt.Paired == nil {
 		opt.Paired = func() bool { return false }
 	}
-	return &Library{
-		opt:   opt,
-		cache: loadCache(opt.StateDir),
-		wake:  make(chan struct{}, 1),
+	if opt.ChangeDelay <= 0 {
+		opt.ChangeDelay = changeDelay
 	}
+	return &Library{
+		opt:      opt,
+		cache:    loadCache(opt.StateDir),
+		wake:     make(chan struct{}, 1),
+		reserved: make(map[string]bool),
+	}
+}
+
+// changed records a write of the CRUD.
+//
+// The scan is at once, so the next answer of the API is the truth. An upload that
+// reports success, beside a playlist list with no file in it, is a fault that a
+// person sees.
+//
+// The message to the player waits. A person who drops twenty files in the editor
+// made twenty events. Each event takes the player back to item 0, so the screen
+// showed the first item twenty times and played nothing.
+func (l *Library) changed() {
+	l.scan().store(l)
+	l.notifySoon()
+}
+
+// notifySoon sends one OnChange for a whole burst of changes.
+//
+// Each change puts the message off by ChangeDelay again. A burst of uploads that
+// arrive one after the other is then one message. maxNotifyWait is the cap. A
+// person who uploads for ten minutes must still see the screen follow, so the
+// message goes out that long after the first change of the burst.
+func (l *Library) notifySoon() {
+	if l.opt.OnChange == nil {
+		return
+	}
+	l.pendMu.Lock()
+	defer l.pendMu.Unlock()
+
+	wait := l.opt.ChangeDelay
+	if l.pending == nil {
+		l.burstEnd = time.Now().Add(maxNotifyWait)
+		l.pending = time.AfterFunc(wait, l.notifyNow)
+		return
+	}
+	if left := time.Until(l.burstEnd); left < wait {
+		wait = left
+	}
+	if wait < 0 {
+		wait = 0
+	}
+	l.pending.Reset(wait)
+}
+
+// notifyNow runs in the timer goroutine.
+func (l *Library) notifyNow() {
+	l.pendMu.Lock()
+	l.pending = nil
+	l.pendMu.Unlock()
+	l.opt.OnChange()
+}
+
+// stopPending cancels a message that waits. The daemon calls it at shutdown.
+func (l *Library) stopPending() {
+	l.pendMu.Lock()
+	if l.pending != nil {
+		l.pending.Stop()
+		l.pending = nil
+	}
+	l.pendMu.Unlock()
 }
 
 // Snapshot gives the last scan. The SHA-256 values come from the cache, so a
@@ -183,8 +274,15 @@ func (l *Library) Snapshot() Snapshot {
 // the snapshot is current when it returns. The background hash goroutine picks up
 // the new files after it.
 func (l *Library) Rescan() Snapshot {
-	snap := l.scan()
+	l.scan().store(l)
+	if l.opt.OnChange != nil {
+		l.opt.OnChange()
+	}
+	return l.Snapshot()
+}
 
+// store puts a scan in the library and wakes the hash goroutine.
+func (snap Snapshot) store(l *Library) {
 	l.mu.Lock()
 	l.snap = snap
 	l.mu.Unlock()
@@ -194,19 +292,16 @@ func (l *Library) Rescan() Snapshot {
 	case l.wake <- struct{}{}:
 	default:
 	}
-	if l.opt.OnChange != nil {
-		l.opt.OnChange()
-	}
-	return l.Snapshot()
 }
 
-// HashInBackground hashes the files that the cache does not know yet. It runs
-// until ctx ends. It sleeps between files, because a hash must never take the
-// processor away from the browser: playback beats bookkeeping.
+// HashInBackground computes the hash of each file that the cache does not know
+// yet. It runs until done is closed. It rests between two files: a hash must never
+// take the processor away from the browser. Playback comes before bookkeeping.
 func (l *Library) HashInBackground(done <-chan struct{}) {
 	for {
 		select {
 		case <-done:
+			l.stopPending()
 			return
 		case <-l.wake:
 			l.hashPending(done)

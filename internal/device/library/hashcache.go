@@ -1,14 +1,18 @@
 package library
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
-	"github.com/ethanpil/portapixel/internal/store"
 )
 
 // CacheName is the name of the hash cache in the state directory. The cache is
@@ -16,10 +20,14 @@ import (
 // appear on a card that a person reads on a laptop.
 const CacheName = "hashcache.json"
 
-// hashPause is the rest between two files. Hashing is background work: it must
-// never take the processor away from the browser. 4 files a second is fast
-// enough to hash a full card in a few minutes and slow enough to be invisible.
+// hashPause is the rest between two files. The device computes the hash in the
+// background: it must never take the processor away from the browser. 4 files a
+// second is fast enough to hash a full card in a few minutes and slow enough to be
+// invisible.
 const hashPause = 250 * time.Millisecond
+
+// errStopping says that the daemon is shutting down in the middle of a hash.
+var errStopping = errors.New("the daemon is stopping")
 
 // cacheEntry is one file in the cache. The key of the map is the path under the
 // media root. Size and modification time together say if the file is still the
@@ -37,6 +45,9 @@ type hashCache struct {
 	path    string
 	entries map[string]cacheEntry
 	dirty   bool
+	// failed is true after a write that did not work. The failure goes in the ops
+	// log once and not at every pass.
+	failed bool
 }
 
 // loadCache reads the cache. A missing or damaged file gives an empty cache: the
@@ -80,33 +91,58 @@ func (c *hashCache) put(rel string, size, modNS int64, sha string) {
 
 // keep removes every entry that is not in the live set. Without it the cache
 // grows for the life of the device, because a deleted file leaves its entry.
-func (c *hashCache) keep(live map[string]bool) {
+//
+// skip names the path prefixes that this pass did not look at. An unpaired device
+// does not read the _fleet tree. A playlist that failed to read named no file at
+// all. The hashes under those prefixes must stay.
+func (c *hashCache) keep(live map[string]bool, skip []string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	for k := range c.entries {
-		if !live[k] {
-			delete(c.entries, k)
-			c.dirty = true
+		if live[k] || hasAnyPrefix(k, skip) {
+			continue
 		}
+		delete(c.entries, k)
+		c.dirty = true
 	}
 }
 
-// save writes the cache when it changed. A failure is not reported: the cache is
-// an optimisation, and a device that cannot write it still plays.
-func (c *hashCache) save() {
+func hasAnyPrefix(value string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(value, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// save writes the cache when it changed. It gives the fault of the write, so the
+// caller can say it once. The cache is an optimisation: a device that cannot write
+// it still plays.
+//
+// The dirty flag goes away only after a write that worked. A flag that went away
+// first made one failed write into a cache that nobody could save again. The
+// device then hashed the whole card at every boot and kept nothing.
+func (c *hashCache) save() error {
 	c.mu.Lock()
 	if !c.dirty {
 		c.mu.Unlock()
-		return
+		return nil
 	}
 	data, err := json.Marshal(c.entries)
+	c.mu.Unlock()
+	if err != nil {
+		return err
+	}
+
+	if err := fsutil.WriteFileAtomic(c.path, data, 0o644); err != nil {
+		return err
+	}
+	c.mu.Lock()
 	c.dirty = false
 	c.mu.Unlock()
-
-	if err == nil {
-		fsutil.WriteFileAtomic(c.path, data, 0o644)
-	}
+	return nil
 }
 
 // pendingFile is one file that needs a hash.
@@ -117,8 +153,10 @@ type pendingFile struct {
 	modNS int64
 }
 
-// hashPending hashes every file that the cache does not know. It stops when done
-// is closed, so a shutdown does not wait for a 1 GB video.
+// hashPending computes the hash of every file that the cache does not know. It
+// stops when done is closed, inside a file and between two files. A 1 GB video on
+// a Pi takes about a minute. A shutdown that waits for it is a shutdown that the
+// system kills before the cache is written.
 func (l *Library) hashPending(done <-chan struct{}) {
 	l.mu.RLock()
 	snap := l.snap
@@ -141,21 +179,107 @@ func (l *Library) hashPending(done <-chan struct{}) {
 			}
 		}
 	}
-	l.cache.keep(live)
+	l.prune(snap, live)
 
 	for _, f := range pending {
 		select {
 		case <-done:
-			l.cache.save()
+			l.saveCache()
 			return
 		case <-time.After(hashPause):
 		}
-		sha, err := store.HashFile(f.abs)
+		// The size and the time come from after the read, not from the scan. A
+		// file that was replaced while we read it would otherwise get the hash of
+		// its new content under the size and the time of the old content.
+		sha, size, modNS, err := hashFile(f.abs, done)
 		if err != nil {
+			if errors.Is(err, errStopping) {
+				l.saveCache()
+				return
+			}
 			l.log("library.hash.fail", f.rel+": "+err.Error())
 			continue
 		}
-		l.cache.put(f.rel, f.size, f.modNS, sha)
+		l.cache.put(f.rel, size, modNS, sha)
 	}
-	l.cache.save()
+	l.saveCache()
+}
+
+// prune drops the cache entries of files that are gone.
+//
+// A file that this pass did not look at is not a file that is gone. Pruning
+// against an incomplete set would throw the cache away, and the device would then
+// hash the whole card again at 4 files a second.
+//
+// Three cases are incomplete. A media root that we cannot read gives a fault of
+// the root itself: the card may not be mounted yet. A playlist that we cannot read
+// names no file. An unpaired device does not read the _fleet tree at all, and the
+// objects there must keep their hashes for the next pairing (D24).
+func (l *Library) prune(snap Snapshot, live map[string]bool) {
+	var skip []string
+	for _, p := range snap.Problems {
+		if p.Playlist == "" {
+			l.log("library.cache.keep", "the media root has a fault, so the hash cache is not trimmed")
+			return
+		}
+		skip = append(skip, p.Playlist+"/", FleetDir+"/"+p.Playlist+"/")
+	}
+	if !l.opt.Paired() {
+		skip = append(skip, FleetDir+"/")
+	}
+	l.cache.keep(live, skip)
+}
+
+// saveCache writes the cache and says once when it cannot.
+func (l *Library) saveCache() {
+	err := l.cache.save()
+
+	l.cache.mu.Lock()
+	failed := l.cache.failed
+	l.cache.failed = err != nil
+	l.cache.mu.Unlock()
+
+	if err != nil && !failed {
+		l.log("library.cache.save.fail", err.Error()+"; the device will hash these files again after a restart")
+	}
+}
+
+// hashFile computes the SHA-256 of a file and gives the size and the modification
+// time that the file had after the read.
+//
+// It ends with errStopping when done is closed. store.HashFile has no way to stop,
+// and its signature is used by the fleet client, so the reader that can stop lives
+// here.
+func hashFile(path string, done <-chan struct{}) (sha string, size, modNS int64, err error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, &stopReader{r: f, done: done}); err != nil {
+		return "", 0, 0, err
+	}
+	info, err := f.Stat()
+	if err != nil {
+		return "", 0, 0, err
+	}
+	return hex.EncodeToString(h.Sum(nil)), info.Size(), info.ModTime().UnixNano(), nil
+}
+
+// stopReader ends a read when done is closed. io.Copy reads in blocks of 32 kB,
+// so the test happens often enough to stop inside a large file.
+type stopReader struct {
+	r    io.Reader
+	done <-chan struct{}
+}
+
+func (s *stopReader) Read(p []byte) (int, error) {
+	select {
+	case <-s.done:
+		return 0, errStopping
+	default:
+	}
+	return s.r.Read(p)
 }

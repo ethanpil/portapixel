@@ -15,10 +15,10 @@
 //     _fleet/<name>/ is the exception: the fleet client writes playlists there
 //     and they play only while the device is paired.
 //
-// Hashing is background work. The SHA-256 of every file goes into a cache that
-// is keyed by path, size and modification time, so a rescan costs nothing. The
-// first hash of a 1 GB video costs seconds, so it happens in a goroutine after
-// the scan: playback must never wait for a checksum.
+// The device computes the hash in the background. The SHA-256 of every file goes
+// into a cache with the path, the size and the modification time as its key, so a
+// rescan costs nothing. The first hash of a 1 GB video takes seconds. It happens
+// in a goroutine after the scan: playback must never wait for a checksum.
 //
 // The snapshot is a value. Callers get a copy, so a rescan can never change the
 // list under a handler that is halfway through it.

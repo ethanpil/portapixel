@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/ethanpil/portapixel/internal/device/slug"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/playlist"
 	"github.com/ethanpil/portapixel/internal/store"
@@ -20,27 +21,24 @@ var (
 	ErrBadName  = errors.New("this name cannot be a directory name")
 	ErrManaged  = errors.New("the fleet server manages this playlist")
 	ErrNoFile   = errors.New("there is no file with this name")
+	ErrNoSpace  = errors.New("there is not enough free space on the media partition")
 )
 
-// Slug makes a directory name from a title: lower case, letters, digits and
-// hyphens. It gives "" when nothing is left, and the caller then reports
-// ErrBadName. A directory name must be safe on exFAT, safe in a URL and safe in
-// a shell, because a person reads this card on a laptop.
+// maxNameTries is how many numbered names an upload may try. A directory with a
+// thousand files of one name is a fault of the caller, not a name to find.
+const maxNameTries = 1000
+
+// SpaceReserve is the free space that an upload must leave. Every write of the
+// device goes to the media partition: portapixel.toml, each playlist.toml and the
+// fleet objects. A partition that one upload filled is a device that can save
+// nothing at all (D41).
+const SpaceReserve = 64 << 20
+
+// Slug makes a directory name from a title. It gives "" when nothing is left, and
+// the caller then reports ErrBadName. The length is capped, because a name goes in
+// a path, in a URL and in a schedule rule.
 func Slug(title string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(title)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	out := b.String()
-	for strings.Contains(out, "--") {
-		out = strings.ReplaceAll(out, "--", "-")
-	}
-	out = strings.Trim(out, "-")
+	out := slug.Make(title)
 	if len(out) > 48 {
 		out = strings.Trim(out[:48], "-")
 	}
@@ -66,18 +64,20 @@ func (l *Library) CreatePlaylist(title string) (string, error) {
 		return "", err
 	}
 	l.log("playlist.create", name)
-	l.Rescan()
+	l.changed()
 	return name, nil
 }
 
 // RenamePlaylist moves a playlist directory and sets the title in its
 // playlist.toml. It gives the new directory name.
 //
-// The rename does not follow the references in the schedule rules: the
-// configuration names playlists by directory name, so the admin UI must correct
-// the rules. The API answer carries the new name for that reason.
+// A playlist.toml that does not parse is moved and nothing else. The bytes are
+// what the user repairs. A rewrite from an empty placeholder deletes every item.
+//
+// The schedule rules and playback.default_playlist name a playlist by its
+// directory name, so the daemon must correct them. Options.OnRename does that.
 func (l *Library) RenamePlaylist(name, title string) (string, error) {
-	dir, p, err := l.localPlaylist(name)
+	dir, p, parsed, err := l.localPlaylist(name)
 	if err != nil {
 		return "", err
 	}
@@ -94,18 +94,25 @@ func (l *Library) RenamePlaylist(name, title string) (string, error) {
 			return "", fmt.Errorf("rename %s: %w", dir, err)
 		}
 	}
-	p.Meta.Name = strings.TrimSpace(title)
-	if err := writePlaylistFile(target, p); err != nil {
-		return "", err
+	if parsed {
+		p.Meta.Name = strings.TrimSpace(title)
+		if err := writePlaylistFile(target, p); err != nil {
+			return "", err
+		}
+	} else {
+		l.log("playlist.rename.keep", next+": playlist.toml does not parse, so only the directory moved")
 	}
 	l.log("playlist.rename", name+" -> "+next)
-	l.Rescan()
+	if l.opt.OnRename != nil && next != name {
+		l.opt.OnRename(name, next)
+	}
+	l.changed()
 	return next, nil
 }
 
 // DeletePlaylist removes a playlist directory and everything in it.
 func (l *Library) DeletePlaylist(name string) error {
-	dir, _, err := l.localPlaylist(name)
+	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return err
 	}
@@ -113,7 +120,7 @@ func (l *Library) DeletePlaylist(name string) error {
 		return fmt.Errorf("remove %s: %w", dir, err)
 	}
 	l.log("playlist.delete", name)
-	l.Rescan()
+	l.changed()
 	return nil
 }
 
@@ -124,7 +131,7 @@ func (l *Library) DeletePlaylist(name string) error {
 // A playlist that breaks a rule gives playlist.Errors, which the API sends as
 // 422 with one message for each field.
 func (l *Library) SavePlaylist(name string, p playlist.Playlist) error {
-	dir, _, err := l.localPlaylist(name)
+	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return err
 	}
@@ -135,19 +142,23 @@ func (l *Library) SavePlaylist(name string, p playlist.Playlist) error {
 		return err
 	}
 	l.log("playlist.save", fmt.Sprintf("%s items=%d", name, len(p.Items)))
-	l.Rescan()
+	l.changed()
 	return nil
 }
 
 // AddMedia writes an uploaded file into a playlist directory. It gives the name
 // that the file has on the disk.
 //
-// The stream goes to a .part file and a rename commits it, so a connection that
-// drops leaves no half file in the playlist (D41). The name is made safe, and a
-// name that is already in use gets a number, so an upload can never replace a
-// file that another item uses.
-func (l *Library) AddMedia(name, filename string, r io.Reader) (string, int64, error) {
-	dir, _, err := l.localPlaylist(name)
+// The stream goes to a staging file and a rename commits it. A connection that
+// drops then leaves no half file in the playlist (D41). The staging name is
+// unique: two uploads of one file name arrive together when a person clicks twice
+// or a request is retried. One shared staging file took both streams and gave one
+// file of mixed bytes.
+//
+// declared is Content-Length, or a value below zero when the size is not known.
+// The upload never takes the last SpaceReserve bytes of the partition.
+func (l *Library) AddMedia(name, filename string, r io.Reader, declared int64) (string, int64, error) {
+	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return "", 0, err
 	}
@@ -157,18 +168,42 @@ func (l *Library) AddMedia(name, filename string, r io.Reader) (string, int64, e
 	}
 	// store.SafeName removes every path separator, so the file cannot leave the
 	// directory. This check is the second lock on that door.
-	target := filepath.Join(dir, safe)
-	if filepath.Dir(target) != dir {
+	if filepath.Dir(filepath.Join(dir, safe)) != dir {
 		return "", 0, ErrBadName
 	}
-	target, safe = freeName(dir, safe)
 
-	part := target + ".part"
-	f, err := os.OpenFile(part, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o644)
-	if err != nil {
-		return "", 0, fmt.Errorf("create %s: %w", part, err)
+	room := l.room()
+	if declared >= 0 && declared > room {
+		return "", 0, fmt.Errorf("%w: the file needs %d bytes and %d are free", ErrNoSpace, declared, room)
 	}
-	size, copyErr := io.Copy(f, r)
+
+	// The name is reserved and the staging file is made under one lock. Without
+	// the reservation two uploads of one file name both saw the name free, took
+	// it, and the second rename threw the first file away.
+	l.upload.Lock()
+	target, safe, err := freeName(dir, safe, l.reserved)
+	var f *os.File
+	if err == nil {
+		l.reserved[target] = true
+		f, err = os.CreateTemp(dir, ".upload-*")
+		if err != nil {
+			delete(l.reserved, target)
+		}
+	}
+	l.upload.Unlock()
+	if err != nil {
+		return "", 0, err
+	}
+	defer l.release(target)
+	part := f.Name()
+
+	// The limit is one byte over the room, so that a stream which is exactly one
+	// byte too long is caught and not written.
+	limited := io.LimitReader(r, room+1)
+	size, copyErr := io.Copy(f, limited)
+	if copyErr == nil && size > room {
+		copyErr = fmt.Errorf("%w: the upload needs more than %d bytes", ErrNoSpace, room)
+	}
 	if copyErr == nil {
 		copyErr = f.Sync()
 	}
@@ -177,7 +212,14 @@ func (l *Library) AddMedia(name, filename string, r io.Reader) (string, int64, e
 	}
 	if copyErr != nil {
 		os.Remove(part)
+		if errors.Is(copyErr, ErrNoSpace) {
+			return "", 0, copyErr
+		}
 		return "", 0, fmt.Errorf("write %s: %w", part, copyErr)
+	}
+	if err := os.Chmod(part, 0o644); err != nil {
+		os.Remove(part)
+		return "", 0, fmt.Errorf("set the mode of %s: %w", part, err)
 	}
 	if err := os.Rename(part, target); err != nil {
 		os.Remove(part)
@@ -186,14 +228,29 @@ func (l *Library) AddMedia(name, filename string, r io.Reader) (string, int64, e
 	fsutil.SyncDir(dir)
 
 	l.log("media.upload", fmt.Sprintf("%s/%s %d bytes", name, safe, size))
-	l.Rescan()
+	l.changed()
 	return safe, size, nil
+}
+
+// room gives the number of bytes that an upload may take.
+func (l *Library) room() int64 {
+	free, err := fsutil.FreeBytes(l.opt.MediaRoot)
+	if err != nil {
+		// The free space is not known. An upload must still be possible, so the
+		// only guard left is the reader limit, which this value makes generous.
+		return 1 << 62
+	}
+	room := int64(free) - SpaceReserve
+	if room < 0 {
+		return 0
+	}
+	return room
 }
 
 // DeleteMedia removes one file from a playlist directory. It does not change
 // playlist.toml: the admin UI saves the playlist after it.
 func (l *Library) DeleteMedia(name, file string) error {
-	dir, _, err := l.localPlaylist(name)
+	dir, _, _, err := l.localPlaylist(name)
 	if err != nil {
 		return err
 	}
@@ -214,32 +271,36 @@ func (l *Library) DeleteMedia(name, file string) error {
 		return fmt.Errorf("remove %s: %w", target, err)
 	}
 	l.log("media.delete", name+"/"+safe)
-	l.Rescan()
+	l.changed()
 	return nil
 }
 
 // localPlaylist finds a playlist that the local admin may change. It refuses a
 // name that is not a clean directory name and a playlist that the fleet server
 // manages.
-func (l *Library) localPlaylist(name string) (string, playlist.Playlist, error) {
+//
+// parsed says if playlist.toml gave a playlist. A caller that writes the file
+// again must not write the empty placeholder over a file that only needs a
+// repair.
+func (l *Library) localPlaylist(name string) (dir string, p playlist.Playlist, parsed bool, err error) {
 	if name == "" || name != Slug(name) {
-		return "", playlist.Playlist{}, ErrBadName
+		return "", playlist.Playlist{}, false, ErrBadName
 	}
-	dir := filepath.Join(l.opt.MediaRoot, name)
-	data, err := os.ReadFile(filepath.Join(dir, playlist.FileName))
-	if err != nil {
-		if p, ok := l.Snapshot().Find(name); ok && p.Fleet {
-			return "", playlist.Playlist{}, ErrManaged
+	dir = filepath.Join(l.opt.MediaRoot, name)
+	data, readErr := os.ReadFile(filepath.Join(dir, playlist.FileName))
+	if readErr != nil {
+		if found, ok := l.Snapshot().Find(name); ok && found.Fleet {
+			return "", playlist.Playlist{}, false, ErrManaged
 		}
-		return "", playlist.Playlist{}, ErrNotFound
+		return "", playlist.Playlist{}, false, ErrNotFound
 	}
 	// A playlist that does not parse can still be replaced: the editor is how a
 	// user repairs a bad hand edit. Keep the empty playlist in that case.
-	p, err := playlist.Parse(data, playlist.Options{})
-	if err != nil && !onlyEmptyItems(err) {
-		p = playlist.Playlist{Meta: playlist.Meta{Name: name}}
+	p, parseErr := playlist.Parse(data, playlist.Options{})
+	if parseErr != nil && !onlyEmptyItems(parseErr) {
+		return dir, playlist.Playlist{Meta: playlist.Meta{Name: name}}, false, nil
 	}
-	return dir, p, nil
+	return dir, p, true, nil
 }
 
 // writePlaylistFile renders and writes playlist.toml. The write is staged and
@@ -248,22 +309,41 @@ func writePlaylistFile(dir string, p playlist.Playlist) error {
 	return fsutil.WriteFileAtomic(filepath.Join(dir, playlist.FileName), playlist.Render(p), 0o644)
 }
 
-// freeName gives a name that no file in dir uses. "promo.mp4" becomes
-// "promo-2.mp4" when promo.mp4 is there. Replacing a file would change what
-// every playlist that names it shows.
-func freeName(dir, name string) (string, string) {
+// release gives a reserved upload name back.
+func (l *Library) release(target string) {
+	l.upload.Lock()
+	delete(l.reserved, target)
+	l.upload.Unlock()
+}
+
+// freeName gives a name that no file in dir uses and that no other upload holds.
+// "promo.mp4" becomes "promo-2.mp4" when promo.mp4 is there. Replacing a file
+// would change what every playlist that names it shows.
+//
+// The caller holds the upload lock, because reserved is read here and written by
+// the caller.
+func freeName(dir, name string, reserved map[string]bool) (string, string, error) {
+	taken := func(path string) bool {
+		if reserved[path] {
+			return true
+		}
+		_, err := os.Stat(path)
+		return err == nil
+	}
 	target := filepath.Join(dir, name)
-	if _, err := os.Stat(target); err != nil {
-		return target, name
+	if !taken(target) {
+		return target, name, nil
 	}
 	ext := filepath.Ext(name)
 	stem := strings.TrimSuffix(name, ext)
-	for n := 2; n < 1000; n++ {
+	for n := 2; n < maxNameTries; n++ {
 		candidate := fmt.Sprintf("%s-%d%s", stem, n, ext)
 		target = filepath.Join(dir, candidate)
-		if _, err := os.Stat(target); err != nil {
-			return target, candidate
+		if !taken(target) {
+			return target, candidate, nil
 		}
 	}
-	return target, name
+	// Every name is taken. Giving back the last one would write over a file that
+	// a playlist item names.
+	return "", "", fmt.Errorf("%w: %s and %d numbered names are in use", ErrExists, name, maxNameTries-2)
 }
