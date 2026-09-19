@@ -1,0 +1,613 @@
+# build.yml -- the release pipeline (plan section 17).
+#
+# ONE value drives the whole run: the release tag. VERSION is the tag without the
+# leading "v", and internal/updater NormalizeVersion makes the same value from
+# the same tag. The version goes into the binary with -ldflags, into the image,
+# into the release directory name and into the health marker <VERSION>.ok. A
+# second value would roll a good release back for ever (D47, final review 19).
+#
+# Third-party actions are pinned to a full commit SHA with the tag in a comment.
+# This workflow publishes releases and can hold the signing key, and a tag can be
+# moved to other code. Change the SHA and the comment together.
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Release tag, for example v0.1.0. VERSION is this value without the "v".'
+        required: true
+        default: v0.0.0-dev
+      alpine_release:
+        description: "Exact Alpine release, for example 3.23.2. Never a branch (D50)."
+        required: true
+        default: "3.23.2"
+      draft:
+        description: "Keep the release a draft. A draft is not public."
+        type: boolean
+        default: true
+      prerelease:
+        description: "Mark the release a prerelease."
+        type: boolean
+        default: false
+  push:
+    tags:
+      - "v*"
+
+# The least rights that each job needs. Only the release job writes.
+permissions:
+  contents: read
+
+# Two release runs must never overlap: they would write the same release and the
+# same container tag.
+concurrency:
+  group: portapixel-release
+  cancel-in-progress: false
+
+jobs:
+  # What this job proves: the tag gives exactly one version, internal/updater
+  # reads the same value, and the signing settings agree with each other.
+  settings:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.one.outputs.tag }}
+      version: ${{ steps.one.outputs.version }}
+      alpine: ${{ steps.one.outputs.alpine }}
+      draft: ${{ steps.one.outputs.draft }}
+      prerelease: ${{ steps.one.outputs.prerelease }}
+      signed: ${{ steps.one.outputs.signed }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: the one value
+        id: one
+        env:
+          IN_TAG: ${{ inputs.release_tag }}
+          IN_ALPINE: ${{ inputs.alpine_release }}
+          IN_DRAFT: ${{ inputs.draft }}
+          IN_PRERELEASE: ${{ inputs.prerelease }}
+          HAVE_SECRET: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
+          PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -eu
+          tag="$IN_TAG"
+          # A pushed tag gives no inputs. The tag name is then the one value.
+          [ -n "$tag" ] || tag="$GITHUB_REF_NAME"
+          alpine="${IN_ALPINE:-3.23.2}"
+          draft="${IN_DRAFT:-true}"
+          prerelease="${IN_PRERELEASE:-false}"
+
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "FAIL: the tag must look like v0.1.0, and it is \"$tag\""; exit 1 ;;
+          esac
+          case "$alpine" in
+            [0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "FAIL: alpine_release must be an exact release like 3.23.2, not \"$alpine\""; exit 1 ;;
+          esac
+          version="${tag#v}"
+
+          # The assertion against the real code: NormalizeVersion of the tag must
+          # give this version, and the version must be a name that a device
+          # accepts as a directory and in a URL.
+          go run ./tests/ci/tagcheck "$tag" "$version"
+
+          # The signing settings. A secret key with no public key would make a
+          # release that no device can verify, and every device would refuse the
+          # next update.
+          signed=no
+          if [ "$HAVE_SECRET" = true ]; then
+            if [ -z "$PUBLIC_KEY" ]; then
+              echo "FAIL: the secret MINISIGN_SECRET_KEY is set and the variable"
+              echo "      MINISIGN_PUBLIC_KEY is empty. A device could not verify"
+              echo "      this release. Set both, or neither (D47)."
+              exit 1
+            fi
+            signed=yes
+          elif [ -n "$PUBLIC_KEY" ]; then
+            echo "note: the public key is set and there is no secret key, so this"
+            echo "      run makes no signatures. Devices built from this release"
+            echo "      can still verify a later signed release."
+          fi
+
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "alpine=$alpine"
+            echo "draft=$draft"
+            echo "prerelease=$prerelease"
+            echo "signed=$signed"
+          } >>"$GITHUB_OUTPUT"
+
+          echo "tag=$tag version=$version alpine=$alpine draft=$draft prerelease=$prerelease signed=$signed"
+
+  # What this job proves: the shell, the Go module and the web assets pass the
+  # cheap gate. It is the gate of the release job below: a release is never
+  # published from a tree that does not lint. The build jobs do not wait for it,
+  # so one run shows every fault at once.
+  lint:
+    uses: ./.github/workflows/lint.yml
+
+  # What this job proves: both commands build for both architectures with no C
+  # compiler, the web assets are inside the binary (selftest), and the binary
+  # reports exactly the version that the tag gave.
+  build:
+    needs: settings
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # The runner is amd64. An arm64 binary runs here only with qemu-user, which
+      # binfmt gives to the whole machine.
+      - name: qemu-user for arm64
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: build both commands
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: ${{ matrix.arch }}
+          VERSION: ${{ needs.settings.outputs.version }}
+          PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -eu
+          mkdir -p dist
+          # The public key may be empty. The build still works, and every update
+          # check of that build then says that it holds no key (D47).
+          flags="-s -w"
+          flags="$flags -X github.com/ethanpil/portapixel/internal/version.Version=$VERSION"
+          flags="$flags -X github.com/ethanpil/portapixel/internal/version.PublicKey=$PUBLIC_KEY"
+          for cmd in portapixeld portapixel-server; do
+            echo "==> $cmd linux/$GOARCH $VERSION"
+            go build -trimpath -ldflags "$flags" -o "dist/$cmd-$GOARCH" "./cmd/$cmd"
+          done
+          ls -l dist
+
+      - name: the binary says which version it is
+        env:
+          VERSION: ${{ needs.settings.outputs.version }}
+        run: |
+          set -eu
+          line="$(./dist/portapixeld-${{ matrix.arch }} version)"
+          echo "portapixeld version -> $line"
+          got="$(printf '%s\n' "$line" | awk '{ print $2 }')"
+          if [ "$got" != "$VERSION" ]; then
+            echo "FAIL: the binary says \"$got\" and the tag gives \"$VERSION\"."
+            echo "      The health gate waits for $VERSION.ok, so the two must agree."
+            exit 1
+          fi
+          echo "ok: the health marker of this release is $VERSION.ok"
+          line="$(./dist/portapixel-server-${{ matrix.arch }} version)"
+          echo "portapixel-server version -> $line"
+          printf '%s\n' "$line" | grep -q "$VERSION" ||
+            { echo "FAIL: the server binary does not say $VERSION"; exit 1; }
+
+      - name: the web assets are in the binary
+        run: |
+          set -eu
+          ./dist/portapixeld-${{ matrix.arch }} selftest
+          ./dist/portapixel-server-${{ matrix.arch }} selftest --data "$(mktemp -d)/data"
+
+      # upload-artifact is transport between jobs only. The deliverables go to the
+      # GitHub Release, because upload-artifact always makes a zip and a device
+      # cannot download a file out of a zip (D34).
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: bin-${{ matrix.arch }}
+          path: dist/*
+          retention-days: 3
+          if-no-files-found: error
+
+  # What this job proves: the four binaries have one SHA256SUMS in the format that
+  # internal/updater parses, and every signature that CI makes is verified with
+  # the public key before anything is published.
+  sign:
+    needs: [settings, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: bin-*
+          merge-multiple: true
+          path: dist
+
+      - name: minisign
+        if: needs.settings.outputs.signed == 'yes'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+
+      # The secret key goes to a file under /dev/shm with umask 077 and is never
+      # printed. GitHub hides a secret in the log, and a key that is not in the
+      # log at all is better.
+      - name: write the key, make the sums, sign and verify
+        env:
+          PP_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          PP_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          PP_MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -eu
+          keyfile=""
+          if [ -n "${PP_SECRET_KEY:-}" ]; then
+            umask 077
+            keyfile=/dev/shm/minisign.key
+            printf '%s\n' "$PP_SECRET_KEY" >"$keyfile"
+          fi
+          PP_SECRET_KEY_FILE="$keyfile" sh tests/ci/sign-release.sh dist
+          rm -f /dev/shm/minisign.key
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/*
+          retention-days: 3
+          if-no-files-found: error
+
+  # What this job proves: os/build-image.sh makes a bootable image for both
+  # architectures from an exact Alpine release, the root filesystem fits with
+  # room for a second release, the initramfs finds every kind of disk (D53), and
+  # the package manifest is there (D50).
+  #
+  # The container runs as root with --privileged, because the build needs loop
+  # devices. The aarch64 leg needs qemu-user binfmt for the apk triggers of the
+  # target root.
+  images:
+    needs: [settings, build]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            goarch: amd64
+          - arch: aarch64
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bin-${{ matrix.goarch }}
+          path: bin
+
+      - name: qemu-user for the foreign architecture
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - name: build the image in an Alpine ${{ needs.settings.outputs.alpine }} container
+        run: |
+          set -eu
+          chmod +x bin/portapixeld-${{ matrix.goarch }}
+          mkdir -p out
+          docker run --rm --privileged \
+            -v /dev:/dev \
+            -v "$PWD:/repo" \
+            -w /repo \
+            "alpine:$(echo '${{ needs.settings.outputs.alpine }}' | cut -d. -f1,2)" \
+            sh /repo/tests/ci/image-build.sh \
+              '${{ matrix.arch }}' \
+              '${{ needs.settings.outputs.alpine }}' \
+              '${{ needs.settings.outputs.version }}' \
+              "/repo/bin/portapixeld-${{ matrix.goarch }}" \
+              /repo/out
+
+      - name: the size of the image
+        run: ls -l out
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-${{ matrix.arch }}
+          path: |
+            out/*.img.gz
+            out/*packages.manifest
+          retention-days: 3
+          if-no-files-found: error
+
+  # What this job proves (blocking): the x86_64 image boots under SeaBIOS and
+  # under OVMF, the daemon answers /api/status on port 80, and the browser session
+  # comes up. A status that answers is not a picture, so browser_state must say
+  # running (CONTEXT.md section 4).
+  smoke-x86:
+    needs: [settings, images]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        firmware: [bios, uefi]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # A hosted runner has /dev/kvm but the runner account is not in the kvm
+      # group. The udev rule gives the device to everybody. Without KVM the test
+      # still runs under TCG, and boot-smoke.sh then scales every deadline by six.
+      - name: give this account /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm || echo "no /dev/kvm: the test falls back to TCG"
+
+      - name: the test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils ovmf expect curl
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-x86_64
+          path: out
+
+      - name: boot the image (${{ matrix.firmware }})
+        env:
+          VERSION: ${{ needs.settings.outputs.version }}
+        run: |
+          set -eu
+          image="out/portapixel-$VERSION-x86_64.img.gz"
+          [ -f "$image" ] || { echo "FAIL: no $image"; ls -l out; exit 1; }
+          if [ '${{ matrix.firmware }}' = uefi ]; then
+            sh tests/qemu/boot-smoke.sh --uefi --port 18080 "$image"
+          else
+            sh tests/qemu/boot-smoke.sh --port 18080 "$image"
+          fi
+
+  # What this job proves (blocking, reduced): the aarch64 image holds a daemon
+  # that starts and passes selftest under qemu-user, the packages of the display
+  # stack are in it, the overlay is in place, and PPBOOT holds every file that the
+  # Raspberry Pi firmware needs. QEMU cannot boot the Pi firmware path, so a real
+  # Pi stays on the manual checklist.
+  smoke-arm:
+    needs: [settings, images]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: qemu-user for arm64
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: image-aarch64
+          path: out
+
+      - name: look inside the aarch64 image
+        env:
+          VERSION: ${{ needs.settings.outputs.version }}
+        run: sudo -E sh tests/ci/smoke-arm.sh "out/portapixel-$VERSION-aarch64.img.gz" "$VERSION"
+
+  # What this job proves (blocking): the A/B update path works with the real
+  # binary and the real health gate script. It makes its own key pair, so it needs
+  # no previous published release and no repository secret: a binary that carries
+  # a public key installs a release that the matching secret key signed, refuses
+  # an unsigned one, one signed with another key, a legacy signature and a changed
+  # binary, and rolls back when no health marker appears (D47, plan 18).
+  smoke-update:
+    needs: settings
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # health-gate.sh sources this path, because that is where the overlay puts
+      # it on a device.
+      - name: put the shell helpers where a device has them
+        run: |
+          sudo mkdir -p /usr/libexec/portapixel
+          sudo cp os/overlay/usr/libexec/portapixel/*.sh /usr/libexec/portapixel/
+          sudo chmod 0755 /usr/libexec/portapixel/*.sh
+
+      - name: the update gate
+        env:
+          PP_CI_UPDATE_GATE: 1
+        run: go test -count=1 -v -timeout 20m ./tests/ci/updategate/
+
+  # What this job proves: the server route tests pass, the Docker image builds for
+  # both architectures, and the image runs and answers. Nothing here was ever
+  # built or run before this workflow (final review 23).
+  server:
+    needs: settings
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the server image to GHCR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: the server route tests
+        run: go test -count=1 ./tests/server/...
+
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: the tags of the image
+        id: tags
+        env:
+          VERSION: ${{ needs.settings.outputs.version }}
+          DRAFT: ${{ needs.settings.outputs.draft }}
+          PRERELEASE: ${{ needs.settings.outputs.prerelease }}
+        run: |
+          set -eu
+          image=ghcr.io/ethanpil/portapixel-server
+          tags="$image:$VERSION"
+          # "latest" is the release that a new user gets. A draft and a
+          # prerelease must never become that.
+          if [ "$DRAFT" = false ] && [ "$PRERELEASE" = false ]; then
+            tags="$tags,$image:latest"
+          fi
+          echo "tags=$tags" >>"$GITHUB_OUTPUT"
+          echo "image=$image:$VERSION" >>"$GITHUB_OUTPUT"
+          echo "$tags"
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: deploy/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ needs.settings.outputs.version }}
+
+      - name: run the image and ask it for itself
+        env:
+          IMAGE: ${{ steps.tags.outputs.image }}
+          VERSION: ${{ needs.settings.outputs.version }}
+        run: |
+          set -eu
+          docker run -d --name pps -p 127.0.0.1:8080:8080 "$IMAGE"
+          ok=0
+          i=0
+          while [ "$i" -lt 60 ]; do
+            if curl -fsS -m 5 http://127.0.0.1:8080/api/admin/session >/tmp/session.json; then
+              ok=1
+              break
+            fi
+            i=$((i + 1))
+            sleep 2
+          done
+          echo "--- docker logs ---"
+          docker logs pps || true
+          if [ "$ok" = 0 ]; then
+            echo "FAIL: the server image did not answer /api/admin/session in 120 s"
+            docker rm -f pps || true
+            exit 1
+          fi
+          echo "--- /api/admin/session ---"
+          cat /tmp/session.json
+          echo
+          docker exec pps /portapixel-server version | grep -q "$VERSION" ||
+            { echo "FAIL: the image does not hold version $VERSION"; docker rm -f pps; exit 1; }
+          docker rm -f pps
+
+  # What this job proves: os/install.sh puts PortaPixel on a stock Alpine of the
+  # pinned release, live, as root, and the box answers after a reboot (D51).
+  #
+  # It is not blocking. It boots two whole virtual machines and it is the longest
+  # job of the pipeline. A fault here is a fault of the second install path, not
+  # of the image, and the image has its own blocking gate above.
+  smoke-vanilla-install:
+    needs: [settings, build]
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: give this account /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
+            sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: the test tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq qemu-system-x86 qemu-utils expect curl wget
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: bin-amd64
+          path: bin
+
+      - name: install on a stock Alpine ${{ needs.settings.outputs.alpine }}
+        run: |
+          set -eu
+          chmod +x bin/portapixeld-amd64
+          sh tests/ci/vanilla-install.sh \
+            --alpine-release '${{ needs.settings.outputs.alpine }}' \
+            --version '${{ needs.settings.outputs.version }}' \
+            --binary bin/portapixeld-amd64
+
+  # What this job proves: every deliverable of the release is present and the
+  # release is published as one GitHub Release. upload-artifact is never the
+  # channel for a deliverable: it zips, and a device downloads single files.
+  release:
+    needs:
+      - settings
+      - lint
+      - sign
+      - images
+      - smoke-x86
+      - smoke-arm
+      - smoke-update
+      - server
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # publish the GitHub Release
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: out
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-*
+          merge-multiple: true
+          path: out
+
+      - name: collect the release files
+        env:
+          VERSION: ${{ needs.settings.outputs.version }}
+          SIGNED: ${{ needs.settings.outputs.signed }}
+        run: sh tests/ci/collect-release.sh out "$VERSION" "$SIGNED"
+
+      - name: the release note
+        env:
+          VERSION: ${{ needs.settings.outputs.version }}
+          SIGNED: ${{ needs.settings.outputs.signed }}
+        run: sh tests/ci/release-notes.sh "$VERSION" "$SIGNED" >out/NOTES.md
+
+      - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
+        with:
+          tag_name: ${{ needs.settings.outputs.tag }}
+          name: PortaPixel ${{ needs.settings.outputs.tag }}
+          body_path: out/NOTES.md
+          draft: ${{ needs.settings.outputs.draft == 'true' }}
+          prerelease: ${{ needs.settings.outputs.prerelease == 'true' }}
+          fail_on_unmatched_files: true
+          # collect-release.sh puts exactly the deliverables here and stops the
+          # release when one is missing, so one pattern is enough.
+          files: out/publish/*

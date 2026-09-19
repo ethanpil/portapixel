@@ -1,0 +1,151 @@
+#!/usr/bin/expect -f
+# vanilla-install.exp -- drive the two virtual machines of the vanilla install
+# test. tests/ci/vanilla-install.sh calls this file. Do not run it by hand.
+#
+# Expect pitfall handled here: the guest terminal ECHOES every character we type,
+# so a marker sent as part of a command matches its own echo. Markers are SPLIT
+# with quotes when sent (DONE"-OK") and matched UNSPLIT (DONE-OK), which only the
+# output of the command can make.
+
+set phase [lindex $argv 0]
+set iso   [lindex $argv 1]
+set disk  [lindex $argv 2]
+set share [lindex $argv 3]
+set repo  [lindex $argv 4]
+set mem   [lindex $argv 5]
+set port  [lindex $argv 6]
+
+proc die {msg} {
+	send_user "\nFAIL: $msg\n"
+	exit 1
+}
+
+# Mount the two 9p shares: the small work directory and the checkout.
+proc mount_shares {} {
+	send "modprobe 9pnet_virtio; mkdir -p /mnt/work /mnt/repo\r"
+	send "mount -t 9p -o trans=virtio,version=9p2000.L work /mnt/work && mount -t 9p -o trans=virtio,version=9p2000.L,ro repo /mnt/repo && echo NINEP\"-OK\"\r"
+	expect {
+		"NINEP-OK" { send_user "\n==> the 9p shares are mounted\n" }
+		timeout     { die "cannot mount the 9p shares" }
+	}
+}
+
+set boot "-boot c"
+set media "-drive file=$disk,format=qcow2,if=virtio"
+if {$phase eq "install"} {
+	set boot "-boot d"
+	set media "$media -cdrom $iso"
+}
+
+set cmd "qemu-system-x86_64 -accel kvm -cpu host -smp 2 -m $mem -nographic \
+ $boot $media \
+ -netdev user,id=n0,hostfwd=tcp:127.0.0.1:$port-:80 \
+ -device virtio-net-pci,netdev=n0 \
+ -virtfs local,path=$share,mount_tag=work,security_model=none,id=work \
+ -virtfs local,path=$repo,mount_tag=repo,security_model=none,id=repo,readonly=on"
+
+send_user "==> $cmd\n"
+eval spawn $cmd
+
+# ------------------------------------------------------------------- the login
+set timeout 300
+expect {
+	-re {login: *$}  { send "root\r" }
+	"Kernel panic"   { die "kernel panic" }
+	timeout          { die "no login prompt" }
+	eof              { die "QEMU stopped before the login prompt" }
+}
+expect {
+	-re {[Pp]assword: *$} { send "portapixel\r"; exp_continue }
+	-re {[#$] }           { }
+	timeout               { die "no shell prompt" }
+}
+send "echo VM\"-UP\"\r"
+expect {
+	"VM-UP" { send_user "\n==> the shell works\n" }
+	timeout { die "the shell gave no output" }
+}
+
+mount_shares
+
+if {$phase eq "install"} {
+	# ------------------------------------------------- 1. install stock Alpine
+	set timeout 1800
+	send "sh /mnt/work/vanilla-guest.sh 2>&1 | tail -n 40\r"
+	expect {
+		"VANILLA-INSTALL-DONE" { send_user "\n==> stock Alpine is on the disk\n" }
+		"NO-TARGET-ROOT"       { die "setup-disk made no root filesystem" }
+		timeout                { die "the Alpine install did not finish in 30 minutes" }
+		eof                    { die "the installer VM stopped" }
+	}
+	set timeout 300
+	send "sync; poweroff\r"
+	expect {
+		eof     { }
+		timeout { }
+	}
+	catch {exec kill -TERM [exp_pid]}
+	send_user "\nPASS: the install phase\n"
+	exit 0
+}
+
+# --------------------------------------------------- 2. the on-box install (D51)
+set timeout 2400
+send "sh /mnt/work/vanilla-onbox.sh 2>&1 | tail -n 60\r"
+expect {
+	"ONBOX-INSTALL-DONE" { send_user "\n==> os/install.sh finished on the live system\n" }
+	-re {install.sh: (.*)} { die "install.sh refused: $expect_out(1,string)" }
+	timeout              { die "the on-box install did not finish in 40 minutes" }
+	eof                  { die "the guest stopped during the install" }
+}
+
+# ------------------------------------------------------------- 3. the reboot
+set timeout 600
+send "sync; reboot\r"
+expect {
+	-re {login: *$} { send_user "\n==> the box came back after the reboot\n" }
+	timeout         { die "no login prompt after the reboot" }
+	eof             { die "the guest did not come back" }
+}
+send "root\r"
+expect {
+	-re {[Pp]assword: *$} { send "portapixel\r"; exp_continue }
+	-re {[#$] }           { }
+	timeout               { die "no shell after the reboot" }
+}
+
+# ----------------------------------------------------------- 4. the HTTP check
+send_user "\n==> poll http://127.0.0.1:$port/api/status\n"
+set deadline [expr {[clock seconds] + 300}]
+set ok 0
+set out ""
+while {[clock seconds] < $deadline} {
+	if {[catch {exec curl -sS -m 5 "http://127.0.0.1:$port/api/status"} out] == 0} {
+		if {[string match {*device_id*} $out]} {
+			send_user "==> /api/status answered: $out\n"
+			set ok 1
+			break
+		}
+	}
+	after 3000
+}
+
+if {$ok == 0} {
+	send "rc-service portapixeld status; tail -n 30 /var/lib/portapixel/ops.log\r"
+	set timeout 60
+	expect {
+		-re {[#$] } { }
+		timeout     { }
+	}
+	die "/api/status did not answer after the on-box install"
+}
+
+send "poweroff\r"
+set timeout 120
+expect {
+	eof     { }
+	timeout { }
+}
+catch {exec kill -TERM [exp_pid]}
+send_user "\nPASS: the on-box install path works\n"
+exit 0
