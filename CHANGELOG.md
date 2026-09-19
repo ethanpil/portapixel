@@ -4,6 +4,8 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix the review findings in the two admin UIs. Move their common code to `web/shared` (66d584c to b05b496).
+- Add the lab scripts for two test machines on a bridge (105b3b6).
 - Add the fleet sync client, the pairing routes and the local lock for a paired device.
 - Hide the mouse pointer, keep the browser output, stop the Chromium calls to Google, add placeholder slides.
 - Fix 39 code review findings in the server (67be516 to a357a46). An enroll request cannot take a paired screen. A hardware repair is not a clone.
