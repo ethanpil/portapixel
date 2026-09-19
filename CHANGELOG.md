@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix 29 code review findings in the daemon and the player (8f4431f to b25a1cb). `/media/` does not follow a link out of the media root and serves only image and video files.
 - Add the device admin UI and its development server.
 - Add the QEMU boot test and the builder VM.
 - Add the image builder, the boot files, the OpenRC services and first boot.
