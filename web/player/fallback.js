@@ -102,10 +102,14 @@ export class Fallback {
     this.pair.hidden = !code;
     if (code) this.code.textContent = code;
 
+    // status.warnings is a list of {code, message}. The code is for a program;
+    // this screen shows the words.
     const lines = [];
     if (s.clock_synced === false) lines.push('Waiting for the clock.');
     if (s.config_from_shadow) lines.push('The configuration comes from the backup copy on the device.');
-    for (const w of s.warnings || []) lines.push(w);
+    for (const w of s.warnings || []) {
+      if (w && w.message) lines.push(w.message);
+    }
     this.warn.textContent = lines.join('   •   ');
 
     const zone = s.timezone || '';

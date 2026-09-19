@@ -34,6 +34,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +70,7 @@ type mock struct {
 	ms         int
 	lastFrames int64
 	beats      int
+	codecs     manifest.CodecReport
 	clients    map[chan string]bool
 }
 
@@ -346,10 +348,25 @@ func (m *mock) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if !m.gate(w, r) {
 		return
 	}
-	var hb heartbeat
+	// The first heartbeat also carries the codec report of the screen (D12).
+	var hb struct {
+		heartbeat
+		Codecs manifest.CodecReport `json:"codecs,omitempty"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
+	}
+	if hb.Codecs != nil {
+		names := make([]string, 0, len(hb.Codecs))
+		for name := range hb.Codecs {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		log.Printf("the player reports the codecs: %s", strings.Join(names, " "))
+		m.mu.Lock()
+		m.codecs = hb.Codecs
+		m.mu.Unlock()
 	}
 	m.mu.Lock()
 	m.beats++
@@ -400,7 +417,7 @@ func (m *mock) ready(w http.ResponseWriter, r *http.Request) {
 
 func (m *mock) status(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
-	sc := m.scenario
+	sc, codecs := m.scenario, m.codecs
 	m.mu.Unlock()
 
 	s := manifest.Status{
@@ -413,14 +430,19 @@ func (m *mock) status(w http.ResponseWriter, r *http.Request) {
 		BrowserState: "running", NavigationRung: "cdp",
 		DisplayConnected: true, ScreenOn: true,
 		LastSyncResult: "never", ClockSynced: true, Timezone: "America/New_York",
-		Warnings: []string{"Change the web password."},
+		Codecs:   codecs,
+		Warnings: []manifest.Warning{{Code: manifest.WarnWebPassword, Message: "Change the web password."}},
 	}
 	if sc == "fallback-code" {
 		s.PairingCode = "K7M9QX"
 		s.ClockSynced = false
 		s.ConfigFromShadow = true
 		s.Timezone = "Europe/Amsterdam"
-		s.Warnings = []string{"Change the web password.", "Change the root password.", "Set the time zone."}
+		s.Warnings = []manifest.Warning{
+			{Code: manifest.WarnWebPassword, Message: "Change the web password."},
+			{Code: manifest.WarnRootPassword, Message: "Change the root password."},
+			{Code: manifest.WarnTimezoneUTC, Message: "Set the time zone."},
+		}
 	}
 	writeJSON(w, s)
 }
