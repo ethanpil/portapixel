@@ -2,6 +2,7 @@ package httpd
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -37,6 +38,7 @@ type fx struct {
 	commands   []string
 	rootPW     string
 	beats      []browser.Heartbeat
+	codecs     manifest.CodecReport
 	urlSkip    bool
 	urlIndex   int
 	readyHits  int
@@ -113,8 +115,12 @@ func (f *fx) rebuild() {
 			f.commands = append(f.commands, name)
 			return f.commandErr
 		},
+		// The daemon also looks for a release bundle here. A test needs the scan
+		// only (D52).
+		Rescan:          lib.Rescan,
 		AdminURL:        func() string { return "http://lobby.local/" },
 		SetRootPassword: func(pw string) error { f.rootPW = pw; return nil },
+		SetCodecs:       func(r manifest.CodecReport) { f.codecs = r },
 	})
 }
 
@@ -636,12 +642,14 @@ func TestRoutesOfTheLaterMilestones(t *testing.T) {
 	tests := []struct {
 		method, path string
 	}{
+		{http.MethodGet, "/api/pair"},
 		{http.MethodPost, "/api/pair"},
 		{http.MethodDelete, "/api/pair"},
 		{http.MethodPost, "/api/update/check"},
 		{http.MethodPost, "/api/update/apply"},
 		{http.MethodGet, "/api/disks"},
 		{http.MethodPost, "/api/install-to-disk"},
+		{http.MethodGet, "/api/install-to-disk/events"},
 	}
 	for _, tt := range tests {
 		w := f.do(tt.method, tt.path, nil)
@@ -1076,4 +1084,145 @@ func TestHubCloseEndsTheStreams(t *testing.T) {
 		t.Fatal("Close did not end the stream")
 	}
 	h.Close() // twice must be safe: a stop can come from two paths
+}
+
+// ------------------------------------------------------- the v0.2 routes
+
+// GET /api/media/{playlist} must list every media file of the directory and say
+// which ones the playlist names. A person who copied a folder of pictures onto the
+// stick from a laptop has files that no playlist names yet.
+func TestGetMedia(t *testing.T) {
+	f := newFx(t)
+	dir := filepath.Join(f.media, "default")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, content string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("playlist.toml", "[[item]]\nfile = \"in.jpg\"\nduration = 10\n")
+	write("in.jpg", "a")
+	write("out.png", "bb")
+	write("notes.txt", "not media")
+	write(".upload-123", "a staging file")
+	f.rebuild()
+	f.login()
+
+	got := body(t, f.do(http.MethodGet, "/api/media/default", nil))
+	files, ok := got["files"].([]any)
+	if !ok {
+		t.Fatalf("files = %v", got)
+	}
+	state := map[string]bool{}
+	for _, raw := range files {
+		file := raw.(map[string]any)
+		state[file["name"].(string)] = file["in_playlist"].(bool)
+	}
+	if len(state) != 2 {
+		t.Fatalf("files = %v, want in.jpg and out.png only", state)
+	}
+	if !state["in.jpg"] {
+		t.Error("in.jpg is not marked as part of the playlist")
+	}
+	if state["out.png"] {
+		t.Error("out.png is marked as part of the playlist")
+	}
+
+	// A playlist that is not there gives 404 JSON, never an HTML page.
+	w := f.do(http.MethodGet, "/api/media/missing", nil)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("a playlist that is not there gave %d", w.Code)
+	}
+	mustJSON(t, w)
+}
+
+// An empty playlist must give [] and never null. A UI that has to test for both is
+// a UI with a bug waiting in it.
+func TestEmptyPlaylistGivesAnEmptyList(t *testing.T) {
+	f := newFx(t)
+	dir := filepath.Join(f.media, "empty")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "playlist.toml"), []byte("[playlist]\nname = \"Empty\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	f.rebuild()
+	f.login()
+
+	if !strings.Contains(f.do(http.MethodGet, "/api/playlists", nil).Body.String(), `"items":[]`) {
+		t.Errorf("the playlist list holds no empty item array: %s", f.do(http.MethodGet, "/api/playlists", nil).Body)
+	}
+	if strings.Contains(f.do(http.MethodGet, "/api/playlists", nil).Body.String(), `"items":null`) {
+		t.Error("the playlist list holds null in place of an empty item array")
+	}
+}
+
+// The player sends its codec report with the FIRST heartbeat (D12). The daemon must
+// take it and must not need it on every beat.
+func TestHeartbeatCarriesTheCodecReport(t *testing.T) {
+	f := newFx(t)
+	withSecret := func(r *request) { r.secret = testSecret }
+
+	first := map[string]any{
+		"playlist": "default", "index": 0, "state": "playing", "frames": 1,
+		"codecs": map[string]any{
+			"h264": map[string]any{"1080": map[string]any{"supported": true, "smooth": true, "powerEfficient": true}},
+		},
+	}
+	if w := f.do(http.MethodPost, "/api/player/heartbeat", first, withSecret); w.Code != http.StatusOK {
+		t.Fatalf("the first heartbeat gave %d: %s", w.Code, w.Body)
+	}
+	if f.codecs == nil || !f.codecs["h264"]["1080"].Supported {
+		t.Fatalf("the daemon got %+v", f.codecs)
+	}
+	if len(f.beats) != 1 || f.beats[0].Frames != 1 {
+		t.Errorf("beats = %+v", f.beats)
+	}
+
+	// A later heartbeat with no report must not clear what the daemon has.
+	f.codecs = nil
+	second := map[string]any{"playlist": "default", "index": 1, "state": "playing", "frames": 2}
+	if w := f.do(http.MethodPost, "/api/player/heartbeat", second, withSecret); w.Code != http.StatusOK {
+		t.Fatalf("the second heartbeat gave %d", w.Code)
+	}
+	if f.codecs != nil {
+		t.Errorf("a heartbeat with no report called SetCodecs with %+v", f.codecs)
+	}
+}
+
+// GET /licenses serves the list from the binary when there is no copy on the
+// device, and the copy on the device wins when there is one (D33).
+func TestLicenses(t *testing.T) {
+	f := newFx(t)
+	w := f.do(http.MethodGet, "/licenses", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("/licenses gave %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "Third-party licences") {
+		t.Errorf("the body is not the licence list: %.80s", w.Body.String())
+	}
+	if kind := w.Header().Get("Content-Type"); !strings.HasPrefix(kind, "text/plain") {
+		t.Errorf("content type = %q; a browser must show the file and not download it", kind)
+	}
+}
+
+// The install progress stream must replay its last event. The admin UI opens the
+// stream after the POST answered, so a "done" event that went out first would never
+// reach the page and the progress bar would stand still for ever.
+func TestInstallEventsReplayTheLastEvent(t *testing.T) {
+	hub := NewReplayHub()
+	hub.Send("done", map[string]any{"ok": true})
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/install-to-disk/events", nil)
+	ctx, cancel := context.WithCancel(r.Context())
+	cancel() // the stream ends at once; the replay happens before the loop
+	hub.serve(w, r.WithContext(ctx))
+
+	if !strings.Contains(w.Body.String(), "event: done") {
+		t.Errorf("the stream did not replay the last event: %q", w.Body.String())
+	}
 }

@@ -1,6 +1,7 @@
 package httpd
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -8,10 +9,12 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/browser"
+	"github.com/ethanpil/portapixel/internal/device/installer"
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
+	"github.com/ethanpil/portapixel/internal/updater"
 )
 
 // PlayerHeader carries the boot secret when the player calls the API. EventSource
@@ -81,10 +84,32 @@ type Deps struct {
 	// Command runs a device command: reboot, restart-browser, screen-on,
 	// screen-off, rescan.
 	Command func(name string) error
+	// Rescan reads the media root again and looks for a sideloaded release bundle.
+	// It is the work of POST /api/rescan, which is the documented curl hook after
+	// a person copied files onto the stick (plan section 5, D52).
+	Rescan func() library.Snapshot
 	// AdminURL is the address that the QR code on the fallback screen carries.
 	AdminURL func() string
 	// SetRootPassword changes the root password of the system.
 	SetRootPassword func(password string) error
+	// SetCodecs takes the codec report that the player sends with its first
+	// heartbeat (D12).
+	SetCodecs func(manifest.CodecReport)
+
+	// CheckUpdate asks the release source for a newer release.
+	CheckUpdate func(ctx context.Context) (updater.Release, error)
+	// ApplyUpdate installs the release that the last check found.
+	ApplyUpdate func(ctx context.Context) error
+	// Disks gives the candidate targets of an install onto a disk (D54).
+	Disks func() ([]installer.Disk, error)
+	// StartInstall starts an install onto a disk. It gives an error for every
+	// refusal, and then the progress stream never opens.
+	StartInstall func(device, confirm string) error
+	// InstallEvents is the progress stream of the install that runs.
+	InstallEvents *Hub
+	// ShareRoot is /usr/share/portapixel, which holds the licence list on a
+	// device. An empty value uses the copy in the binary.
+	ShareRoot string
 }
 
 // SecretBytes is the length of the boot secret before it becomes hexadecimal. It
@@ -133,19 +158,29 @@ func New(d Deps) http.Handler {
 	auth("PUT /api/playlists/{name}", d.putPlaylist)
 	auth("POST /api/playlists/{name}/rename", d.renamePlaylist)
 	auth("DELETE /api/playlists/{name}", d.deletePlaylist)
+	auth("GET /api/media/{playlist}", d.getMedia)
 	auth("POST /api/media/{playlist}", d.postMedia)
 	auth("DELETE /api/media/{playlist}/{file}", d.deleteMedia)
 	auth("POST /api/rescan", d.postRescan)
 	auth("POST /api/commands/{name}", d.postCommand)
 	auth("GET /api/opslog", d.getOpslog)
 	auth("POST /api/system/root-password", d.postRootPassword)
+	auth("POST /api/update/check", d.postUpdateCheck)
+	auth("POST /api/update/apply", d.postUpdateApply)
+	auth("GET /api/disks", d.getDisks)
+	auth("POST /api/install-to-disk", d.postInstallToDisk)
+	auth("GET /api/install-to-disk/events", d.installEvents())
 
-	// The routes of the later milestones. They answer 501 so that the admin UI
-	// can be written against the whole route table now (plan section 8).
+	// The licence list. No session: a licence list is a public document, and the
+	// About page opens it in a second tab (D33).
+	mux.HandleFunc("GET /licenses", d.getLicenses)
+
+	// The routes of the fleet milestone. They answer 501 so that the admin UI can
+	// be written against the whole route table now (plan section 8). GET is in the
+	// list too: without it the request falls through to the file server and gets an
+	// HTML 404, which no caller of a JSON API can read.
 	for _, pattern := range []string{
-		"POST /api/pair", "DELETE /api/pair",
-		"POST /api/update/check", "POST /api/update/apply",
-		"GET /api/disks", "POST /api/install-to-disk",
+		"GET /api/pair", "POST /api/pair", "DELETE /api/pair",
 	} {
 		auth(pattern, notImplemented)
 	}
@@ -190,6 +225,15 @@ func (d Deps) requireSecret(next http.HandlerFunc) http.HandlerFunc {
 // notImplemented answers a route of a later milestone.
 func notImplemented(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusNotImplemented, NotImplemented)
+}
+
+// installEvents is the progress stream of GET /api/install-to-disk/events. A build
+// with no installer still answers JSON, never an HTML 404.
+func (d Deps) installEvents() http.HandlerFunc {
+	if d.InstallEvents == nil {
+		return notImplemented
+	}
+	return d.InstallEvents.serve
 }
 
 // writeJSON writes one JSON answer.

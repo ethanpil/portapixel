@@ -50,7 +50,7 @@ func (d Deps) postLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	d.Limiter.Reset(r.RemoteAddr)
-	d.Sessions.Login(w)
+	d.Sessions.Login(w, r)
 	d.Log.Log("web.login", "from "+hostOf(r.RemoteAddr))
 	writeJSON(w, http.StatusOK, ok)
 }
@@ -218,6 +218,20 @@ func (d Deps) postMedia(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"name": saved, "size": size})
 }
 
+// GET /api/media/{playlist} lists the files of a playlist directory.
+//
+// in_playlist is false for a file that nobody added to playlist.toml yet. A person
+// who copied a folder of pictures onto the stick from a laptop has a directory full
+// of them, and the editor offers them.
+func (d Deps) getMedia(w http.ResponseWriter, r *http.Request) {
+	files, err := d.Library.MediaFiles(r.PathValue("playlist"))
+	if err != nil {
+		writeLibraryError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": emptyIfNil(files)})
+}
+
 // DELETE /api/media/{playlist}/{file}
 func (d Deps) deleteMedia(w http.ResponseWriter, r *http.Request) {
 	if err := d.Library.DeleteMedia(r.PathValue("playlist"), r.PathValue("file")); err != nil {
@@ -229,8 +243,11 @@ func (d Deps) deleteMedia(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/rescan is also the documented curl hook after a sideload (plan
 // section 5).
+//
+// Deps.Rescan and not Library.Rescan: a rescan also looks for a release bundle in
+// the _update directory, and that rule belongs to the daemon (D52).
 func (d Deps) postRescan(w http.ResponseWriter, r *http.Request) {
-	snap := d.Library.Rescan()
+	snap := d.Rescan()
 	writeJSON(w, http.StatusOK, map[string]any{
 		"playlists": len(snap.Playlists),
 		"problems":  emptyIfNil(snap.Problems),

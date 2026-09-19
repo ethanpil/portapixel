@@ -38,6 +38,9 @@ type Hub struct {
 	subs   map[int]chan sseEvent
 	nextID int
 	closed chan struct{}
+	// replay makes the hub send its last event to a new subscriber. last holds it.
+	replay bool
+	last   sseEvent
 }
 
 type sseEvent struct {
@@ -48,6 +51,18 @@ type sseEvent struct {
 // NewHub makes an empty hub.
 func NewHub() *Hub {
 	return &Hub{subs: make(map[int]chan sseEvent), closed: make(chan struct{})}
+}
+
+// NewReplayHub makes a hub that sends its last event to a new subscriber.
+//
+// The install onto a disk needs it. The admin UI sends POST /api/install-to-disk
+// and opens the event stream after the answer, so the first events are already
+// gone. Without the replay a fast step, and worse a "done" event, would never reach
+// the page, and the progress bar would stand still for ever.
+func NewReplayHub() *Hub {
+	h := NewHub()
+	h.replay = true
+	return h
 }
 
 // Close ends every open stream. The daemon calls it before it drains the HTTP
@@ -81,6 +96,9 @@ func (h *Hub) Send(name string, data any) {
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.replay {
+		h.last = event
+	}
 	for _, ch := range h.subs {
 		select {
 		case ch <- event:
@@ -120,6 +138,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 
 	h.mu.Lock()
 	closed := h.closed
+	last := h.last
 	h.mu.Unlock()
 	select {
 	case <-closed:
@@ -137,6 +156,9 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	// A first comment makes the browser call the stream open, so the player knows
 	// that it is connected.
 	w.Write([]byte(": connected\n\n"))
+	if last.name != "" {
+		w.Write([]byte("event: " + last.name + "\ndata: " + string(last.data) + "\n\n"))
+	}
 	flusher.Flush()
 
 	tick := time.NewTicker(keepAlive)
