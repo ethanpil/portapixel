@@ -162,24 +162,25 @@ files between jobs.
 
 ## 6. How long a run takes
 
-These are measured times from the first runs on hosted runners.
+These are measured times from run 35432531114 on hosted runners.
 
 | Job | Time |
 |---|---|
-| `settings` | 40 seconds |
-| `lint` | 2 minutes (the Go job is the long one) |
-| `build` | 1 to 2 minutes for each architecture |
-| `sign` | 30 seconds |
-| `images` | 5 to 8 minutes for each architecture |
-| `smoke-x86` | 4 to 8 minutes for each firmware, with KVM |
-| `smoke-arm` | 2 to 4 minutes |
-| `smoke-update` | 1 to 2 minutes |
-| `server` | 7 to 9 minutes. The arm64 image builds under emulation |
-| `smoke-vanilla-install` | 20 to 40 minutes |
+| `settings` | 16 seconds |
+| `lint` | 2 minutes (the Go job with the race detector is the long one) |
+| `build` | 45 to 60 seconds for each architecture |
+| `sign` | 10 seconds |
+| `images` | 3.5 minutes (aarch64) to 5 minutes (x86_64). The gzip step is half of it |
+| `smoke-x86` | 90 seconds (BIOS) to 2 minutes (UEFI), with KVM |
+| `smoke-arm` | 45 seconds |
+| `smoke-update` | 45 seconds |
+| `server` | 7.5 minutes. The arm64 container builds under emulation |
+| `smoke-vanilla-install` | 15 to 40 minutes |
 | `release` | 2 to 4 minutes |
 
-The whole run is about 25 to 35 minutes, because the jobs run beside each other.
-The vanilla install job is the long one and it does not block the release.
+The whole run to the release is about 15 minutes, because the jobs run beside
+each other. The vanilla install job is the long one and it does not hold the
+release back.
 
 Two runs never overlap: the `concurrency` group `portapixel-release` makes the
 second run wait.
