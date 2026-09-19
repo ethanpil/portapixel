@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix 39 code review findings in the server (67be516 to a357a46). An enroll request cannot take a paired screen. A hardware repair is not a clone.
 - Add the control server admin UI, its development server and its seed tool.
 - Add screen power, mDNS, the A/B updater and install-to-disk to the daemon (308462d to bc3e060).
 - Give each status warning a code. Add the all-day schedule rule and the WiFi country (aa6db83, a207985, 514020e).

@@ -164,6 +164,25 @@ checked with a screenshot of the virtual display or with the ops log.
   the token of any device ID. Now a pending request lives in its own table. A paired row
   changes only when the admin approves, or when the request has a valid enrollment token
   and the same `hardware_id` as the row (a card that was flashed again).
+- The clone rule must not read `last_seen`. The manifest poll of the same device sets it
+  some seconds before the heartbeat. The first server saw each hardware repair as a
+  clone, and the repair path was never used. The test passed because it did not poll and
+  it moved the clock 26 h. Write a fleet test with the real call order: enroll or
+  manifest first, then heartbeat. Now a new hardware ID sets `needs_confirm`. A conflict
+  needs the two IDs to take turns in 10 minutes.
+- `internal/server.New` builds the one route stack. The command and the tests use it.
+  Before this, the test harness built a copy, so a guard could leave the real server and
+  each security test still passed. Check a guard test with a mutation: remove the guard,
+  see the test fail, put the guard back.
+- With an empty `public_url`, the server permits only loopback names. In Docker that
+  made the first run impossible: the admin could not open Settings to set the URL. Set
+  `PORTAPIXEL_PUBLIC_URL`. The environment has priority over `server.toml`.
+- The server reads `X-Forwarded-For` and `X-Forwarded-Proto` only from an address in
+  `trusted_proxies`. Without this, behind a proxy, one bad card stops enrollment for the
+  fleet and five bad logins lock out the admin.
+- Before release 1, a change to schema version 1 in place is permitted. `db.Open` reports
+  an old development database in one clear sentence. From release 1, migrations are
+  append-only.
 - Rule: `hardware_id` is a secret between the device and the server. The device ID shows
   only its first 8 hex characters. No route without an admin session gives the
   `hardware_id`. The device does not put it in `/api/status`.
