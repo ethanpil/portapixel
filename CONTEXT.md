@@ -104,6 +104,22 @@ something that cost you time. Remove an entry when it is no longer true.
   fail on a host with no zone database. The system database still wins on Alpine.
 - The API shows a secret as `********`. A PUT that sends this mask keeps the old secret.
   An empty string clears it. A blank mask would make it impossible to clear a WiFi key.
+- Rule: an enroll request never changes a device row that was paired. The first server
+  had two ways to take a screen from its owner, and neither needed a password. One: an
+  enroll with no token and the ID of a paired screen put that screen into the pending
+  list. The admin approved a row that looked familiar, and the caller got the token.
+  Two: the fleet enrollment token, which is in clear text on each card, could replace
+  the token of any device ID. Now a pending request lives in its own table. A paired row
+  changes only when the admin approves, or when the request has a valid enrollment token
+  and the same `hardware_id` as the row (a card that was flashed again).
+- Rule: `hardware_id` is a secret between the device and the server. The device ID shows
+  only its first 8 hex characters. No route without an admin session gives the
+  `hardware_id`. The device does not put it in `/api/status`.
+- Rule: each secret in the server database is a SHA-256 hash. This includes the claim
+  secret of a pending enrollment.
+- Rule: a JSON route refuses a body that is not `application/json`. A page on another
+  site cannot then send a simple request with no preflight.
+- Rule: only the lead edits `CHANGELOG.md`. A worker made a second entry for one change.
 - Rule: a bad value in `portapixel.toml` never costs the user the rest of the file.
   `config.Load` repairs each bad field to its default and keeps all other values. It
   gives the list in `Result.Repaired`. The shadow copy is only for a file that is missing
