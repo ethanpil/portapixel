@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Add the control server admin UI, its development server and its seed tool.
 - Add screen power, mDNS, the A/B updater and install-to-disk to the daemon (308462d to bc3e060).
 - Give each status warning a code. Add the all-day schedule rule and the WiFi country (aa6db83, a207985, 514020e).
 - Fix the player syntax error and the black screen at boot. Record the M0 results (15a6754, 82dcaca).
