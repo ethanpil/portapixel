@@ -171,8 +171,10 @@ func TestTier(t *testing.T) {
 		{"the configuration wins", "low", "MemTotal: 8000000 kB\n", "", "low"},
 		{"high is high", "high", "MemTotal: 400000 kB\n", "Raspberry Pi 3 Model B", "high"},
 		{"little memory is low", "auto", "MemTotal: 500000 kB\n", "", "low"},
-		{"a slow Pi is low", "auto", "MemTotal: 4000000 kB\n", "Raspberry Pi 3 Model B Plus Rev 1.3", "low"},
-		{"a Zero 2 is low", "auto", "MemTotal: 4000000 kB\n", "Raspberry Pi Zero 2 W Rev 1.0", "low"},
+		// Every Raspberry Pi model that is too slow for a crossfade has 1 GiB or
+		// less, so the memory says it and a list of model names said it again.
+		{"a Pi 3 is low by its memory", "auto", "MemTotal: 1000000 kB\n", "Raspberry Pi 3 Model B Plus Rev 1.3", "low"},
+		{"a Zero 2 is low by its memory", "auto", "MemTotal: 500000 kB\n", "Raspberry Pi Zero 2 W Rev 1.0", "low"},
 		{"a Pi 4 is high", "auto", "MemTotal: 4000000 kB\n", "Raspberry Pi 4 Model B Rev 1.4", "high"},
 		{"no facts at all is high", "auto", "", "", "high"},
 	}

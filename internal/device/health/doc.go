@@ -9,7 +9,8 @@
 // that is not Linux the numbers are zero and the report still builds, so the
 // tests and the daemon both run on a Windows development machine.
 //
-// The warnings list is the loud part of the product. A device with the default
-// web password, the default root password or no time zone works, but it is not
-// finished, and the admin UI says so until the person fixes it (D22, D23, D40).
+// The warnings list is what the product says out loud. A device with the default
+// web password, the default root password or no time zone plays its content. But
+// it is not finished. The admin UI shows the warning until the person makes the
+// change (D22, D23, D40).
 package health

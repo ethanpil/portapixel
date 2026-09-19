@@ -19,8 +19,8 @@ import (
 	"github.com/ethanpil/portapixel/internal/version"
 )
 
-// DefaultWebPassword and DefaultRootPassword are the passwords that the image
-// ships with. The report nags until both are changed (D22, D23).
+// DefaultWebPassword and DefaultRootPassword are the passwords of the image. The
+// report gives a warning until the person changes both of them (D22, D23).
 const (
 	DefaultWebPassword = "portapixel"
 	RootHashFile       = ".root-default-hash"
@@ -29,10 +29,6 @@ const (
 // lowRAMBytes is the memory under which a device is low tier: transitions
 // degrade and zram swap is on (plan section 4).
 const lowRAMBytes = 1 << 30 // 1 GiB
-
-// lowModels are the Raspberry Pi models that are low tier whatever their memory
-// says.
-var lowModels = []string{"Raspberry Pi 2", "Raspberry Pi 3", "Raspberry Pi Zero 2"}
 
 // Sources are the file roots that the report reads. A test gives directories
 // that it made; the daemon gives the true roots.
@@ -84,6 +80,11 @@ type Reporter struct {
 	once         sync.Once
 	imageVersion string
 	manifestHash string
+
+	// The total memory is read once: it is a fact of the machine, and Tier asks
+	// for it at every call of Status.
+	totalOnce sync.Once
+	ramTotal  uint64
 }
 
 // New makes a Reporter. An empty root takes the true path of a device.
@@ -108,6 +109,9 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 	r.once.Do(r.readRelease)
 
 	free, total := space(r.src.MediaRoot)
+	// One read of /proc/meminfo for the whole report. Three reads of one file for
+	// one answer is three chances to give numbers that do not agree.
+	ramTotal, ramFree := r.memory()
 	out := manifest.Status{
 		DeviceID: in.DeviceID,
 		Name:     in.Config.Device.Name,
@@ -123,8 +127,8 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 		UptimeSeconds:   r.uptime(),
 		Load:            r.load(),
 		TempC:           r.temperature(),
-		RAMTotalBytes:   r.meminfo("MemTotal"),
-		RAMFreeBytes:    r.meminfo("MemAvailable"),
+		RAMTotalBytes:   ramTotal,
+		RAMFreeBytes:    ramFree,
 		MediaTotalBytes: total,
 		MediaFreeBytes:  free,
 
@@ -183,7 +187,7 @@ func (r *Reporter) warnings(in Inputs) []string {
 //
 // A missing file on either side gives false: we never nag on a guess.
 func (r *Reporter) rootPasswordIsDefault() bool {
-	saved := strings.TrimSpace(readFile(filepath.Join(r.src.StateDir, RootHashFile)))
+	saved := trimValue(readFile(filepath.Join(r.src.StateDir, RootHashFile)))
 	if saved == "" {
 		return false
 	}
@@ -200,37 +204,31 @@ func (r *Reporter) rootPasswordIsDefault() bool {
 }
 
 // Tier says if this device is low tier or high tier (plan section 4). The value
-// "auto" in the configuration asks the device to decide: under 1 GiB of memory,
-// or a Pi model that we know is slow.
+// "auto" in the configuration asks the device to decide, and the memory is the
+// whole test. Every Raspberry Pi model that is too slow for a crossfade has 1 GiB
+// or less. A list of model names said the same thing a second time.
+//
+// The memory of a machine does not change while it runs, so the answer comes from
+// the value that the first report read.
 func (r *Reporter) Tier(cfg config.Config) string {
 	switch cfg.Device.Tier {
 	case "low", "high":
 		return cfg.Device.Tier
 	}
-	if total := r.meminfo("MemTotal"); total > 0 && total < lowRAMBytes {
+	if total, _ := r.memory(); total > 0 && total < lowRAMBytes {
 		return "low"
-	}
-	model := r.model()
-	for _, low := range lowModels {
-		if strings.Contains(model, low) {
-			return "low"
-		}
 	}
 	return "high"
 }
 
-// model gives the model name of the machine. The Raspberry Pi firmware writes it
-// into the device tree.
-func (r *Reporter) model() string {
-	for _, path := range []string{
-		filepath.Join(r.src.ProcRoot, "device-tree", "model"),
-		filepath.Join(r.src.SysRoot, "firmware", "devicetree", "base", "model"),
-	} {
-		if v := strings.Trim(readFile(path), " \t\r\n\x00"); v != "" {
-			return v
-		}
-	}
-	return ""
+// memory gives MemTotal and MemAvailable from one read of /proc/meminfo.
+//
+// MemTotal is read once for the life of the daemon: the memory of a machine does
+// not change, and Tier asks for it at every call of Status.
+func (r *Reporter) memory() (total, free uint64) {
+	values := r.meminfo("MemTotal", "MemAvailable")
+	r.totalOnce.Do(func() { r.ramTotal = values["MemTotal"] })
+	return r.ramTotal, values["MemAvailable"]
 }
 
 // readRelease reads the two files that say which image this is (D50).
@@ -295,25 +293,28 @@ func (r *Reporter) temperature() float64 {
 	return highest
 }
 
-// meminfo reads one key of /proc/meminfo and gives bytes. The file gives
-// kibibytes.
-func (r *Reporter) meminfo(key string) uint64 {
+// meminfo reads /proc/meminfo once and gives the named keys in bytes. The file
+// gives kibibytes.
+func (r *Reporter) meminfo(keys ...string) map[string]uint64 {
+	want := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		want[k] = true
+	}
+	out := make(map[string]uint64, len(keys))
 	for _, line := range strings.Split(readFile(filepath.Join(r.src.ProcRoot, "meminfo")), "\n") {
 		name, value, ok := strings.Cut(line, ":")
-		if !ok || name != key {
+		if !ok || !want[name] {
 			continue
 		}
 		fields := strings.Fields(value)
 		if len(fields) == 0 {
-			return 0
+			continue
 		}
-		kib, err := strconv.ParseUint(fields[0], 10, 64)
-		if err != nil {
-			return 0
+		if kib, err := strconv.ParseUint(fields[0], 10, 64); err == nil {
+			out[name] = kib * 1024
 		}
-		return kib * 1024
 	}
-	return 0
+	return out
 }
 
 // LocalIPs gives the addresses of the device, without the loopback address. The
@@ -361,6 +362,13 @@ func Hosts(cfg config.Config, deviceID string, port int) []string {
 		out = append(out, with...)
 	}
 	return out
+}
+
+// trimValue cuts the whitespace and the trailing NUL bytes of a value that came
+// from a file. A file that a shell script wrote can end with a NUL, and a hash
+// that holds one is not equal to the same hash without one.
+func trimValue(s string) string {
+	return strings.Trim(s, " \t\r\n\x00")
 }
 
 // readFile reads a small file and gives "" when it cannot.
