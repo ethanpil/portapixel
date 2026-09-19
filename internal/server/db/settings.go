@@ -8,13 +8,24 @@ import (
 
 // The setting keys. The settings table holds what the admin UI can change while
 // the server runs. server.toml holds what needs a restart: the listen address,
-// the certificate and the public URL.
+// the certificate and the trusted proxies.
 const (
 	// SettingServerName is the name that the devices see in the manifest.
 	SettingServerName = "server_name"
 	// SettingPollSeconds is the poll interval of a device that has no value of
 	// its own.
 	SettingPollSeconds = "default_poll_seconds"
+)
+
+// MinPollSeconds and MaxPollSeconds are the limits of the poll interval.
+//
+// The floor is 10 and not 5. The device validator repairs a smaller value to its
+// own default, so a server that offered 5 would hand out a number that the screen
+// silently ignores. One floor holds for the two ends.
+const (
+	MinPollSeconds     = 10
+	MaxPollSeconds     = 86400
+	DefaultPollSeconds = 60
 )
 
 // Setting gives one value, or the fallback when the table holds none.

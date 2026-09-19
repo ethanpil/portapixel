@@ -69,6 +69,9 @@ func (d *DB) CreateGroup(name string) (int64, error) {
 	res, err := d.w.Exec(`INSERT INTO groups (name, created_at) VALUES (?, ?)`,
 		name, d.stamp(d.now()))
 	if err != nil {
+		if isUniqueError(err) {
+			return 0, errors.Join(ErrDuplicate, err)
+		}
 		return 0, err
 	}
 	return res.LastInsertId()
@@ -87,13 +90,32 @@ func (d *DB) UpdateGroup(g Group) error {
 
 // DeleteGroup removes a group. A group that holds devices stays: moving the
 // devices first is a decision for the admin, not for the server.
+//
+// The count and the delete are one write transaction. Without it a device that
+// joins the group between the two statements would lose its group without
+// anybody asking for it.
 func (d *DB) DeleteGroup(id int64) error {
+	tx, err := d.w.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	var n int
-	if err := d.r.QueryRow(`SELECT COUNT(*) FROM devices WHERE group_id = ?`, id).Scan(&n); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE group_id = ?`, id).Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {
 		return ErrInUse
 	}
-	return d.affectOne(`DELETE FROM groups WHERE id = ?`, id)
+	res, err := tx.Exec(`DELETE FROM groups WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if rows, err := res.RowsAffected(); err != nil {
+		return err
+	} else if rows == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
 }

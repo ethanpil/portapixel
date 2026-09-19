@@ -107,11 +107,22 @@ func (d *DB) validateAssignment(a Assignment) Errors {
 	if msg := badClock(a.End); msg != "" {
 		errs = append(errs, FieldError{"end", msg})
 	}
+	// The two ends are both set or both empty. Both empty means "the whole day",
+	// and the device scheduler reads the pair the same way. One end alone is not a
+	// window that either side can use, and the device would then never play the
+	// rule.
+	switch {
+	case a.Start == "" && a.End != "":
+		errs = append(errs, FieldError{"start", "a rule with an end time needs a start time"})
+	case a.Start != "" && a.End == "":
+		errs = append(errs, FieldError{"end", "a rule with a start time needs an end time"})
+	}
 	return errs
 }
 
 // badClock says why a time value is not permitted, or "" when it is good. An
-// empty value is permitted: a rule with no times covers the whole day.
+// empty value is permitted here; validateAssignment holds the rule that the two
+// ends are both set or both empty.
 func badClock(v string) string {
 	if v == "" {
 		return ""

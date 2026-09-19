@@ -3,8 +3,10 @@ package db
 import (
 	"database/sql"
 	"embed"
+	"errors"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite" // the pure-Go SQLite driver: no cgo (D7)
@@ -19,8 +21,8 @@ var files embed.FS
 // The runner is small on purpose: this is a single-admin homelab server, so a
 // migration tool with its own file format and command line would be more code
 // than the thing it manages.
-var migrations = []func(*sql.Tx) error{
-	func(tx *sql.Tx) error {
+var migrations = []func(*tx) error{
+	func(tx *tx) error {
 		data, err := files.ReadFile("schema.sql")
 		if err != nil {
 			return err
@@ -34,13 +36,15 @@ var migrations = []func(*sql.Tx) error{
 type DB struct {
 	// w takes every write. Its pool holds one connection, so two writers never
 	// fight for the lock of the database file.
-	w *sql.DB
+	w pool
 	// r takes every read. See the package comment for why the two are separate.
-	r *sql.DB
+	r pool
 	// path is the file, for the size report of the health page.
 	path string
 	// now gives the time. A test replaces it.
 	now func() time.Time
+	// queries counts the statements. See pool.
+	queries *atomic.Int64
 }
 
 // openParams are the pragmas of each connection.
@@ -73,12 +77,98 @@ func Open(path string) (*DB, error) {
 	}
 	r.SetMaxOpenConns(4)
 
-	d := &DB{w: w, r: r, path: path, now: time.Now}
+	counter := &atomic.Int64{}
+	d := &DB{
+		w:       pool{db: w, queries: counter},
+		r:       pool{db: r, queries: counter},
+		path:    path,
+		now:     time.Now,
+		queries: counter,
+	}
 	if err := d.migrate(); err != nil {
 		d.Close()
 		return nil, err
 	}
+	// A file that an older development build made has the right version number and
+	// the wrong columns. Every query would then fail with a raw SQL error, which
+	// says nothing that an operator can act on.
+	if err := d.checkSchema(); err != nil {
+		d.Close()
+		return nil, err
+	}
+	// A mirror runs in a goroutine. A process that stopped in the middle of one
+	// left a row that says "working", and nothing else would ever clear it.
+	if err := d.resetWorkingMirrors(); err != nil {
+		d.Close()
+		return nil, err
+	}
 	return d, nil
+}
+
+// requiredColumns names one column of each table that this build needs and that an
+// older development build did not have. A file that holds the version number of the
+// schema and not its columns comes from that time.
+//
+// From release 1 on this check answers "never", because a migration is then
+// append-only and the version number says the truth. Until then it turns a raw SQL
+// error into one sentence that says what to do.
+var requiredColumns = map[string][]string{
+	"devices":             {"ever_paired", "pending_hardware_id", "pending_hardware_at"},
+	"pending_enrollments": {"claim_hash", "pairing_code", "collides_with", "approved_at"},
+	"commands":            {"deliveries", "expired"},
+	"releases":            {"mirror_state"},
+}
+
+// ErrOldSchema says that the data directory comes from an older development build.
+var ErrOldSchema = errors.New("this data directory was made by an older development build; " +
+	"delete portapixel.db or use a new --data directory")
+
+// checkSchema reports if the file holds the columns that this build needs.
+func (d *DB) checkSchema() error {
+	for table, columns := range requiredColumns {
+		have, err := d.columnsOf(table)
+		if err != nil {
+			return err
+		}
+		for _, name := range columns {
+			if !have[name] {
+				return fmt.Errorf("%w (the table %s has no column %s)", ErrOldSchema, table, name)
+			}
+		}
+	}
+	return nil
+}
+
+// columnsOf names the columns of one table.
+func (d *DB) columnsOf(table string) (map[string]bool, error) {
+	// The table name is one of our own constants, so there is nothing here that a
+	// request could reach.
+	rows, err := d.r.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return nil, fmt.Errorf("read the columns of %s: %w", table, err)
+	}
+	defer rows.Close()
+
+	out := map[string]bool{}
+	for rows.Next() {
+		var (
+			cid           int
+			name, kind    string
+			notNull, prim int
+			def           sql.NullString
+		)
+		if err := rows.Scan(&cid, &name, &kind, &notNull, &def, &prim); err != nil {
+			return nil, err
+		}
+		out[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w (there is no table %s)", ErrOldSchema, table)
+	}
+	return out, nil
 }
 
 // Close closes both pools.

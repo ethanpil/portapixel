@@ -8,7 +8,8 @@
 --    means "every day".
 --  * A boolean is 0 or 1.
 --  * A secret is never here in plain form. The server keeps the SHA-256 of a
---    device token and of an enrollment token.
+--    device token, of an enrollment token and of a claim secret. A pairing code
+--    is not a secret: a person reads it off a screen and types it.
 
 CREATE TABLE groups (
   id                  INTEGER PRIMARY KEY,
@@ -27,21 +28,22 @@ CREATE TABLE devices (
   name                 TEXT    NOT NULL DEFAULT '',
   group_id             INTEGER REFERENCES groups(id) ON DELETE SET NULL,
   -- token_hash is the SHA-256 of the device token as lower case hex. An empty
-  -- value means that this device holds no token: it waits for approval.
+  -- value means that this device holds no token.
   token_hash           TEXT    NOT NULL DEFAULT '',
-  -- claim_secret is what a pending device sends to ask "am I approved yet".
-  claim_secret         TEXT    NOT NULL DEFAULT '',
   hardware_id          TEXT    NOT NULL DEFAULT '',
-  -- pending is 1 while the admin has not approved this device.
-  pending              INTEGER NOT NULL DEFAULT 0,
-  -- pending_code is the 6-character code of the code pairing flow (D25).
-  pending_code         TEXT    NOT NULL DEFAULT '',
-  -- needs_confirm is 1 after the hardware ID changed (D21). prev_hardware_id
-  -- holds the value that the device had before.
+  -- ever_paired stays 1 after the first token of this row. A row that was ever
+  -- paired is never changed by an enroll request: see the rules at the top of
+  -- enroll.go.
+  ever_paired          INTEGER NOT NULL DEFAULT 0,
+  -- needs_confirm is 1 while a hardware ID that is not the stored one asked to
+  -- be this device (D21). pending_hardware_id holds that value, and the stored
+  -- hardware_id does not move until the admin confirms.
   needs_confirm        INTEGER NOT NULL DEFAULT 0,
-  prev_hardware_id     TEXT    NOT NULL DEFAULT '',
-  -- conflict is 1 when two hardware IDs used one token in a short time (D21).
-  -- The server never resolves a conflict by itself.
+  pending_hardware_id  TEXT    NOT NULL DEFAULT '',
+  pending_hardware_at  TEXT    NOT NULL DEFAULT '',
+  -- conflict is 1 when two hardware IDs took turns on one token inside the clone
+  -- window (D21). One machine that changed is a repair and not a conflict. The
+  -- server never resolves a conflict by itself.
   conflict             INTEGER NOT NULL DEFAULT 0,
   conflict_hardware_id TEXT    NOT NULL DEFAULT '',
   version              TEXT    NOT NULL DEFAULT '',
@@ -59,9 +61,46 @@ CREATE TABLE devices (
   paired_at            TEXT    NOT NULL DEFAULT '',
   last_seen            TEXT    NOT NULL DEFAULT ''
 );
-CREATE INDEX devices_token ON devices(token_hash);
-CREATE INDEX devices_claim ON devices(claim_secret);
-CREATE INDEX devices_code  ON devices(pending_code);
+CREATE INDEX devices_token    ON devices(token_hash);
+CREATE INDEX devices_last_seen ON devices(last_seen);
+
+-- pending_enrollments holds every request that waits for the admin.
+--
+-- Why it is its own table: an enroll request must never change a row of a
+-- device that was paired before. A screen on the wall keeps its token, its
+-- playlists and its group while somebody else asks to be that screen, and the
+-- admin decides. The devices table is touched at approval only.
+CREATE TABLE pending_enrollments (
+  id             INTEGER PRIMARY KEY,
+  -- claim_hash is the SHA-256 of the claim secret that the device keeps. The
+  -- device sends the secret again to ask "am I approved yet".
+  claim_hash     TEXT    NOT NULL UNIQUE,
+  -- pairing_code is the 6-character code of the code pairing flow (D25). A
+  -- person reads it off the screen, so it is here in plain form.
+  pairing_code   TEXT    NOT NULL UNIQUE,
+  device_id      TEXT    NOT NULL,
+  hardware_id    TEXT    NOT NULL DEFAULT '',
+  name           TEXT    NOT NULL DEFAULT '',
+  version        TEXT    NOT NULL DEFAULT '',
+  ip             TEXT    NOT NULL DEFAULT '',
+  -- token_id names the enrollment token that made this request, or NULL for the
+  -- code flow. An approval puts the device in the group of that token when the
+  -- row of the device is new.
+  token_id       INTEGER REFERENCES enrollment_tokens(id) ON DELETE SET NULL,
+  -- collides_with holds the device ID when a row with that ID is already paired.
+  -- The admin UI then warns: another machine asks to be a screen that works.
+  collides_with  TEXT    NOT NULL DEFAULT '',
+  created_at     TEXT    NOT NULL,
+  last_poll_at   TEXT    NOT NULL DEFAULT '',
+  -- approved_at is set while the row waits for its device to come back for its
+  -- token. The server makes the device token at that poll and not at the
+  -- approval, so it never holds a device token in plain form.
+  approved_at    TEXT    NOT NULL DEFAULT ''
+);
+CREATE INDEX pending_claim   ON pending_enrollments(claim_hash);
+CREATE INDEX pending_code    ON pending_enrollments(pairing_code);
+CREATE INDEX pending_device  ON pending_enrollments(device_id);
+CREATE INDEX pending_created ON pending_enrollments(created_at);
 
 CREATE TABLE enrollment_tokens (
   id         INTEGER PRIMARY KEY,
@@ -126,6 +165,8 @@ CREATE TABLE assignments (
   device_id   TEXT    REFERENCES devices(id) ON DELETE CASCADE,
   playlist_id INTEGER NOT NULL REFERENCES playlists(id) ON DELETE CASCADE,
   days        TEXT    NOT NULL DEFAULT '',
+  -- start and end are both set or both empty. Both empty means "the whole day".
+  -- The device scheduler reads the pair the same way.
   start       TEXT    NOT NULL DEFAULT '',                -- "HH:MM"
   end         TEXT    NOT NULL DEFAULT '',
   -- The rules go to the device in priority order, lowest number first. That
@@ -143,18 +184,26 @@ CREATE TABLE commands (
   args_json    TEXT    NOT NULL DEFAULT '',
   queued_at    TEXT    NOT NULL,
   delivered_at TEXT    NOT NULL DEFAULT '',
-  acked_at     TEXT    NOT NULL DEFAULT ''
+  acked_at     TEXT    NOT NULL DEFAULT '',
+  -- deliveries counts how often the command went out. A device that took a
+  -- command and never acknowledged it gets it again, up to maxDeliveries times.
+  deliveries   INTEGER NOT NULL DEFAULT 0,
+  -- expired is 1 after the last delivery went unacknowledged. The admin UI shows
+  -- it, so a command that no screen ever ran is not "delivered" for ever.
+  expired      INTEGER NOT NULL DEFAULT 0
 );
-CREATE INDEX commands_device ON commands(device_id, id);
+CREATE INDEX commands_device  ON commands(device_id, id);
+CREATE INDEX commands_pending ON commands(device_id, acked_at, expired);
 
 CREATE TABLE releases (
   version      TEXT    PRIMARY KEY,
   approved     INTEGER NOT NULL DEFAULT 0,
-  mirrored     INTEGER NOT NULL DEFAULT 0,
   notes        TEXT    NOT NULL DEFAULT '',
   published_at TEXT    NOT NULL DEFAULT '',
   approved_at  TEXT    NOT NULL DEFAULT '',
-  -- mirror_state is one of idle, working, done, failed.
+  -- mirror_state is one of idle, working, done, failed. A device gets a release
+  -- only when the state is done: there is no second flag, because a flag that
+  -- repeats the state can disagree with it.
   mirror_state TEXT    NOT NULL DEFAULT 'idle',
   mirror_error TEXT    NOT NULL DEFAULT ''
 );

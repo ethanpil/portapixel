@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/playlist"
+	"github.com/ethanpil/portapixel/internal/slug"
+	"github.com/ethanpil/portapixel/internal/store"
 )
 
 // FieldError is one thing that is wrong with a request. The API sends a list of
@@ -25,30 +27,6 @@ func (e Errors) Error() string {
 		parts[i] = fe.Field + ": " + fe.Message
 	}
 	return strings.Join(parts, "; ")
-}
-
-// slugify turns a playlist title into a name that is safe as a directory name,
-// as a URL element and in a shell. The device makes a directory of this name
-// under _fleet/, so the value must survive the trip.
-//
-// internal/device/slug holds the same rule for the device side. The contract
-// stops a server package from importing a device package, so the rule is here a
-// second time. See the report: the rule belongs in one package of its own.
-func slugify(name string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	out := b.String()
-	for strings.Contains(out, "--") {
-		out = strings.ReplaceAll(out, "--", "-")
-	}
-	return strings.Trim(out, "-")
 }
 
 // Playlists gives every playlist with its items.
@@ -82,8 +60,25 @@ func (d *DB) Playlists() ([]Playlist, error) {
 	return out, nil
 }
 
-// Playlist gives one playlist with its items.
+// Playlist gives one playlist with its items and the number of devices that get
+// it. The admin UI shows the count.
 func (d *DB) Playlist(id int64) (Playlist, error) {
+	p, err := d.PlaylistNoCount(id)
+	if err != nil {
+		return Playlist{}, err
+	}
+	p.Devices, err = d.PlaylistDeviceCount(id)
+	return p, err
+}
+
+// PlaylistNoCount gives one playlist with its items and no device count.
+//
+// The count is a scan of the devices table with four correlated EXISTS clauses.
+// The manifest path of a device throws the number away, and it asks for one
+// playlist for each of its rules on every poll, so the count belongs to the admin
+// callers only. An error in an admin-only count must also never stop a manifest:
+// then one bad number would take the whole fleet off the air.
+func (d *DB) PlaylistNoCount(id int64) (Playlist, error) {
 	row := d.r.QueryRow(`SELECT id, name, title, transition, shuffle, updated_at
 		FROM playlists WHERE id = ?`, id)
 	p, err := scanPlaylist(row)
@@ -93,10 +88,7 @@ func (d *DB) Playlist(id int64) (Playlist, error) {
 	if err != nil {
 		return Playlist{}, err
 	}
-	if p.Items, err = d.playlistItems(id); err != nil {
-		return Playlist{}, err
-	}
-	p.Devices, err = d.PlaylistDeviceCount(id)
+	p.Items, err = d.playlistItems(id)
 	return p, err
 }
 
@@ -120,7 +112,8 @@ func scanPlaylist(s interface{ Scan(...any) error }) (Playlist, error) {
 // playlistItems gives the items of one playlist in their order.
 func (d *DB) playlistItems(id int64) ([]PlaylistItem, error) {
 	rows, err := d.r.Query(`SELECT COALESCE(i.media_sha, ''), i.url, i.name, i.duration, i.mute,
-			i.max_duration, i.refresh_seconds, COALESCE(m.has_thumb, 0), COALESCE(m.orig_name, '')
+			i.max_duration, i.refresh_seconds, COALESCE(m.has_thumb, 0), COALESCE(m.orig_name, ''),
+			COALESCE(m.size, 0), m.sha256 IS NOT NULL
 		FROM playlist_items i LEFT JOIN media m ON m.sha256 = i.media_sha
 		WHERE i.playlist_id = ? ORDER BY i.position`, id)
 	if err != nil {
@@ -131,16 +124,20 @@ func (d *DB) playlistItems(id int64) ([]PlaylistItem, error) {
 	items := []PlaylistItem{}
 	for rows.Next() {
 		var (
-			it       PlaylistItem
-			mute     int
-			hasThumb int
-			origName string
+			it        PlaylistItem
+			mute      int
+			hasThumb  int
+			origName  string
+			haveMedia int
 		)
 		if err := rows.Scan(&it.SHA256, &it.URL, &it.Name, &it.Duration, &mute,
-			&it.MaxDuration, &it.RefreshSeconds, &hasThumb, &origName); err != nil {
+			&it.MaxDuration, &it.RefreshSeconds, &hasThumb, &origName,
+			&it.Size, &haveMedia); err != nil {
 			return nil, err
 		}
 		it.Mute = mute != 0
+		it.MediaRow = haveMedia != 0
+		it.MediaName = origName
 		if it.Name == "" {
 			it.Name = origName
 			if it.Name == "" {
@@ -201,9 +198,9 @@ func (d *DB) SavePlaylist(p Playlist) (int64, error) {
 	}
 	name := p.Name
 	if name == "" {
-		name = slugify(p.Title)
+		name = slug.Make(p.Title)
 	} else {
-		name = slugify(name)
+		name = slug.Make(name)
 	}
 	if name == "" {
 		return 0, Errors{{Field: "name", Message: "the name must hold a letter or a digit"}}
@@ -300,7 +297,7 @@ func (d *DB) validatePlaylist(p Playlist) Errors {
 		case it.SHA256 != "" && it.URL != "":
 			errs = append(errs, FieldError{field, "has a file and a url; use one of them"})
 		case it.SHA256 != "":
-			if !ValidSHA256(it.SHA256) {
+			if !store.IsSHA256(it.SHA256) {
 				errs = append(errs, FieldError{field + ".sha256", "is not a SHA-256 value of 64 lower case hex characters"})
 				continue
 			}
@@ -337,28 +334,21 @@ func (d *DB) validatePlaylist(p Playlist) Errors {
 	return errs
 }
 
-// ValidSHA256 reports if s is 64 lower case hex characters. Every route that
-// takes a hash from a request calls it: a value such as "../../etc" must never
-// reach a file path.
-func ValidSHA256(s string) bool {
-	if len(s) != 64 {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // DeletePlaylist removes a playlist and its items. A playlist that an
 // assignment names stays: the foreign key would take the assignment with it, and
 // a screen would then quietly change what it plays.
+// The check and the delete are one write transaction. Without it a rule that
+// takes the playlist between the two statements would go away with it, and a
+// screen would quietly change what it plays.
 func (d *DB) DeletePlaylist(id int64) error {
+	tx, err := d.w.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
 	var n int
-	if err := d.r.QueryRow(`SELECT
+	if err := tx.QueryRow(`SELECT
 		(SELECT COUNT(*) FROM assignments WHERE playlist_id = ?)
 		+ (SELECT COUNT(*) FROM groups WHERE default_playlist_id = ?)
 		+ (SELECT COUNT(*) FROM devices WHERE default_playlist_id = ?)`,
@@ -368,5 +358,14 @@ func (d *DB) DeletePlaylist(id int64) error {
 	if n > 0 {
 		return ErrInUse
 	}
-	return d.affectOne(`DELETE FROM playlists WHERE id = ?`, id)
+	res, err := tx.Exec(`DELETE FROM playlists WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	if rows, err := res.RowsAffected(); err != nil {
+		return err
+	} else if rows == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
 }

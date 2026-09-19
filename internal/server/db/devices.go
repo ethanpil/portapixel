@@ -9,25 +9,35 @@ import (
 // ErrNotFound says that no row has this key. Every route turns it into a 404.
 var ErrNotFound = errors.New("there is no record with this name")
 
-// deviceColumns is the select list of a device row. One constant keeps the
-// order of the columns and the order of scanDevice together.
-const deviceColumns = `d.id, d.name, d.group_id, d.hardware_id, d.pending, d.pending_code,
-	d.needs_confirm, d.prev_hardware_id, d.conflict, d.conflict_hardware_id,
+// ErrDuplicate says that another row already holds this name. Every route turns
+// it into a 409 or a 422 on the name field.
+var ErrDuplicate = errors.New("another record already has this name")
+
+// deviceColumns is the select list of a device row. One constant keeps the order
+// of the columns and the order of scanDevice together.
+const deviceColumns = `d.id, d.name, d.group_id, d.hardware_id,
+	d.needs_confirm, d.pending_hardware_id, d.conflict, d.conflict_hardware_id,
 	d.version, d.status_json, d.sync_error, d.last_ip, d.poll_seconds,
 	d.default_playlist_id, d.screen_on, d.screen_off, d.screen_days,
 	d.created_at, d.paired_at, d.last_seen,
 	COALESCE(g.name, '')`
 
 // scanDevice reads one device row.
+//
+// While needs_confirm is set, HardwareID is the machine that asks and
+// PrevHardwareID is the machine that the server knows. The UI shows the two
+// values on the hardware-swap card, and the server stores the change at the
+// confirmation and not before (D21).
 func scanDevice(s interface{ Scan(...any) error }) (Device, error) {
 	var (
-		d                                  Device
-		groupID, playlistID                sql.NullInt64
-		createdAt, pairedAt, lastSeen      string
-		pending, needsConfirm, conflictInt int
+		d                             Device
+		groupID, playlistID           sql.NullInt64
+		createdAt, pairedAt, lastSeen string
+		needsConfirm, conflictInt     int
+		pendingHardware               string
 	)
-	err := s.Scan(&d.ID, &d.Name, &groupID, &d.HardwareID, &pending, &d.PendingCode,
-		&needsConfirm, &d.PrevHardwareID, &conflictInt, &d.ConflictHardwareID,
+	err := s.Scan(&d.ID, &d.Name, &groupID, &d.HardwareID,
+		&needsConfirm, &pendingHardware, &conflictInt, &d.ConflictHardwareID,
 		&d.Version, &d.Status, &d.SyncError, &d.LastIP, &d.PollSeconds,
 		&playlistID, &d.ScreenOn, &d.ScreenOff, &d.ScreenDays,
 		&createdAt, &pairedAt, &lastSeen,
@@ -37,9 +47,12 @@ func scanDevice(s interface{ Scan(...any) error }) (Device, error) {
 	}
 	d.GroupID = intFromNull(groupID)
 	d.DefaultPlaylistID = intFromNull(playlistID)
-	d.Pending = pending != 0
 	d.NeedsConfirm = needsConfirm != 0
 	d.Conflict = conflictInt != 0
+	if d.NeedsConfirm && pendingHardware != "" {
+		d.PrevHardwareID = d.HardwareID
+		d.HardwareID = pendingHardware
+	}
 	d.CreatedAt = parseTime(createdAt)
 	d.PairedAt = parseTime(pairedAt)
 	d.LastSeen = parseTime(lastSeen)
@@ -85,7 +98,7 @@ func State(d Device, defaultPoll int, now time.Time) string {
 func (d *DB) Devices() ([]Device, error) {
 	rows, err := d.r.Query(`SELECT ` + deviceColumns + `
 		FROM devices d LEFT JOIN groups g ON g.id = d.group_id
-		ORDER BY d.pending DESC, d.last_seen DESC, d.id`)
+		ORDER BY d.last_seen DESC, d.id`)
 	if err != nil {
 		return nil, err
 	}
@@ -116,18 +129,27 @@ func (d *DB) Device(id string) (Device, error) {
 // DeviceByToken gives the device that holds this token. The token arrives in
 // plain form and the table holds its SHA-256, so the lookup uses the hash.
 //
-// The hash that came back is compared with the hash that we asked for in
-// constant time. The index lookup found the row, so the second step adds little
-// by itself. It is here so that the one place that accepts a device token can
-// never become a comparison that tells an attacker how much of a token is right.
+// One query gives the whole row. Every authenticated call of a device goes
+// through here, so a second query for the same row would double the cost of the
+// hot path.
+//
+// The hash that came back is compared with the hash that we asked for in constant
+// time. The index lookup found the row, so the second step adds little by itself.
+// It is here so that the one place that accepts a device token can never become a
+// comparison that tells an attacker how much of a token is right.
 func (d *DB) DeviceByToken(token string) (Device, error) {
 	if token == "" {
 		return Device{}, ErrNotFound
 	}
-	want := HashToken(token)
-	var id, got string
-	err := d.r.QueryRow(`SELECT id, token_hash FROM devices
-		WHERE token_hash = ? AND token_hash <> ''`, want).Scan(&id, &got)
+	want := hashSecret(token)
+	row := d.r.QueryRow(`SELECT `+deviceColumns+`, d.token_hash
+		FROM devices d LEFT JOIN groups g ON g.id = d.group_id
+		WHERE d.token_hash = ? AND d.token_hash <> ''`, want)
+
+	// scanDevice reads the columns of deviceColumns. The token hash is one column
+	// more, so this wrapper takes it off the end.
+	var got string
+	dev, err := scanDevice(scanWithTail{row: row, tail: []any{&got}})
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrNotFound
 	}
@@ -137,7 +159,18 @@ func (d *DB) DeviceByToken(token string) (Device, error) {
 	if !equalHash(got, want) {
 		return Device{}, ErrNotFound
 	}
-	return d.Device(id)
+	return dev, nil
+}
+
+// scanWithTail lets scanDevice read a row that carries columns of its own after
+// the columns of deviceColumns.
+type scanWithTail struct {
+	row  interface{ Scan(...any) error }
+	tail []any
+}
+
+func (s scanWithTail) Scan(dest ...any) error {
+	return s.row.Scan(append(dest, s.tail...)...)
 }
 
 // RenameDevice sets the display name.
@@ -161,13 +194,36 @@ func (d *DB) SetDeviceOverrides(id string, playlistID int64, on, off, days strin
 // DeleteDevice removes the device. The device token goes with the row, so the
 // device must enroll again before the server answers it (plan section 12).
 func (d *DB) DeleteDevice(id string) error {
-	return d.affectOne(`DELETE FROM devices WHERE id = ?`, id)
+	tx, err := d.w.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`DELETE FROM pending_enrollments WHERE device_id = ?`, id); err != nil {
+		return err
+	}
+	res, err := tx.Exec(`DELETE FROM devices WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return tx.Commit()
 }
 
-// ConfirmHardware clears the needs_confirm flag after the admin agreed that the
-// device moved to other hardware (D21).
+// ConfirmHardware stores the hardware ID that asked to be this device. It is the
+// one click of D21: the admin agrees that the card moved into another box.
 func (d *DB) ConfirmHardware(id string) error {
-	return d.affectOne(`UPDATE devices SET needs_confirm = 0, prev_hardware_id = '' WHERE id = ?`, id)
+	return d.affectOne(`UPDATE devices
+		SET hardware_id = CASE WHEN pending_hardware_id <> '' THEN pending_hardware_id ELSE hardware_id END,
+		    needs_confirm = 0, pending_hardware_id = '', pending_hardware_at = ''
+		WHERE id = ?`, id)
 }
 
 // ResolveConflict clears the clone conflict and revokes the token (D21). The
@@ -175,7 +231,8 @@ func (d *DB) ConfirmHardware(id string) error {
 // enroll again and the admin sees which one comes back.
 func (d *DB) ResolveConflict(id string) error {
 	return d.affectOne(`UPDATE devices
-		SET conflict = 0, conflict_hardware_id = '', token_hash = '', claim_secret = ''
+		SET conflict = 0, conflict_hardware_id = '', token_hash = '',
+		    needs_confirm = 0, pending_hardware_id = '', pending_hardware_at = ''
 		WHERE id = ?`, id)
 }
 
@@ -183,6 +240,9 @@ func (d *DB) ResolveConflict(id string) error {
 func (d *DB) affectOne(query string, args ...any) error {
 	res, err := d.w.Exec(query, args...)
 	if err != nil {
+		if isUniqueError(err) {
+			return errors.Join(ErrDuplicate, err)
+		}
 		return err
 	}
 	n, err := res.RowsAffected()
@@ -211,7 +271,7 @@ type ContactStats struct {
 // Stats counts the devices for the health page and the sidebar totals.
 func (d *DB) Stats(now time.Time) (ContactStats, error) {
 	s := ContactStats{Versions: map[string]int{}}
-	rows, err := d.r.Query(`SELECT last_seen, version, pending, conflict FROM devices`)
+	rows, err := d.r.Query(`SELECT last_seen, version, conflict FROM devices`)
 	if err != nil {
 		return s, err
 	}
@@ -222,15 +282,12 @@ func (d *DB) Stats(now time.Time) (ContactStats, error) {
 	for rows.Next() {
 		var (
 			lastSeen, version string
-			pending, conflict int
+			conflict          int
 		)
-		if err := rows.Scan(&lastSeen, &version, &pending, &conflict); err != nil {
+		if err := rows.Scan(&lastSeen, &version, &conflict); err != nil {
 			return s, err
 		}
 		s.Total++
-		if pending != 0 {
-			s.Pending++
-		}
 		if conflict != 0 {
 			s.Conflict++
 		}
@@ -252,7 +309,11 @@ func (d *DB) Stats(now time.Time) (ContactStats, error) {
 			s.QuietestSeen = seen
 		}
 	}
-	return s, rows.Err()
+	if err := rows.Err(); err != nil {
+		return s, err
+	}
+	s.Pending, err = d.CountPending()
+	return s, err
 }
 
 // Totals counts the devices by state for the sidebar of the admin UI.

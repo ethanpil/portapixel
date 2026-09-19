@@ -1,6 +1,8 @@
 package db
 
 import (
+	"errors"
+
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
@@ -15,6 +17,10 @@ type ManifestOptions struct {
 	// device joins them to the base URL of the server.
 	MediaBase   string
 	ReleaseBase string
+	// Release is the approved release, or nil when no release goes out. The
+	// caller reads it once per poll from a cached value, so the hot path costs no
+	// query for it.
+	Release *Release
 }
 
 // Manifest builds everything that one device must do (contract section 5).
@@ -33,9 +39,18 @@ type ManifestOptions struct {
 //     gives screen power to the server).
 //   - The release goes out only when the admin approved it, the mirror holds
 //     every verified file, and the device does not run it yet (D28).
+//   - An item whose media row went away is left out, with its media entry. A
+//     device cannot name, size or fetch such an item, and an item with a hash and
+//     no media entry would be a download that always fails.
 //
 // Manifest also takes the queued commands and marks them as delivered, so one
 // poll gives one delivery (D24).
+//
+// The cost of one poll is a fixed handful of queries: the group, the rules, one
+// query for each playlist that a rule names, and one write for the commands. The
+// media rows come out of the same query as the items, because a fleet of 200
+// screens with a 50-item loop would otherwise cost about 10000 queries a minute
+// on one write connection.
 func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error) {
 	m := manifest.Manifest{
 		ServerName:  opt.ServerName,
@@ -84,8 +99,8 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 		if _, ok := loaded[id]; ok {
 			continue
 		}
-		p, err := d.Playlist(id)
-		if err == ErrNotFound {
+		p, err := d.PlaylistNoCount(id)
+		if errors.Is(err, ErrNotFound) {
 			// A playlist that went away between two queries. Leave it out: a
 			// missing playlist must not stop the whole manifest.
 			continue
@@ -115,6 +130,10 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 			Items:      make([]manifest.Item, 0, len(p.Items)),
 		}
 		for _, it := range p.Items {
+			if it.SHA256 != "" && !it.MediaRow {
+				// The media row went away. The item goes with it.
+				continue
+			}
 			out.Items = append(out.Items, manifest.Item{
 				SHA256:         it.SHA256,
 				URL:            it.URL,
@@ -127,18 +146,15 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 				continue
 			}
 			mediaSeen[it.SHA256] = true
-			row, err := d.Media(it.SHA256)
-			if err == ErrNotFound {
-				continue
-			}
-			if err != nil {
-				return m, err
+			name := it.MediaName
+			if name == "" {
+				name = it.Name
 			}
 			m.Media = append(m.Media, manifest.MediaRef{
-				SHA256: row.SHA256,
-				Size:   row.Size,
-				Name:   row.OrigName,
-				URL:    opt.MediaBase + row.SHA256,
+				SHA256: it.SHA256,
+				Size:   it.Size,
+				Name:   name,
+				URL:    opt.MediaBase + it.SHA256,
 			})
 		}
 		m.Playlists = append(m.Playlists, out)
@@ -169,13 +185,10 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 		m.Screen = &manifest.ScreenRule{OnTime: on, OffTime: off, Days: splitDays(days)}
 	}
 
-	// The release.
-	rel, err := d.ApprovedRelease()
-	switch {
-	case err == ErrNotFound:
-	case err != nil:
-		return m, err
-	case rel.Mirrored && rel.Version != dev.Version:
+	// The release. The mirror state is the one answer: a release reaches a device
+	// when every file is there and verified.
+	if rel := opt.Release; rel != nil && rel.Approved &&
+		rel.MirrorState == MirrorDone && rel.Version != dev.Version {
 		m.Release = &manifest.ReleaseRef{Version: rel.Version, BaseURL: opt.ReleaseBase + rel.Version}
 	}
 
@@ -196,7 +209,7 @@ func (d *DB) deviceGroup(dev Device) (Group, bool, error) {
 		return Group{}, false, nil
 	}
 	g, err := d.Group(dev.GroupID)
-	if err == ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		return Group{}, false, nil
 	}
 	if err != nil {

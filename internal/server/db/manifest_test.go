@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"testing"
 	"time"
 )
@@ -68,6 +69,18 @@ func (f fixture) device(t *testing.T, id string, group int64) Device {
 var opt = ManifestOptions{
 	ServerName: "Ridgeline", DefaultPoll: 60,
 	MediaBase: "/api/v1/media/", ReleaseBase: "/api/v1/releases/",
+}
+
+// withRelease gives the options with the approved release in them. The caller of
+// Manifest reads the release one time for each poll and hands it over, so a test
+// does the same.
+func (f fixture) withRelease(t *testing.T) ManifestOptions {
+	t.Helper()
+	out := opt
+	if rel, err := f.d.ApprovedRelease(); err == nil {
+		out.Release = &rel
+	}
+	return out
 }
 
 func TestManifestOfAGroup(t *testing.T) {
@@ -222,7 +235,9 @@ func TestManifestReleaseOnlyWhenApprovedAndMirrored(t *testing.T) {
 	f := newFixture(t)
 	dev := f.device(t, "px-rel00001", 0)
 
-	if err := f.d.NoteRelease("1.5.0", "notes", time.Now()); err != nil {
+	if err := f.d.NoteReleases([]ReleaseNote{
+		{Version: "1.5.0", Notes: "notes", PublishedAt: time.Now()},
+	}); err != nil {
 		t.Fatal(err)
 	}
 	// Approved but not mirrored: no release goes out. A half-mirrored release
@@ -230,7 +245,7 @@ func TestManifestReleaseOnlyWhenApprovedAndMirrored(t *testing.T) {
 	if err := f.d.ApproveRelease("1.5.0"); err != nil {
 		t.Fatal(err)
 	}
-	m, err := f.d.Manifest(dev, opt)
+	m, err := f.d.Manifest(dev, f.withRelease(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,7 +256,7 @@ func TestManifestReleaseOnlyWhenApprovedAndMirrored(t *testing.T) {
 	if err := f.d.SetMirrorState("1.5.0", MirrorDone, ""); err != nil {
 		t.Fatal(err)
 	}
-	if m, err = f.d.Manifest(dev, opt); err != nil {
+	if m, err = f.d.Manifest(dev, f.withRelease(t)); err != nil {
 		t.Fatal(err)
 	}
 	if m.Release == nil || m.Release.Version != "1.5.0" ||
@@ -251,11 +266,24 @@ func TestManifestReleaseOnlyWhenApprovedAndMirrored(t *testing.T) {
 
 	// A device that already runs the version gets no release.
 	dev.Version = "1.5.0"
-	if m, err = f.d.Manifest(dev, opt); err != nil {
+	if m, err = f.d.Manifest(dev, f.withRelease(t)); err != nil {
 		t.Fatal(err)
 	}
 	if m.Release != nil {
 		t.Fatalf("a device that runs the version got a release: %+v", m.Release)
+	}
+
+	// A mirror that failed after the approval takes the release away again. The
+	// state is the one answer, so no second flag can disagree with it.
+	dev.Version = "1.4.2"
+	if err := f.d.SetMirrorState("1.5.0", MirrorFailed, "the signature did not verify"); err != nil {
+		t.Fatal(err)
+	}
+	if m, err = f.d.Manifest(dev, f.withRelease(t)); err != nil {
+		t.Fatal(err)
+	}
+	if m.Release != nil {
+		t.Fatalf("a release whose mirror failed went out: %+v", m.Release)
 	}
 }
 
@@ -413,7 +441,7 @@ func TestDeletePlaylistThatIsInUse(t *testing.T) {
 		Start: "08:00", End: "18:00"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.d.DeletePlaylist(f.loop); err != ErrInUse {
+	if err := f.d.DeletePlaylist(f.loop); !errors.Is(err, ErrInUse) {
 		t.Fatalf("the delete gave %v, want ErrInUse", err)
 	}
 	if err := f.d.DeletePlaylist(f.safety); err != nil {
@@ -424,7 +452,7 @@ func TestDeletePlaylistThatIsInUse(t *testing.T) {
 func TestDeleteMediaThatIsInUse(t *testing.T) {
 	f := newFixture(t)
 	users, err := f.d.DeleteMedia(f.sha)
-	if err != ErrInUse {
+	if !errors.Is(err, ErrInUse) {
 		t.Fatalf("the delete gave %v, want ErrInUse", err)
 	}
 	if len(users) != 3 {
@@ -443,8 +471,10 @@ func TestAssignmentValidation(t *testing.T) {
 		{"two owners", Assignment{GroupID: f.lobby, DeviceID: "px-a", PlaylistID: f.loop}, "group_id"},
 		{"no playlist", Assignment{GroupID: f.lobby}, "playlist_id"},
 		{"a day that is not a day", Assignment{GroupID: f.lobby, PlaylistID: f.loop, Days: []string{"funday"}}, "days"},
-		{"a time of the wrong shape", Assignment{GroupID: f.lobby, PlaylistID: f.loop, Start: "8am"}, "start"},
-		{"an hour that is not an hour", Assignment{GroupID: f.lobby, PlaylistID: f.loop, End: "25:00"}, "end"},
+		{"a time of the wrong shape", Assignment{GroupID: f.lobby, PlaylistID: f.loop, Start: "8am", End: "18:00"}, "start"},
+		{"an hour that is not an hour", Assignment{GroupID: f.lobby, PlaylistID: f.loop, Start: "08:00", End: "25:00"}, "end"},
+		{"a start with no end", Assignment{GroupID: f.lobby, PlaylistID: f.loop, Start: "08:00"}, "end"},
+		{"an end with no start", Assignment{GroupID: f.lobby, PlaylistID: f.loop, End: "18:00"}, "start"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -461,4 +491,135 @@ func TestAssignmentValidation(t *testing.T) {
 			t.Fatalf("no error names the field %q; the errors are %v", c.field, errs)
 		})
 	}
+}
+
+// TestAssignmentWithNoTimesCoversTheWholeDay holds the ruling that the two ends
+// are both set or both empty, and that both empty means the whole day. The device
+// scheduler reads the pair the same way, so a rule with one end would never play.
+func TestAssignmentWithNoTimesCoversTheWholeDay(t *testing.T) {
+	f := newFixture(t)
+	dev := f.device(t, "px-whole001", f.lobby)
+
+	if _, err := f.d.SaveAssignment(Assignment{GroupID: f.lobby, PlaylistID: f.loop,
+		Days: []string{"mon"}}); err != nil {
+		t.Fatalf("a rule with no times was refused: %v", err)
+	}
+	m, err := f.d.Manifest(dev, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Schedule) != 1 || m.Schedule[0].Start != "" || m.Schedule[0].End != "" {
+		t.Fatalf("the rule is %+v", m.Schedule)
+	}
+}
+
+// TestManifestLeavesOutAnItemWhoseMediaWentAway covers a media row that went away
+// under a playlist. An item with a hash and no media entry would be a download
+// that always fails, and the device could not even name the file.
+func TestManifestLeavesOutAnItemWhoseMediaWentAway(t *testing.T) {
+	f := newFixture(t)
+	dev := f.device(t, "px-gone0001", 0)
+
+	other := "bbbb111122223333444455556666777788889999aaaabbbbccccddddeeeeffff"
+	if err := f.d.AddMedia(Media{SHA256: other, OrigName: "second.jpg", Size: 99,
+		MIME: "image/jpeg"}); err != nil {
+		t.Fatal(err)
+	}
+	id, err := f.d.SavePlaylist(Playlist{Title: "Two items", Items: []PlaylistItem{
+		{SHA256: f.sha, Name: "welcome.jpg", Duration: 5},
+		{SHA256: other, Name: "second.jpg", Duration: 5},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.SetDeviceOverrides(dev.ID, id, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	dev, _ = f.d.Device(dev.ID)
+
+	// Take the media row away and leave the item. Only a foreign key stops that,
+	// so the test turns the key off for one statement.
+	if _, err := f.d.w.Exec("PRAGMA foreign_keys = OFF"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.w.Exec("DELETE FROM media WHERE sha256 = ?", other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.d.w.Exec("PRAGMA foreign_keys = ON"); err != nil {
+		t.Fatal(err)
+	}
+
+	m, err := f.d.Manifest(dev, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Playlists) != 1 {
+		t.Fatalf("the manifest holds %d playlists", len(m.Playlists))
+	}
+	if len(m.Playlists[0].Items) != 1 || m.Playlists[0].Items[0].SHA256 != f.sha {
+		t.Fatalf("the items are %+v", m.Playlists[0].Items)
+	}
+	for _, ref := range m.Media {
+		if ref.SHA256 == other {
+			t.Fatalf("the media list names an object that went away: %+v", m.Media)
+		}
+	}
+}
+
+// TestManifestQueryCount holds the cost of one poll.
+//
+// A fleet of 200 screens with a 50-item loop costs about 10000 queries a minute if
+// the count grows with the number of items. Every one of them goes to one SQLite
+// file, and the poll path shares its write connection with every heartbeat.
+func TestManifestQueryCount(t *testing.T) {
+	f := newFixture(t)
+	dev := f.device(t, "px-cost0001", f.lobby)
+
+	items := make([]PlaylistItem, 0, 50)
+	for i := 0; i < 50; i++ {
+		sha := hashOfIndex(i)
+		if err := f.d.AddMedia(Media{SHA256: sha, OrigName: "picture.jpg",
+			Size: int64(100 + i), MIME: "image/jpeg"}); err != nil {
+			t.Fatal(err)
+		}
+		items = append(items, PlaylistItem{SHA256: sha, Name: "picture.jpg", Duration: 10})
+	}
+	big, err := f.d.SavePlaylist(Playlist{Title: "Fifty pictures", Items: items})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.d.UpdateGroup(Group{ID: f.lobby, Name: "Lobby", DefaultPlaylistID: big}); err != nil {
+		t.Fatal(err)
+	}
+
+	before := f.d.Queries()
+	m, err := f.d.Manifest(dev, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spent := f.d.Queries() - before
+
+	if len(m.Media) != 50 {
+		t.Fatalf("the media list holds %d entries, want 50", len(m.Media))
+	}
+	if m.Media[0].Size == 0 || m.Media[0].Name == "" {
+		t.Fatalf("the media entry lost its size or its name: %+v", m.Media[0])
+	}
+	// The budget covers the group, the two assignment queries, the playlist row,
+	// the items and the command transaction. It is far under one query for each
+	// item, which is what this test exists to stop.
+	const budget = 12
+	if spent > budget {
+		t.Fatalf("one poll cost %d queries, want %d or fewer; a query for each item is back",
+			spent, budget)
+	}
+}
+
+// hashOfIndex makes a hash of the right shape for a test row.
+func hashOfIndex(i int) string {
+	const hex = "0123456789abcdef"
+	out := []byte("1111111111111111111111111111111111111111111111111111111111111111")
+	out[0] = hex[i/16]
+	out[1] = hex[i%16]
+	return string(out)
 }

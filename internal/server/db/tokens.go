@@ -62,11 +62,11 @@ func (d *DB) CreateEnrollToken(name, mode string, groupID int64, expiresAt time.
 		expires = d.stamp(expiresAt)
 	}
 
-	token := NewToken()
+	token := newToken()
 	res, err := d.w.Exec(`INSERT INTO enrollment_tokens
 		(name, token_hash, prefix, mode, group_id, expires_at, max_uses, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		strings.TrimSpace(name), HashToken(token), token[:prefixLength], mode,
+		strings.TrimSpace(name), hashSecret(token), token[:prefixLength], mode,
 		nullInt64(groupID), expires, maxUses, d.stamp(d.now()))
 	if err != nil {
 		return 0, "", err

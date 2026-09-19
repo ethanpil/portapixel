@@ -4,6 +4,11 @@ import "time"
 
 // Device is one row of the devices table. The admin API sends it as JSON, so the
 // field names here are the names that the UI reads.
+//
+// A request that waits for approval has no row of this kind: it lives in
+// pending_enrollments, so that an enroll request can never change a screen that
+// works. The admin API sends such a request in the same list with Pending set, so
+// the UI keeps one shape for "every screen that I must look at".
 type Device struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
@@ -19,7 +24,17 @@ type Device struct {
 
 	Pending     bool   `json:"pending"`
 	PendingCode string `json:"pending_code,omitempty"`
+	// PendingID names the row of pending_enrollments, for the approve and reject
+	// routes. It is zero for a screen that does not wait.
+	PendingID int64 `json:"pending_id,omitempty"`
+	// CollidesWith names a screen that is already paired and that this request
+	// asks to be. The UI warns before the admin approves it.
+	CollidesWith string `json:"collides_with,omitempty"`
 
+	// NeedsConfirm is true while a machine that is not the stored one asks to be
+	// this screen (D21). Then HardwareID is the machine that asks and
+	// PrevHardwareID is the machine that the server knows. The server stores the
+	// change at the confirmation and not before.
 	NeedsConfirm       bool   `json:"needs_confirm"`
 	PrevHardwareID     string `json:"prev_hardware_id,omitempty"`
 	Conflict           bool   `json:"conflict"`
@@ -47,7 +62,7 @@ const (
 	StatePending = "pending"
 	// StateConflict means two hardware IDs used one token (D21).
 	StateConflict = "conflict"
-	// StateNeedsConfirm means the hardware ID changed (D21).
+	// StateNeedsConfirm means that another machine asks to be this screen (D21).
 	StateNeedsConfirm = "needs_confirm"
 	// StateOnline means the device called inside 2.5 poll intervals.
 	StateOnline = "online"
@@ -125,6 +140,16 @@ type PlaylistItem struct {
 	RefreshSeconds int    `json:"refresh_seconds,omitempty"`
 	// Thumb is the URL of the thumbnail, or an empty value when there is none.
 	Thumb string `json:"thumb,omitempty"`
+	// Size is the length of the media object in bytes, or zero for a url item.
+	// The manifest needs it, and one query gives it with the item.
+	Size int64 `json:"-"`
+	// MediaRow is true when the media table still holds this hash. The manifest
+	// leaves out an item whose media row went away: a device cannot name, size or
+	// fetch such an item.
+	MediaRow bool `json:"-"`
+	// MediaName is the original name of the media row. The manifest sends it, so
+	// that the device can write a file name that a person reads.
+	MediaName string `json:"-"`
 }
 
 // Assignment is one row of the assignments table.
@@ -149,20 +174,27 @@ type Command struct {
 	QueuedAt    time.Time         `json:"queued_at"`
 	DeliveredAt time.Time         `json:"delivered_at"`
 	AckedAt     time.Time         `json:"acked_at"`
-	// State is computed: queued, delivered or acked.
+	// Deliveries counts how often the command went out.
+	Deliveries int `json:"deliveries"`
+	// State is computed: queued, delivered, acked or expired.
 	State string `json:"state"`
 }
 
 // Release is one row of the releases table.
+//
+// There is no Mirrored flag. A device installs a release when MirrorState is
+// MirrorDone, and one value cannot disagree with itself.
 type Release struct {
 	Version     string    `json:"version"`
 	Approved    bool      `json:"approved"`
-	Mirrored    bool      `json:"mirrored"`
 	Notes       string    `json:"notes"`
 	PublishedAt time.Time `json:"published_at"`
 	ApprovedAt  time.Time `json:"approved_at"`
 	MirrorState string    `json:"mirror_state"`
 	MirrorError string    `json:"mirror_error,omitempty"`
+	// Mirrored is computed from MirrorState. The admin UI reads it, so the field
+	// stays in the JSON; it is never a column.
+	Mirrored bool `json:"mirrored"`
 }
 
 // The mirror states of a release.
