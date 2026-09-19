@@ -61,9 +61,12 @@ cp /etc/apk/repositories /m/etc/apk/repositories
 # box, and it is right to refuse: it cannot know which one the boot loader names.
 # A PC install from the standard ISO runs linux-lts, so make this guest the same
 # kind of box and let install.sh see one kernel.
-apk --root /m add linux-lts
-apk --root /m del linux-virt
-chroot /m update-extlinux
+# --no-interactive and no terminal: apk and update-extlinux must never wait for
+# an answer. Run 35432925149 stopped here for 30 minutes with no output, because
+# something asked a question that nobody could answer.
+apk --root /m --no-interactive add linux-lts </dev/null
+apk --root /m --no-interactive del linux-virt </dev/null
+chroot /m update-extlinux </dev/null
 ls /m/boot
 
 # Put everything that the next phase needs ON THE DISK. The installed system
