@@ -5,6 +5,52 @@ import (
 	"testing"
 )
 
+// TestMaskedAndMergeMaskedDoNotShareSlices covers the copy that the two
+// functions give back. A plain copy of a struct keeps the slices of the
+// original, so a change to the copy would reach the configuration that the
+// daemon runs on.
+func TestMaskedAndMergeMaskedDoNotShareSlices(t *testing.T) {
+	base := func() Config {
+		c := Default()
+		c.Network.DNS = []string{"192.168.1.1", "1.1.1.1"}
+		c.Display.PowerDays = []string{"mon", "tue"}
+		c.Schedule = []Rule{{Playlist: "day", Days: []string{"mon", "tue"}, Start: "08:00", End: "18:00"}}
+		return c
+	}
+
+	tests := []struct {
+		name string
+		make func(Config) Config
+	}{
+		{name: "Masked", make: func(c Config) Config { return c.Masked() }},
+		{name: "MergeMasked", make: func(c Config) Config { return MergeMasked(Default(), c) }},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := base()
+			out := tt.make(cfg)
+
+			out.Network.DNS[0] = "9.9.9.9"
+			out.Display.PowerDays[0] = "sun"
+			out.Schedule[0].Days[0] = "sun"
+			out.Schedule[0].Playlist = "night"
+
+			if cfg.Network.DNS[0] != "192.168.1.1" {
+				t.Errorf("the copy shares network.dns: %q", cfg.Network.DNS[0])
+			}
+			if cfg.Display.PowerDays[0] != "mon" {
+				t.Errorf("the copy shares display.power_days: %q", cfg.Display.PowerDays[0])
+			}
+			if cfg.Schedule[0].Days[0] != "mon" {
+				t.Errorf("the copy shares the days of a schedule rule: %q", cfg.Schedule[0].Days[0])
+			}
+			if cfg.Schedule[0].Playlist != "day" {
+				t.Errorf("the copy shares the schedule: %q", cfg.Schedule[0].Playlist)
+			}
+		})
+	}
+}
+
 func TestMasked(t *testing.T) {
 	cfg := Default()
 	cfg.Network.WifiPSK = "wifi secret"

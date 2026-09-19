@@ -45,6 +45,8 @@ func TestLoad(t *testing.T) {
 		wantShadow  bool
 		wantDefault bool
 		wantWarning bool
+		// wantRepaired holds the fields that Load must report as repaired.
+		wantRepaired []string
 	}{
 		{
 			name:     "a good media file",
@@ -87,30 +89,30 @@ func TestLoad(t *testing.T) {
 			wantName: "Lobby",
 		},
 		{
-			// The file parses, so only Validate finds the fault. A hand edit that
-			// breaks a value must behave like any other bad file (D38).
-			name:        "a media file with a bad value falls back to the shadow copy",
-			media:       ptr(strings.Replace(goodFile, "rotation = 0", "rotation = 45", 1)),
-			shadow:      &otherFile,
-			wantName:    "Shadow copy",
-			wantShadow:  true,
-			wantWarning: true,
+			// The file parses, so only Validate finds the fault. Load keeps the
+			// name that the person wrote and repairs the one bad field (D38).
+			name:         "a media file with a bad value is repaired, not dropped",
+			media:        ptr(strings.Replace(goodFile, "rotation = 0", "rotation = 45", 1)),
+			shadow:       &otherFile,
+			wantName:     "Lobby",
+			wantWarning:  true,
+			wantRepaired: []string{"display.rotation"},
 		},
 		{
-			name:        "an empty password is a bad value",
-			media:       ptr(strings.Replace(goodFile, `password = "portapixel"`, `password = ""`, 1)),
-			shadow:      &otherFile,
-			wantName:    "Shadow copy",
-			wantShadow:  true,
-			wantWarning: true,
+			name:         "an empty password takes the default password",
+			media:        ptr(strings.Replace(goodFile, `password = "portapixel"`, `password = ""`, 1)),
+			wantName:     "Lobby",
+			wantWarning:  true,
+			wantRepaired: []string{"web.password"},
 		},
 		{
-			name:        "a bad value in both files gives the defaults",
-			media:       ptr(strings.Replace(goodFile, "rotation = 0", "rotation = 45", 1)),
-			shadow:      ptr(strings.Replace(otherFile, "volume = 100", "volume = 900", 1)),
-			wantName:    "PortaPixel",
-			wantDefault: true,
-			wantWarning: true,
+			name:         "a repaired shadow copy still beats the defaults",
+			media:        ptr("this is not toml ["),
+			shadow:       ptr(strings.Replace(otherFile, "volume = 100", "volume = 900", 1)),
+			wantName:     "Shadow copy",
+			wantShadow:   true,
+			wantWarning:  true,
+			wantRepaired: []string{"audio.volume"},
 		},
 	}
 
@@ -136,6 +138,94 @@ func TestLoad(t *testing.T) {
 			}
 			if (got.Warning != "") != tt.wantWarning {
 				t.Errorf("Warning = %q, want a warning: %v", got.Warning, tt.wantWarning)
+			}
+			if len(got.Repaired) != len(tt.wantRepaired) {
+				t.Fatalf("Repaired = %v, want %v", got.Repaired, tt.wantRepaired)
+			}
+			for _, field := range tt.wantRepaired {
+				if !hasField(got.Repaired, field) {
+					t.Errorf("Repaired = %v, want a fault for %q", got.Repaired, field)
+				}
+				if !strings.Contains(got.Warning, field) {
+					t.Errorf("the warning does not name %q: %s", field, got.Warning)
+				}
+			}
+			// A repaired configuration must always be one that the daemon can run.
+			if errs := got.Config.Validate(); len(errs) > 0 {
+				t.Errorf("Load gave a configuration that breaks a rule: %v", errs)
+			}
+		})
+	}
+}
+
+// TestLoadRepairsInsteadOfDropping covers the first boot of a stick that a
+// person wrote by hand and that has one typed character wrong. There is no
+// shadow copy yet, so a file that Load threw away would give the device the
+// published default password and lose the WiFi key.
+func TestLoadRepairsInsteadOfDropping(t *testing.T) {
+	mediaRoot, stateDir := dirs(t)
+
+	cfg := Default()
+	cfg.Device.Name = "Lobby"
+	cfg.Network.WifiSSID = "Guest"
+	cfg.Network.WifiPSK = "a wifi secret"
+	cfg.Web.Password = "letmein"
+	cfg.Schedule = []Rule{{Playlist: "day", Start: "08:00", End: "18:00"}}
+	file := strings.Replace(string(Render(cfg)), "rotation = 0", "rotation = 45", 1)
+	write(t, MediaPath(mediaRoot), file)
+
+	got := Load(mediaRoot, stateDir)
+
+	if got.FromDefault || got.FromShadow {
+		t.Fatalf("Load threw the file away: %+v", got)
+	}
+	if len(got.Repaired) != 1 || got.Repaired[0].Field != "display.rotation" {
+		t.Fatalf("Repaired = %v, want display.rotation", got.Repaired)
+	}
+	if got.Config.Display.Rotation != 0 {
+		t.Errorf("rotation = %d, want the default", got.Config.Display.Rotation)
+	}
+	if got.Config.Web.Password != "letmein" {
+		t.Errorf("password = %q: the device must not fall back to the published default", got.Config.Web.Password)
+	}
+	if got.Config.Network.WifiPSK != "a wifi secret" || got.Config.Network.WifiSSID != "Guest" {
+		t.Errorf("Load lost the wifi settings: %+v", got.Config.Network)
+	}
+	if got.Config.Device.Name != "Lobby" || len(got.Config.Schedule) != 1 {
+		t.Errorf("Load lost a value that the person wrote: %+v", got.Config)
+	}
+}
+
+// TestLoadNeverWritesToTheMediaRoot holds the rule that the media partition is
+// the property of the person. Load reads it and writes nothing there, whatever
+// it finds.
+func TestLoadNeverWritesToTheMediaRoot(t *testing.T) {
+	files := map[string]string{
+		"a good file":    string(Render(Default())),
+		"a bad value":    strings.Replace(string(Render(Default())), "rotation = 0", "rotation = 45", 1),
+		"a file of junk": "this is not toml [",
+		"an empty file":  "",
+	}
+	for name, content := range files {
+		t.Run(name, func(t *testing.T) {
+			mediaRoot, stateDir := dirs(t)
+			write(t, MediaPath(mediaRoot), content)
+
+			Load(mediaRoot, stateDir)
+
+			after, err := os.ReadFile(MediaPath(mediaRoot))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(after) != content {
+				t.Fatalf("Load changed the file on the media root:\n%s", after)
+			}
+			names, err := filepath.Glob(filepath.Join(mediaRoot, "*"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(names) != 1 {
+				t.Fatalf("Load left %v in the media root, want only the configuration file", names)
 			}
 		})
 	}
@@ -205,11 +295,16 @@ func TestLoadDoesNotMirrorABadFile(t *testing.T) {
 	tests := []struct {
 		name  string
 		media string
+		// wantShadow is true when Load must fall back to the shadow copy. A file
+		// that parses is repaired instead, and the repaired values are the ones
+		// that run.
+		wantShadow bool
 	}{
-		{name: "the file is not toml", media: "bad ["},
+		{name: "the file is not toml", media: "bad [", wantShadow: true},
 		{
 			// The last-known-good copy must hold a file that is good in both
-			// ways: it parses and every value in it is permitted.
+			// ways: it parses and every value in it is permitted. A repaired file
+			// is not that file.
 			name:  "the file holds a bad value",
 			media: strings.Replace(good, "rotation = 0", "rotation = 45", 1),
 		},
@@ -225,8 +320,11 @@ func TestLoadDoesNotMirrorABadFile(t *testing.T) {
 			write(t, MediaPath(mediaRoot), tt.media)
 
 			got := Load(mediaRoot, stateDir)
-			if !got.FromShadow {
-				t.Fatalf("Load must fall back to the shadow copy, got %+v", got)
+			if got.FromShadow != tt.wantShadow {
+				t.Fatalf("FromShadow = %v, want %v: %+v", got.FromShadow, tt.wantShadow, got)
+			}
+			if !tt.wantShadow && len(got.Repaired) == 0 {
+				t.Fatal("Load must report the fields that it repaired")
 			}
 
 			shadow, err := os.ReadFile(ShadowPath(stateDir))

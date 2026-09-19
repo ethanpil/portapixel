@@ -29,6 +29,16 @@ func (e Errors) Error() string {
 	return strings.Join(parts, "; ")
 }
 
+// hasField reports if the error list names this field.
+func hasField(errs Errors, field string) bool {
+	for _, e := range errs {
+		if e.Field == field {
+			return true
+		}
+	}
+	return false
+}
+
 // Days are the day names that a schedule rule may use.
 var Days = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
@@ -196,17 +206,33 @@ func hasControl(value string) bool {
 	return false
 }
 
-// isClockTime reports if value is a 24-hour time in the form HH:MM.
-func isClockTime(value string) bool {
+// ParseClock reads a 24-hour time in the form HH:MM and gives the minutes after
+// midnight. It is the one clock format of the product: the schedule rules, the
+// screen times and the nightly browser restart all use it. Each of them asked
+// the same question with its own code before, and the answers were different.
+//
+// The format is exact. Five characters, two digits, a colon, two digits. A value
+// such as "9:5" is not accepted, because the renderer never writes one and a
+// person who types one must see the fault in the admin UI.
+func ParseClock(value string) (int, bool) {
 	if len(value) != 5 || value[2] != ':' {
-		return false
+		return 0, false
 	}
 	h, ok := twoDigits(value[0:2])
 	if !ok || h > 23 {
-		return false
+		return 0, false
 	}
 	m, ok := twoDigits(value[3:5])
-	return ok && m <= 59
+	if !ok || m > 59 {
+		return 0, false
+	}
+	return h*60 + m, true
+}
+
+// isClockTime reports if value is a 24-hour time in the form HH:MM.
+func isClockTime(value string) bool {
+	_, ok := ParseClock(value)
+	return ok
 }
 
 func twoDigits(s string) (int, bool) {

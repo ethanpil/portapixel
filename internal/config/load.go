@@ -19,6 +19,10 @@ type Result struct {
 	FromShadow bool
 	// FromDefault is true when no file was readable and Load gave the defaults.
 	FromDefault bool
+	// Repaired holds the faults that the file had. Load keeps every other value
+	// that the person wrote and puts the default value in each of these fields.
+	// It is empty when the file breaks no rule.
+	Repaired []FieldError
 	// Warning says what is wrong with the copy on PPMEDIA. It is empty when that
 	// copy was good.
 	Warning string
@@ -30,47 +34,63 @@ func MediaPath(mediaRoot string) string { return filepath.Join(mediaRoot, FileNa
 // ShadowPath gives the path of the last-known-good copy in the state directory.
 func ShadowPath(stateDir string) string { return filepath.Join(stateDir, ShadowName) }
 
-// Load reads the configuration (D38).
+// Load reads the configuration (D38). It never writes to the media root.
 //
-// It reads the copy on PPMEDIA first. After a good read it mirrors that file to
-// the state directory on ext4. If the copy on PPMEDIA is missing or bad, it
-// falls back to the mirror and says why in Warning. If neither file is
-// readable, it gives the defaults.
+// It reads the copy on PPMEDIA first. A file that the TOML parser cannot read is
+// no file at all: Load then falls back to the copy in the state directory, and
+// to the defaults when that copy is bad as well.
+//
+// A file that parses but breaks a rule is repaired field by field: every value
+// that the person wrote stays, and each bad field takes its default value. One
+// typed character must not throw away the WiFi key, the password and the
+// schedule that stand beside it. Load mirrors the file to the state directory
+// only when the file breaks no rule, so a repaired file never replaces the
+// last-known-good copy.
 func Load(mediaRoot, stateDir string) Result {
 	data, err := os.ReadFile(MediaPath(mediaRoot))
 	if err == nil {
-		var cfg Config
-		if cfg, err = read(data); err == nil {
-			mirror(stateDir, data)
-			return Result{Config: cfg}
+		cfg, parseErr := Parse(data)
+		if parseErr == nil {
+			cfg, bad := Repair(cfg)
+			if len(bad) == 0 {
+				mirror(stateDir, data)
+				return Result{Config: cfg}
+			}
+			return Result{Config: cfg, Repaired: bad, Warning: repairWarning(FileName, bad)}
 		}
+		err = parseErr
 	}
 	warning := err.Error()
 
 	shadow, shadowErr := os.ReadFile(ShadowPath(stateDir))
 	if shadowErr == nil {
-		cfg, badShadow := read(shadow)
-		if badShadow == nil {
-			return Result{Config: cfg, FromShadow: true, Warning: warning}
+		cfg, parseErr := Parse(shadow)
+		if parseErr == nil {
+			cfg, bad := Repair(cfg)
+			out := Result{Config: cfg, FromShadow: true, Repaired: bad, Warning: warning}
+			if len(bad) > 0 {
+				out.Warning += "; " + repairWarning(ShadowName, bad)
+			}
+			return out
 		}
-		warning += fmt.Sprintf("; the shadow copy is also bad: %v", badShadow)
+		warning += fmt.Sprintf("; the shadow copy is also bad: %v", parseErr)
 	}
 	return Result{Config: Default(), FromDefault: true, Warning: warning}
 }
 
-// read parses a configuration file and checks the values in it. A file that
-// parses but holds a bad value is not a good file: it must never become the
-// last-known-good copy, and the daemon must not run on it in silence. A person
-// edits this file by hand, so a bad value is a thing that happens (D38).
-func read(data []byte) (Config, error) {
-	cfg, err := Parse(data)
-	if err != nil {
-		return cfg, err
+// repairWarning says what Load changed. The admin UI shows it, so it names each
+// field and says what the device does now.
+func repairWarning(name string, bad Errors) string {
+	value, them := "values", "each of them"
+	if len(bad) == 1 {
+		value, them = "value", "it"
 	}
-	if errs := cfg.Validate(); len(errs) > 0 {
-		return cfg, fmt.Errorf("the configuration file holds a bad value: %w", errs)
+	msg := fmt.Sprintf("%s has %d bad %s (%s); the device uses the default for %s",
+		name, len(bad), value, bad.Error(), them)
+	if hasField(bad, "web.password") {
+		msg += ". The admin password is the default password now: change it"
 	}
-	return cfg, nil
+	return msg
 }
 
 // Save checks cfg, writes it to PPMEDIA, and mirrors it. The write is staged and
