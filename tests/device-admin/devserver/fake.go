@@ -7,6 +7,11 @@ package main
 // three pairing flows can be driven with no fleet server on the network. The JSON
 // is the shape of internal/device/syncer.PairState.
 //
+// PUT /api/config also comes here while the fake is "paired" (D48): a
+// development machine runs no fleet client, so the real daemon can never
+// refuse a managed field on its own. Every other state passes the call to the
+// daemon.
+//
 // The update, disks and install-to-disk routes ARE in the daemon (v0.2). The
 // fake keeps its own copies of them so that the UI can be driven on a machine
 // with no second disk and with no signing key: the real routes then answer "this
@@ -20,6 +25,7 @@ package main
 // answers, and no more.
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,7 +33,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/config"
+	"github.com/ethanpil/portapixel/internal/device/syncer"
 )
+
+// fakeServerName is the fleet server that the fake pretends to be, in the
+// pairing state and in every managed refusal it answers (D48).
+const fakeServerName = "Ridgeline Signage"
 
 type fake struct {
 	mu sync.Mutex
@@ -61,6 +74,8 @@ func (f *fake) handle(w http.ResponseWriter, r *http.Request, daemon string) boo
 		f.pair, f.serverURL, f.code = "unpaired", "", ""
 		f.mu.Unlock()
 		writeJSON(w, map[string]any{"ok": true})
+	case r.URL.Path == "/api/config" && r.Method == http.MethodPut:
+		return f.putConfig(w, r, daemon)
 	case r.URL.Path == "/api/update/check":
 		writeJSON(w, map[string]any{
 			"current": "dev", "available": "1.5.1", "source": "github",
@@ -147,13 +162,16 @@ func (f *fake) pairState() map[string]any {
 		"server_url": f.serverURL,
 	}
 	if f.pair != "unpaired" {
-		out["server_name"] = "Ridgeline Signage"
+		out["server_name"] = fakeServerName
 	}
 	if f.code != "" {
 		out["pairing_code"] = f.code
 	}
 	if f.pair == "paired" {
 		out["last_sync"] = time.Now().Add(-40 * time.Second).Format(time.RFC3339)
+		// The admin UI disables exactly these controls and nothing else (D48). The
+		// real list comes from the syncer, so the fake cannot drift from it.
+		out["managed_fields"] = syncer.ManagedFields()
 	}
 	if f.syncError != "" {
 		out["sync_error"] = f.syncError
@@ -205,6 +223,12 @@ func (f *fake) startPairing(w http.ResponseWriter, r *http.Request) {
 
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.pair == "paired" {
+		// A device with a pairing must be unpaired first (D25): the token of the
+		// old server must never go to a new one.
+		writeError(w, http.StatusConflict, "this device is paired with "+fakeServerName+"; unpair it first")
+		return
+	}
 	f.serverURL = body.URL
 	f.syncError = ""
 	// The daemon refuses the mask: it is what GET /api/config shows for a saved
@@ -231,6 +255,124 @@ func (f *fake) startPairing(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 	}()
 	writeJSON(w, f.pairState())
+}
+
+// putConfig answers PUT /api/config while the fake is "paired". A Windows
+// development machine runs no fleet client, so the real daemon can never
+// refuse a managed field on its own; the fake stands in for it, so the D48
+// boundary can be seen with no fleet server on the network. It gives false for
+// every other state, and the daemon answers the call as usual.
+func (f *fake) putConfig(w http.ResponseWriter, r *http.Request, daemon string) bool {
+	f.mu.Lock()
+	paired := f.pair == "paired"
+	f.mu.Unlock()
+	if !paired {
+		return false
+	}
+
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return true
+	}
+	var incoming config.Config
+	if json.Unmarshal(body, &incoming) != nil {
+		writeError(w, http.StatusBadRequest, "the body is not the configuration shape")
+		return true
+	}
+
+	// GET /api/config needs the session that the person is signed in with, or
+	// the daemon answers 401 and every field of cur reads as zero, which then
+	// looks like every field changed.
+	req, err := http.NewRequest(http.MethodGet, daemon+"/api/config", nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return true
+	}
+	if cookie := r.Header.Get("Cookie"); cookie != "" {
+		req.Header.Set("Cookie", cookie)
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return true
+	}
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		w.WriteHeader(res.StatusCode)
+		io.Copy(w, res.Body)
+		return true
+	}
+	var view struct {
+		Config config.Config `json:"config"`
+	}
+	json.NewDecoder(res.Body).Decode(&view)
+	cur := view.Config
+
+	changed := managedFieldChanged(cur, incoming)
+	if changed == "" {
+		// Nothing that the fleet server owns is different. Reading the body above
+		// drained it, so the daemon needs it back before it can save whatever else
+		// the person changed.
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		r.ContentLength = int64(len(body))
+		return false
+	}
+
+	fields := make([]map[string]string, 0, len(syncer.ManagedFields()))
+	for _, name := range syncer.ManagedFields() {
+		fields = append(fields, map[string]string{"field": name, "message": "the fleet server manages this"})
+	}
+	writeJSONStatus(w, http.StatusForbidden, map[string]any{
+		"error":  "managed by " + fakeServerName,
+		"fields": fields,
+	})
+	return true
+}
+
+// managedFieldChanged gives the first managed field of D48 that differs
+// between the running configuration and the one in the request body, or "".
+func managedFieldChanged(cur, incoming config.Config) string {
+	switch {
+	case cur.Playback.DefaultPlaylist != incoming.Playback.DefaultPlaylist:
+		return "playback.default_playlist"
+	case !scheduleEqual(cur.Schedule, incoming.Schedule):
+		return "schedule"
+	case cur.Display.OnTime != incoming.Display.OnTime:
+		return "display.on_time"
+	case cur.Display.OffTime != incoming.Display.OffTime:
+		return "display.off_time"
+	case !stringsEqual(cur.Display.PowerDays, incoming.Display.PowerDays):
+		return "display.power_days"
+	}
+	return ""
+}
+
+func scheduleEqual(a, b []config.Rule) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Playlist != b[i].Playlist || a[i].Start != b[i].Start || a[i].End != b[i].End {
+			return false
+		}
+		if !stringsEqual(a[i].Days, b[i].Days) {
+			return false
+		}
+	}
+	return true
+}
+
+func stringsEqual(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // startInstall checks the confirmation the same way that the daemon does: the
@@ -320,9 +462,18 @@ func writeError(w http.ResponseWriter, code int, message string) {
 	w.Write(data)
 }
 
+// writeJSONStatus is writeJSON with a status other than 200.
+func writeJSONStatus(w http.ResponseWriter, code int, body any) {
+	data, _ := json.Marshal(body)
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.WriteHeader(code)
+	w.Write(data)
+}
+
 // fakePaths says which routes the fake owns. The daemon answers everything else.
 func fakePath(path string) bool {
-	for _, p := range []string{"/api/status", "/api/pair", "/api/update/", "/api/disks", "/api/install-to-disk"} {
+	for _, p := range []string{"/api/status", "/api/pair", "/api/config", "/api/update/", "/api/disks", "/api/install-to-disk"} {
 		if path == strings.TrimSuffix(p, "/") || strings.HasPrefix(path, p) {
 			return true
 		}

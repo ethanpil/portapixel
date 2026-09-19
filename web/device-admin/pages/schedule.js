@@ -7,10 +7,10 @@
 
 import {
   h, fill, toast, banner, icon,
-  card, pageHead, setText, errorText, dayChips, daysInWords, inWindow,
+  card, pageHead, setText, setShown, errorText, dayChips, daysInWords, inWindow,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { deviceClock } from '../util.js';
+import { deviceClock, notInThisBuild } from '../util.js';
 
 export function mount(main, ctx) {
   let cfg = null;              // the whole configuration, so a save keeps everything
@@ -20,6 +20,13 @@ export function mount(main, ctx) {
   let baseline = '';
   let paired = false;
   let gone = false;
+
+  /* The fields that GET /api/pair names in managed_fields, while this device is
+     paired. "schedule" locks the whole rules editor; "playback.default_playlist"
+     locks the select above it. The list can get shorter, so this page holds no
+     copy of it (D48). */
+  let managedFields = new Set();
+  let pairServerName = '';
 
   const banners = h('div');
   const lead = h('p', { class: 'pp-lead' });
@@ -32,17 +39,33 @@ export function mount(main, ctx) {
     if (!status || gone) return;
     const was = paired;
     paired = !!status.paired;
-    if (cfg && was !== paired) render();
-    else if (cfg) { renderBanners(); updateNow(); }
+    if (cfg && was !== paired) {
+      // The pairing flipped, so managed_fields is stale: read it again before
+      // the rules editor and the default select change.
+      readPair().then(() => { if (!gone) render(); });
+    } else if (cfg) { renderBanners(); updateNow(); }
   });
 
   load();
+
+  async function readPair() {
+    try {
+      const state = await api('GET', '/api/pair');
+      managedFields = new Set(state.managed_fields || []);
+      pairServerName = state.server_name || '';
+    } catch (err) {
+      if (!notInThisBuild(err)) throw err;
+      managedFields = new Set();
+      pairServerName = '';
+    }
+  }
 
   async function load() {
     try {
       const [view, snap] = await Promise.all([
         api('GET', '/api/config'),
         api('GET', '/api/playlists'),
+        readPair(),
       ]);
       if (gone) return;
       cfg = view.config;
@@ -71,7 +94,7 @@ export function mount(main, ctx) {
     const dirty = snapshot() !== baseline;
     ctx.setGuard(() => dirty);
     setText(dirtyNote, dirty ? 'not saved yet' : '');
-    saveBtn.disabled = paired || !dirty;
+    saveBtn.disabled = scheduleManaged || !dirty;
     updateNow();
     renderWeek();
   }
@@ -87,10 +110,23 @@ export function mount(main, ctx) {
   const defaultSelect = h('select', {
     class: 'pp-select', onChange: () => { defaultPlaylist = defaultSelect.value; touch(); },
   });
+  const defaultNote = h('div', { class: 'pp-note', hidden: true, style: { 'border-radius': '8px', 'margin-top': '10px' } });
+  const scheduleNote = h('div', { class: 'pp-note', hidden: true, style: { 'border-radius': '8px', 'margin-bottom': '14px' } });
+
+  /* managed_fields of GET /api/pair, read into the two flags this page checks
+     (D48). "schedule" locks the whole rules editor; "playback.default_playlist"
+     locks the select above it. Nothing else on this page is fleet-owned. */
+  let scheduleManaged = false;
+  let defaultManaged = false;
 
   function render() {
     setText(lead, 'Rules are read from the top and the first match wins.');
     renderBanners();
+
+    scheduleManaged = managedFields.has('schedule');
+    defaultManaged = managedFields.has('playback.default_playlist');
+    const server = pairServerName || (ctx.store.status && ctx.store.status.server_url) || 'the control server';
+    const managedText = `${server} manages this while the device is paired. Unpair on Settings to take it back.`;
 
     fill(defaultSelect, playlists.map((p) => h('option', { value: p.name, text: p.title })));
     if (!playlists.some((p) => p.name === defaultPlaylist) && defaultPlaylist) {
@@ -98,25 +134,31 @@ export function mount(main, ctx) {
       defaultSelect.append(h('option', { value: defaultPlaylist, text: `${defaultPlaylist} (missing)` }));
     }
     defaultSelect.value = defaultPlaylist;
-    defaultSelect.disabled = paired;
+    defaultSelect.disabled = defaultManaged;
+    setText(defaultNote, managedText);
+    setShown(defaultNote, defaultManaged);
+    setText(scheduleNote, managedText);
+    setShown(scheduleNote, scheduleManaged);
 
     fill(body,
       card({
         title: 'When nothing matches',
         body: [
           h('label', { class: 'pp-label', style: { 'max-width': '320px' } }, 'Plays when no rule matches', defaultSelect),
+          defaultNote,
           h('div', { class: 'pp-help', text: 'This is what the screen shows outside every rule, and while the clock is still coming in.' }),
           nowLine,
         ],
       }),
-      h('div', { class: `pp-card${paired ? ' dv-ro' : ''}` },
+      h('div', { class: `pp-card${scheduleManaged ? ' dv-ro' : ''}` },
         h('div', { class: 'pp-card__head' },
           h('div', { class: 'pp-h2', text: 'Rules' }),
           h('div', { class: 'pp-card__meta' }, dirtyNote)),
+        scheduleNote,
         rowsSlot,
         h('div', { class: 'pp-card__foot' },
           h('button', {
-            type: 'button', class: 'pp-btn pp-btn--dashed', disabled: paired, onClick: addRule,
+            type: 'button', class: 'pp-btn pp-btn--dashed', disabled: scheduleManaged, onClick: addRule,
           }, icon('plus'), 'Add a rule'),
           saveBtn)),
       card({ title: 'What the week looks like', body: weekSlot }));
@@ -162,7 +204,7 @@ export function mount(main, ctx) {
     const error = h('div', { class: 'pp-error', hidden: true, style: { flex: '1 1 100%' } });
 
     const playlistSelect = h('select', {
-      class: 'pp-select', 'aria-label': `Playlist of rule ${i + 1}`, disabled: paired,
+      class: 'pp-select', 'aria-label': `Playlist of rule ${i + 1}`, disabled: scheduleManaged,
       onChange: () => { rule.playlist = playlistSelect.value; touch(); },
     }, playlists.map((p) => h('option', { value: p.name, text: p.title })));
     if (!playlists.some((p) => p.name === rule.playlist)) {
@@ -171,13 +213,13 @@ export function mount(main, ctx) {
     playlistSelect.value = rule.playlist;
 
     const chips = dayChips({
-      days: rule.days, disabled: paired,
+      days: rule.days, disabled: scheduleManaged,
       onChange: (days) => { rule.days = days; touch(); },
     });
 
     const time = (key, label) => h('input', {
       class: 'pp-input pp-input--mono pp-input--sm', type: 'time', value: rule[key],
-      'aria-label': `${label} of rule ${i + 1}`, disabled: paired,
+      'aria-label': `${label} of rule ${i + 1}`, disabled: scheduleManaged,
       onInput: (e) => { rule[key] = e.target.value; touch(); },
     });
     const startIn = time('start', 'Start');
@@ -187,7 +229,7 @@ export function mount(main, ctx) {
        this playlist" is written, and the two times are both-or-neither: one time
        on its own is an error that the device refuses. */
     const allDay = h('input', {
-      type: 'checkbox', checked: !rule.start && !rule.end, disabled: paired,
+      type: 'checkbox', checked: !rule.start && !rule.end, disabled: scheduleManaged,
       'aria-label': `Rule ${i + 1} covers the whole day`,
       onChange: () => {
         if (allDay.checked) {
@@ -205,8 +247,8 @@ export function mount(main, ctx) {
     });
     function applyAllDay() {
       const on = allDay.checked;
-      startIn.disabled = paired || on;
-      endIn.disabled = paired || on;
+      startIn.disabled = scheduleManaged || on;
+      endIn.disabled = scheduleManaged || on;
       startIn.hidden = on;
       endIn.hidden = on;
     }
@@ -232,14 +274,14 @@ export function mount(main, ctx) {
       h('div', { class: 'pp-rule__acts' },
         h('button', {
           type: 'button', class: 'pp-btn pp-btn--icon', 'aria-label': `Move rule ${i + 1} up`,
-          disabled: paired || i === 0, onClick: () => move(i - 1),
+          disabled: scheduleManaged || i === 0, onClick: () => move(i - 1),
         }, icon('up', 14)),
         h('button', {
           type: 'button', class: 'pp-btn pp-btn--icon', 'aria-label': `Move rule ${i + 1} down`,
-          disabled: paired || i === rules.length - 1, onClick: () => move(i + 1),
+          disabled: scheduleManaged || i === rules.length - 1, onClick: () => move(i + 1),
         }, icon('down', 14)),
         h('button', {
-          type: 'button', class: 'pp-btn pp-btn--icon', 'aria-label': `Remove rule ${i + 1}`, disabled: paired,
+          type: 'button', class: 'pp-btn pp-btn--icon', 'aria-label': `Remove rule ${i + 1}`, disabled: scheduleManaged,
           onClick: () => { rules.splice(i, 1); touch(); renderRows(); },
         }, icon('close', 14))));
 
@@ -360,7 +402,12 @@ export function mount(main, ctx) {
         : 'Schedule saved.');
       ctx.store.refresh();
     } catch (err) {
-      if (err.fields) showErrors(err.fields);
+      /* A 403 names every field that the fleet server owns, in the shape of a
+         422 (D48). Reuse the same display, and say the refusal itself in a
+         toast; a 403 with no fields shows that same sentence. */
+      if (err.fields && err.fields.length) showErrors(err.fields);
+      if (err.status === 403) toast(err.message, 'danger');
+      else if (err.fields && err.fields.length) toast('Some settings are not correct.', 'danger');
       else toast(errorText(err), 'danger');
     } finally {
       touch();

@@ -277,6 +277,14 @@ export function mount(main, ctx) {
     };
   }
 
+  /* POST, PUT and DELETE of a playlist are locked whole while the device is
+     paired (D48): the fleet server owns the library, not one field of it. That
+     403 always carries the whole managed-field list of the Settings page,
+     which names nothing here, so its plain sentence is what this page shows. */
+  function routeError(err) {
+    return err && err.status === 403 ? err.message : errorText(err);
+  }
+
   async function save(p, edited) {
     const body = {
       title: (edited.name || '').trim() || p.title,
@@ -290,7 +298,7 @@ export function mount(main, ctx) {
     } catch (err) {
       // The editor shows what this throws, so the message must be the whole
       // story: a 422 carries one line for each item that is wrong.
-      throw new Error(errorText(err));
+      throw new Error(routeError(err));
     }
     toast('Playlist saved — the screen picks it up on the next item');
     await load();          // new titles and sizes, without taking the editor away
@@ -313,7 +321,7 @@ export function mount(main, ctx) {
       toast(`${title} is ready. Add files to it.`);
       await load({ reopen: true });
     } catch (err) {
-      toast(errorText(err), 'danger');
+      toast(routeError(err), 'danger');
     }
   }
 
@@ -334,7 +342,7 @@ export function mount(main, ctx) {
       await load({ reopen: true });
       ctx.store.refresh();
     } catch (err) {
-      toast(errorText(err), 'danger');
+      toast(routeError(err), 'danger');
     }
   }
 
@@ -357,7 +365,7 @@ export function mount(main, ctx) {
       await load({ reopen: true });
       ctx.store.refresh();
     } catch (err) {
-      toast(errorText(err), 'danger');
+      toast(routeError(err), 'danger');
     }
   }
 

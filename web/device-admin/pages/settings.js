@@ -21,13 +21,6 @@ import { notInThisBuild } from '../util.js';
 
 const MASK = '********';
 
-/* The settings that the fleet server owns while the device is paired (D48).
-   This list is the copy of internal/device/syncer/managed.go: PUT /api/config
-   refuses the whole body with 403 when one of these changes, and it names no
-   field, so the page cannot learn the list from the answer. Change both at the
-   same time. */
-const MANAGED_HELP = 'The control server manages this while the device is paired. Unpair to take it back.';
-
 const TRANSITIONS = [
   ['crossfade', 'Crossfade'], ['cut', 'Hard cut'],
   ['push-left', 'Push left'], ['push-right', 'Push right'],
@@ -48,6 +41,11 @@ export function mount(main, ctx) {
   let gone = false;
   const errors = new Map();   // field path -> the element that shows its message
 
+  /* The fields that GET /api/pair names in managed_fields, while this device is
+     paired. The list comes from the fleet manifest and can get shorter, so this
+     page holds no copy of it (D48): it only maps a field path to a control. */
+  let managedFields = new Set();
+
   const banners = h('div');
   const result = h('div');
   const form = h('div', { class: 'pp-stack' });
@@ -62,7 +60,9 @@ export function mount(main, ctx) {
     const was = paired;
     paired = !!status.paired;
     if (!cfg) return;
-    if (was !== paired) { applyPaired(); renderPairing(); }
+    // The pairing flipped, so managed_fields is stale: read it again before the
+    // controls and the notes change.
+    if (was !== paired) readPair().then(() => { if (!gone) { applyPaired(); renderPairing(); } });
     renderHints();
   });
 
@@ -219,15 +219,14 @@ export function mount(main, ctx) {
   const cUpdates = toggle('Install updates on its own', 'Off is the safe default: you decide when a screen changes. An update that will not come up rolls itself back.');
   const cLogging = toggle('Keep system logs on the stick', 'Normally the logs stay in memory to spare the flash. Turn this on only while chasing a fault that survives a reboot.');
 
-  // The cards that the fleet server owns while the device is paired (D48).
+  // The notes next to the fields that the fleet server owns while the device is
+  // paired (D48). Their text names the server, so it is set at render time.
   const managedNote = () => h('div', {
     class: 'pp-note', hidden: true,
     style: { 'border-radius': '8px', 'margin-bottom': '14px' },
-    text: MANAGED_HELP,
   });
   const playbackNote = managedNote();
   const screenTimesNote = managedNote();
-  const updatesNote = managedNote();
 
   const dirtyNote = h('span', { class: 'pp-pe__dirty' });
   const saveBtn = h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'Save settings', disabled: true, onClick: save });
@@ -357,7 +356,7 @@ export function mount(main, ctx) {
           h('div', { style: { 'border-top': '1px solid var(--pp-border-faint)', 'margin-top': '14px', 'padding-top': '14px' } }, cSSH),
         ],
       }),
-      card({ title: 'Updates', body: [updatesNote, cUpdates] }),
+      card({ title: 'Updates', body: [cUpdates] }),
       card({ title: 'Logging', body: [cLogging] }));
 
     fill(staticBlock,
@@ -513,18 +512,37 @@ export function mount(main, ctx) {
       : 'No display answers at the moment, so the device cannot say which method will work.');
   }
 
-  /* What the fleet server owns while the device is paired (D48). Rotation,
-     sound, network and the output mode stay with this page: pushing display
-     settings across a fleet is how a screen that nobody can see gets bricked. */
+  /* The field path of GET /api/pair's managed_fields -> the control it owns on
+     this page. Everything not named here stays enabled while paired: the other
+     playback fields, shuffle, the nightly restart and auto update are the local
+     defaults of this screen, not the fleet's (D48). "schedule" has no control
+     here: the whole rules editor is the Schedule page. */
+  const MANAGED_CONTROLS = {
+    'playback.default_playlist': [cDefault],
+    'display.on_time': [cOnTime],
+    'display.off_time': [cOffTime],
+    'display.power_days': [cPowerDays],
+  };
+
+  function setControlDisabled(control, on) {
+    if (typeof control.setDisabled === 'function') control.setDisabled(on);
+    else control.disabled = on;
+  }
+
+  /* Disables exactly the controls that managed_fields names, and shows the
+     note that says which server owns them next to each disabled group. */
   function applyPaired() {
-    const fleet = [cDefault, cTransition, cTransitionMS, cImageDuration, cNightly, cOnTime, cOffTime];
-    for (const control of fleet) control.disabled = paired;
-    cShuffle.input.disabled = paired;
-    cUpdates.input.disabled = paired;
-    cPowerDays.setDisabled(paired);
-    setShown(playbackNote, paired);
-    setShown(screenTimesNote, paired);
-    setShown(updatesNote, paired);
+    for (const [path, controls] of Object.entries(MANAGED_CONTROLS)) {
+      const on = managedFields.has(path);
+      for (const control of controls) setControlDisabled(control, on);
+    }
+    const server = (pairState && pairState.server_name) || 'The control server';
+    const text = `${server} manages this while the device is paired. Unpair to take it back.`;
+    setText(playbackNote, text);
+    setShown(playbackNote, managedFields.has('playback.default_playlist'));
+    setText(screenTimesNote, text);
+    setShown(screenTimesNote, ['display.on_time', 'display.off_time', 'display.power_days']
+      .some((path) => managedFields.has(path)));
   }
 
   /* --------------------------------------------------------------- the errors */
@@ -606,17 +624,15 @@ export function mount(main, ctx) {
       showApplied(applied);
       ctx.store.refresh();
     } catch (err) {
-      if (err.fields) { showErrors(err.fields); toast('Some settings are not correct.', 'danger'); }
-      else if (err.status === 403) {
-        // PUT /api/config refuses the whole body when it changes a field that the
-        // fleet server owns, and it names no field. Say which cards those are.
-        fill(result, banner({
-          kind: 'warn',
-          title: 'The control server owns one of these settings',
-          body: `Nothing was saved. ${MANAGED_HELP} The cards with a green note are the ones it owns: the playlist that plays when nothing is scheduled, the item settings, the screen times and the updates.`,
-        }));
-        toast('Nothing was saved: the server owns one of these settings.', 'danger');
-      } else toast(errorText(err), 'danger');
+      /* PUT /api/config refuses the whole body with 403 when it changes a field
+         that the fleet server owns, and it names every one of those fields in
+         `fields`, in the shape of a 422. Reuse the same field-error display, and
+         say the one sentence of the refusal in a toast (D48). Signing out stays
+         a matter for 401 only. */
+      if (err.fields && err.fields.length) showErrors(err.fields);
+      if (err.status === 403) toast(err.message, 'danger');
+      else if (err.fields && err.fields.length) toast('Some settings are not correct.', 'danger');
+      else toast(errorText(err), 'danger');
     } finally {
       touch();
     }
@@ -691,6 +707,9 @@ export function mount(main, ctx) {
       pairAvailable = false;
       pairState = null;
     }
+    // managed_fields is present only while paired (D48). Anything else is an
+    // empty set, so every control on this page stays enabled.
+    managedFields = new Set((pairState && pairState.managed_fields) || []);
   }
 
   /* The pending state is the only one that polls. The timer must stop on EVERY
@@ -702,7 +721,11 @@ export function mount(main, ctx) {
     pairTimer = 0;
   }
 
-  readPair().catch(() => { pairAvailable = false; }).then(() => { if (!gone && cfg) renderPairing(); });
+  readPair().catch(() => { pairAvailable = false; managedFields = new Set(); }).then(() => {
+    if (gone) return;
+    applyPaired();
+    if (cfg) renderPairing();
+  });
 
   function renderPairing() {
     const status = ctx.store.status || {};
@@ -809,14 +832,23 @@ export function mount(main, ctx) {
       /* The daemon answers with the whole state, and its address is the one that
          it cleaned up: no slash at the end, no fragment. */
       pairState = out && out.status ? out : { status: 'unpaired', server_url: url };
+      managedFields = new Set((pairState && pairState.managed_fields) || []);
       pairAvailable = true;
+      applyPaired();
       toast(out.status === 'paired' ? 'Paired.' : 'Waiting for the server to let this device in.');
       await reloadConfig();
       renderPairing();
       ctx.store.refresh();
     } catch (err) {
       if (notInThisBuild(err)) { pairAvailable = false; renderPairing(); }
-      else toast(errorText(err), 'danger');
+      else if (err.status === 409) {
+        // Another tab, or the fallback screen, paired this device first. Read
+        // the state it left behind instead of guessing at it.
+        toast('This device is already paired. Unpair it first.', 'danger');
+        await readPair();
+        applyPaired();
+        renderPairing();
+      } else toast(errorText(err), 'danger');
     } finally {
       button.disabled = false;
     }
@@ -861,6 +893,8 @@ export function mount(main, ctx) {
     try {
       await api('DELETE', '/api/pair');
       pairState = { status: 'unpaired' };
+      managedFields = new Set();
+      applyPaired();
       /* The daemon takes the address and the token out of portapixel.toml. Read
          the file back instead of guessing what it now holds. */
       await reloadConfig();

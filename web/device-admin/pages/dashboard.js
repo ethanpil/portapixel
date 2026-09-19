@@ -24,6 +24,7 @@ const CODE = {
   timezone: 'timezone-utc',
   clock: 'clock-unsynced',
   shadow: 'config-shadow',
+  managed: 'config-managed-ignored',
   playlist: 'playlist-problem',
   hardware: 'hardware-changed',
 };
@@ -45,8 +46,8 @@ function dismissNotice(id) {
 /* The codes that a card of this page already says in its own words. They are
    dropped from the list of other warnings so that nothing is said twice. */
 const SAID_ELSEWHERE = new Set([
-  CODE.web, CODE.root, CODE.timezone, CODE.clock, CODE.shadow, CODE.playlist,
-  CODE.hardware,
+  CODE.web, CODE.root, CODE.timezone, CODE.clock, CODE.shadow, CODE.managed,
+  CODE.playlist, CODE.hardware,
 ]);
 
 const BROWSER_STATE = {
@@ -244,6 +245,7 @@ export function mount(main, ctx) {
       web: hasCode(CODE.web),
       root: hasCode(CODE.root),
       shadow: !!status.config_from_shadow,
+      managed: hasCode(CODE.managed),
       timezone: (status.timezone || 'UTC') === 'UTC',
       clock: status.clock_synced === false,
       problems: problems.length,
@@ -272,6 +274,11 @@ export function mount(main, ctx) {
         title: 'Running from the backup settings',
         body: ['portapixel.toml on the stick is missing or cannot be read, so the device runs from the last good copy it keeps for itself. Open Settings and save once: that writes a good file back onto the stick.'],
         actions: [h('a', { class: 'pp-btn pp-btn--danger', href: '#/settings', text: 'Open Settings' })],
+      }) : null,
+      has.managed ? banner({
+        kind: 'warn',
+        title: 'A local setting is not used',
+        body: 'A setting in portapixel.toml is managed by the fleet server, so the device does not use the local value.',
       }) : null,
       has.timezone ? banner({
         kind: 'warn',
