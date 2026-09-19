@@ -4,13 +4,12 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
-- Add `portapixel-server`: database, media store, release mirror, device API, admin API, route tests and deployment files.
-- Add the fleet server: `cmd/portapixel-server`, `internal/server/{db,api,admin,media,releases}` and `deploy/`. Three pairing flows, manifest resolution, release mirroring with signature checks, and the admin API for the server UI.
-- Fix 29 code review findings in the daemon and the player (8f4431f to b25a1cb). `/media/` does not follow a link out of the media root and serves only image and video files.
-- Add the device admin UI and its development server.
-- Add the QEMU boot test and the builder VM.
-- Add the image builder, the boot files, the OpenRC services and first boot.
-- Add the package list and the installer. Each name is checked on Alpine 3.23.2.
+- Add `portapixel-server` and its deployment files (00213b6 to b6d61f7).
+- Fix 29 code review findings in the daemon and the player (8f4431f to b25a1cb).
+- Add the device admin UI and its development server (7d3d12d, 915aa73).
+- Add the QEMU boot test and the builder VM (1e5048d).
+- Add the image builder, the boot files and first boot (3a1d37d to 6957d95).
+- Add the package list and the installer (2c2a9eb).
 - Fix the remaining review findings in `web/shared` (4396d0f).
 - Ignore a refused chmod only on a filesystem without modes. Add `TotalBytes` (6148e24).
 - Repair bad config values one field at a time (7091201).
