@@ -11,14 +11,37 @@ description="PortaPixel device daemon"
 # then supervises the browser. Nothing else supervises anything.
 supervisor="supervise-daemon"
 respawn_delay=5
-respawn_max=0          # 0 = no limit. A signage box must always come back.
+# 0 = no limit. A signage box must always come back. supervise-daemon only
+# counts crashes when respawn_period is set as well, so leaving the period out
+# is what makes this unlimited. Do not add respawn_period.
+respawn_max=0
 
-command="/opt/portapixel/current/portapixeld"
-command_args="run --media ${PP_MEDIA} --state ${PP_STATE} --run ${PP_RUN} --releases ${PP_RELEASES}"
-command_background=false
+# Defaults, so a missing or partly written /etc/conf.d/portapixeld cannot give
+# the daemon an empty --media. Go's flag package would then read the next flag
+# name as the value and the daemon would write to the wrong place.
+: "${PP_MEDIA:=/media/ppmedia}"
+: "${PP_STATE:=/var/lib/portapixel}"
+: "${PP_RUN:=/run/portapixel}"
+: "${PP_RELEASES:=/opt/portapixel}"
+: "${PP_KIOSK_USER:=kiosk}"
+: "${PP_KIOSK_CACHE:=/var/cache/kiosk}"
+: "${PP_KIOSK_RUNTIME:=/run/user/1300}"
+
+command="${PP_RELEASES}/current/portapixeld"
+# The quotes are inside the string on purpose: supervise-daemon puts this
+# through eval, so a path with a space would become two arguments.
+command_args="run --media \"${PP_MEDIA}\" --state \"${PP_STATE}\" --run \"${PP_RUN}\" --releases \"${PP_RELEASES}\" --kiosk-user \"${PP_KIOSK_USER}\" --kiosk-cache \"${PP_KIOSK_CACHE}\""
 pidfile="/run/portapixeld.pid"
 output_log="/var/log/portapixeld.log"
 error_log="/var/log/portapixeld.log"
+
+# Stop schedule. Without "retry" supervise-daemon sends TERM, waits about five
+# seconds, then sends KILL. The daemon needs longer. It gives the HTTP server a
+# grace period, and only then tells the browser to stop. A KILL at five seconds
+# ends the daemon before it reaches the browser. cage and Chromium then stay as
+# orphans and hold DRM master, and the next start finds no display. An update
+# restarts the service, so the whole A/B flow depends on this line.
+retry="TERM/25/KILL/5"
 
 depend() {
 	# The media partition holds the config and the playlists.
@@ -30,7 +53,25 @@ depend() {
 	use net dbus seatd
 }
 
+gate_pidfile="/run/portapixel-health-gate.pid"
+
 start_pre() {
+	# Arm the update health gate FIRST, and before the binary check below.
+	# It must run even when this start fails. A release whose binary cannot run
+	# at all is the release that most needs a rollback. OpenRC does not run
+	# start_post when the start fails. The gate exits at once when no update is
+	# pending, so a normal boot pays nothing. It runs in the background, so it
+	# never holds up the first picture.
+	if [ -f "${PP_RELEASES}/.swap-pending" ]; then
+		start-stop-daemon --start --background \
+			--make-pidfile --pidfile "$gate_pidfile" \
+			--exec /usr/libexec/portapixel/health-gate.sh || true
+	fi
+	if [ ! -x "$command" ]; then
+		eerror "no daemon binary at $command"
+		eerror "this image was built with no --binary, or the current link is broken"
+		return 1
+	fi
 	checkpath -d -m 0755 "${PP_RUN}"
 	checkpath -d -m 0755 "${PP_RELEASES}/health"
 	checkpath -d -m 0755 "${PP_STATE}"
@@ -49,10 +90,22 @@ start_pre() {
 	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_RUNTIME}"
 }
 
-start_post() {
-	# Watch the health marker of a pending release and roll back when it does
-	# not appear (plan section 15). The gate detaches, so it cannot hold up the
-	# boot, and it does nothing at all when no update is pending.
-	start-stop-daemon --start --background \
-		--exec /usr/libexec/portapixel/health-gate.sh
+stop_pre() {
+	# Stop the gate before the daemon goes down. The gate ends with
+	# "rc-service portapixeld restart", so a gate left running would start again
+	# a daemon that an operator stopped on purpose.
+	if [ -f "$gate_pidfile" ]; then
+		start-stop-daemon --stop --quiet --pidfile "$gate_pidfile" || true
+		rm -f "$gate_pidfile"
+	fi
+}
+
+stop_post() {
+	# The daemon signals its own browser. A daemon that was killed cannot do it.
+	# cage and Chromium run in a process group of their own, as the kiosk user.
+	# They would stay as orphans and hold DRM master. The next start would then
+	# find no display.
+	pkill -KILL -u "${PP_KIOSK_USER}" 2>/dev/null || true
+	rm -f "${PP_KIOSK_RUNTIME}/wayland-0" "${PP_KIOSK_RUNTIME}/wayland-0.lock"
+	return 0
 }
