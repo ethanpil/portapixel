@@ -21,10 +21,10 @@ const ThumbWidth = 480
 
 // maxPixels is the largest picture that the server decodes.
 //
-// This is the guard against a decompression bomb: a PNG of a few kilobytes can
-// declare 60000 by 60000 pixels, and a decode of it would ask for 14 GB of
-// memory and stop the server. 50 million pixels covers every real photograph and
-// every 8K frame.
+// This is the guard against a decompression bomb. A PNG of a few kilobytes can
+// declare 60000 by 60000 pixels. A decode of it would ask for 14 GB of memory and
+// would stop the server. 50 million pixels covers every real photograph and every
+// 8K frame.
 const maxPixels = 50_000_000
 
 // thumbQuality is the JPEG quality of a thumbnail.
@@ -33,10 +33,10 @@ const thumbQuality = 82
 // makeThumb writes the thumbnail of one object. It gives the size of the
 // original picture and reports if it made a thumbnail.
 //
-// Every failure is quiet and gives false: a file that is not a picture, a
-// picture in a format that we cannot decode, a picture that declares too many
-// pixels, and a damaged file all take the same path. The caller treats a missing
-// thumbnail as normal, so there is nothing here for a caller to handle.
+// Every failure is quiet and gives false. A file that is not a picture, a picture
+// in a format that we cannot decode, a picture that declares too many pixels and a
+// damaged file all take the same path. The caller treats a missing thumbnail as
+// normal, so there is nothing here for a caller to handle.
 func (s *Store) makeThumb(objectPath, sha string) (width, height int, ok bool) {
 	f, err := os.Open(objectPath)
 	if err != nil {
@@ -80,7 +80,12 @@ func (s *Store) makeThumb(objectPath, sha string) (width, height int, ok bool) {
 		os.Remove(tmpName)
 		return cfg.Width, cfg.Height, false
 	}
-	if err := os.Rename(tmpName, s.ThumbPath(sha)); err != nil {
+	dest, err := s.ThumbPath(sha)
+	if err != nil {
+		os.Remove(tmpName)
+		return cfg.Width, cfg.Height, false
+	}
+	if err := os.Rename(tmpName, dest); err != nil {
 		os.Remove(tmpName)
 		return cfg.Width, cfg.Height, false
 	}
@@ -90,15 +95,15 @@ func (s *Store) makeThumb(objectPath, sha string) (width, height int, ok bool) {
 
 // scale makes a smaller copy of src, at most maxWidth pixels wide.
 //
-// It takes the mean of the pixels of each source box, which is what a box filter
-// is. A nearest-neighbour copy would drop most of the pixels of a large
-// photograph and give a thumbnail full of stair steps. A picture that is already
-// small enough goes through without a change.
+// It takes the mean of the pixels of each source box. That is a box filter. A
+// nearest-neighbour copy would drop most of the pixels of a large photograph and
+// would give a thumbnail full of stair steps. A picture that is already small
+// enough goes through without a change.
 //
-// The work is in the sRGB values and not in a linear light space. A thumbnail of
-// a photograph is a little darker than a fully correct one, which nobody sees at
-// this size, and the correct version would need a table of 256 values and the
-// inverse of it for no gain that this page shows.
+// The work is in the sRGB values and not in a linear light space. A thumbnail of a
+// photograph is then a little darker than a fully correct one. Nobody sees the
+// difference at this size. A correct version would need a table of 256 values and
+// its inverse, for no gain on this page.
 func scale(src image.Image, maxWidth int) image.Image {
 	b := src.Bounds()
 	sw, sh := b.Dx(), b.Dy()

@@ -13,21 +13,27 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
+	"github.com/ethanpil/portapixel/internal/store"
 )
 
 // Reserve is the free space that the store keeps back. An upload that would take
-// the disk below it is refused before it starts.
+// the disk below it is refused.
 //
-// The server has a database, a write-ahead log and the release mirror on the
-// same disk. A full disk stops the whole fleet, so the store gives up an upload
-// long before that.
+// The server has a database, a write-ahead log and the release mirror on the same
+// disk. A full disk stops the whole fleet, so the store gives up an upload long
+// before that.
 const Reserve = 512 << 20
 
 // ErrNoSpace says that the upload does not fit.
 var ErrNoSpace = errors.New("there is not enough free space for this file")
 
-// ErrTooLarge says that the body is longer than the limit of the store.
-var ErrTooLarge = errors.New("this file is longer than the limit of the server")
+// ErrBadHash says that a value is not a SHA-256 in the form that the store uses.
+var ErrBadHash = errors.New("that is not a SHA-256 value of 64 lower case hex characters")
+
+// tmpDirName is the directory of the part files of an upload, under the object
+// root. Every object lives under the same root, so the rename at the end of an
+// upload stays inside one filesystem.
+const tmpDirName = "tmp"
 
 // Store is the media store under one directory.
 type Store struct {
@@ -35,9 +41,6 @@ type Store struct {
 	root string
 	// thumbs holds the thumbnails at <thumbs>/<sha>.jpg.
 	thumbs string
-	// MaxBytes is the largest object that the store takes. Zero means "only the
-	// free space decides".
-	MaxBytes int64
 }
 
 // New makes the directories of the store and gives it.
@@ -46,7 +49,7 @@ func New(dataDir string) (*Store, error) {
 		root:   filepath.Join(dataDir, "media"),
 		thumbs: filepath.Join(dataDir, "thumbs"),
 	}
-	for _, dir := range []string{s.root, s.thumbs} {
+	for _, dir := range []string{s.root, s.thumbs, filepath.Join(s.root, tmpDirName)} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("make %s: %w", dir, err)
 		}
@@ -57,20 +60,37 @@ func New(dataDir string) (*Store, error) {
 // Root gives the object directory. The health page probes it for writability.
 func (s *Store) Root() string { return s.root }
 
-// Path gives the file name of one object. The caller checks the hash first with
-// db.ValidSHA256: a value from a request must never reach a file path.
-func (s *Store) Path(sha string) string {
-	return filepath.Join(s.root, sha[:2], sha)
+// Thumbs gives the thumbnail directory.
+func (s *Store) Thumbs() string { return s.thumbs }
+
+// Path gives the file name of one object.
+//
+// The store checks the hash itself. A value from a URL path becomes a file name
+// here, so a caller that forgot the check must not be able to reach a file, and a
+// short value must not be able to make this function read out of range.
+func (s *Store) Path(sha string) (string, error) {
+	if !store.IsSHA256(sha) {
+		return "", ErrBadHash
+	}
+	return filepath.Join(s.root, sha[:2], sha), nil
 }
 
 // ThumbPath gives the file name of one thumbnail.
-func (s *Store) ThumbPath(sha string) string {
-	return filepath.Join(s.thumbs, sha+".jpg")
+func (s *Store) ThumbPath(sha string) (string, error) {
+	if !store.IsSHA256(sha) {
+		return "", ErrBadHash
+	}
+	return filepath.Join(s.thumbs, sha+".jpg"), nil
 }
 
-// Has reports if the store holds this object.
+// Has reports if the store holds this object. A hash of the wrong shape gives
+// false: nothing of that name can be in the store.
 func (s *Store) Has(sha string) bool {
-	info, err := os.Stat(s.Path(sha))
+	path, err := s.Path(sha)
+	if err != nil {
+		return false
+	}
+	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
 }
 
@@ -91,24 +111,32 @@ type Result struct {
 // Put streams body into the store and gives what it made.
 //
 // The bytes go to a temporary file in the directory of the object, so the rename
-// at the end cannot cross a filesystem. The hash grows while the bytes arrive,
-// so the file is never read a second time. The name of the object comes from
-// those bytes and from nothing that the client said, which is what makes the
-// store content-addressed.
+// at the end cannot cross a filesystem. The hash grows while the bytes arrive, so
+// the file is never read a second time. The name of the object comes from those
+// bytes and from nothing that the client said, which is what makes the store
+// content-addressed.
 //
-// declaredSize is the Content-Length of the request, or 0 when it is not known.
-// Put uses it only for the free-space check.
+// declaredSize is the Content-Length of the request. It is negative when the
+// length is not known, which is what a chunked body gives. Then the only limit is
+// the free space.
+//
+// There is no configured maximum size. The free space less Reserve is the limit,
+// which is what D27 says: "uploads are streamed and limited only by disk". The
+// body always goes through a reader with that limit on it, so a body that lies
+// about its length, or that declares nothing at all, stops at the same place.
 func (s *Store) Put(body io.Reader, origName string, declaredSize int64) (Result, error) {
-	if s.MaxBytes > 0 && declaredSize > s.MaxBytes {
-		return Result{}, ErrTooLarge
-	}
-	if err := s.checkSpace(declaredSize); err != nil {
+	room, known, err := s.room()
+	if err != nil {
 		return Result{}, err
 	}
+	if known {
+		if declaredSize > 0 && declaredSize > room {
+			return Result{}, fmt.Errorf("%w: the file declares %d bytes and the disk has %d free, less the reserve of %d",
+				ErrNoSpace, declaredSize, room+Reserve, Reserve)
+		}
+	}
 
-	// The temporary file goes in a shard directory. Every object of that shard
-	// lives there, so the rename stays inside one filesystem.
-	tmpDir := filepath.Join(s.root, "tmp")
+	tmpDir := filepath.Join(s.root, tmpDirName)
 	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
 		return Result{}, fmt.Errorf("make %s: %w", tmpDir, err)
 	}
@@ -121,23 +149,26 @@ func (s *Store) Put(body io.Reader, origName string, declaredSize int64) (Result
 	defer func() {
 		tmp.Close()
 		if !committed {
+			// A failed upload takes its part file with it. Without this a disk
+			// that filled up would stay full of the attempt that filled it.
 			os.Remove(tmpName)
 		}
 	}()
 
 	hash := sha256.New()
 	var reader io.Reader = body
-	if s.MaxBytes > 0 {
-		// One byte more than the limit, so a body that gives no Content-Length
-		// and then sends too much is caught as well.
-		reader = io.LimitReader(body, s.MaxBytes+1)
+	if known {
+		// One byte more than the room, so a body that goes over it is an error
+		// and not a file that got cut.
+		reader = io.LimitReader(body, room+1)
 	}
 	size, err := io.Copy(io.MultiWriter(tmp, hash), reader)
 	if err != nil {
 		return Result{}, fmt.Errorf("read the upload: %w", err)
 	}
-	if s.MaxBytes > 0 && size > s.MaxBytes {
-		return Result{}, ErrTooLarge
+	if known && size > room {
+		return Result{}, fmt.Errorf("%w: the upload passed the %d bytes that the disk has free, less the reserve of %d",
+			ErrNoSpace, room, Reserve)
 	}
 	if size == 0 {
 		return Result{}, errors.New("the upload has no bytes in it")
@@ -152,7 +183,10 @@ func (s *Store) Put(body io.Reader, origName string, declaredSize int64) (Result
 	sha := hex.EncodeToString(hash.Sum(nil))
 	res := Result{SHA256: sha, Size: size, MIME: TypeOf(origName, tmpName)}
 
-	dest := s.Path(sha)
+	dest, err := s.Path(sha)
+	if err != nil {
+		return Result{}, err
+	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		return Result{}, fmt.Errorf("make %s: %w", filepath.Dir(dest), err)
 	}
@@ -178,37 +212,47 @@ func (s *Store) Put(body io.Reader, origName string, declaredSize int64) (Result
 	return res, nil
 }
 
+// room gives the bytes that an upload may take, and says if the answer is known.
+// The free space is not known on every system; then the filesystem is the only
+// limit, and it still gives an error when it fills up.
+func (s *Store) room() (int64, bool, error) {
+	free, err := fsutil.FreeBytes(s.root)
+	if err != nil {
+		return 0, false, nil
+	}
+	if free <= Reserve {
+		return 0, true, fmt.Errorf("%w: the disk has %d bytes free and the reserve is %d",
+			ErrNoSpace, free, Reserve)
+	}
+	// free is above Reserve, so the difference fits in an int64 on every disk
+	// that exists.
+	return int64(free - Reserve), true, nil
+}
+
 // Delete removes one object and its thumbnail. The caller checks first that no
 // playlist holds the object.
 func (s *Store) Delete(sha string) error {
-	if err := os.Remove(s.Path(sha)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.Remove(s.ThumbPath(sha)); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
-// checkSpace refuses an upload that would leave less than Reserve free.
-func (s *Store) checkSpace(size int64) error {
-	free, err := fsutil.FreeBytes(s.root)
+	path, err := s.Path(sha)
 	if err != nil {
-		// The free space is not known on every system. An upload must not fail
-		// because of that; the filesystem still gives an error if it fills up.
-		return nil
+		return err
 	}
-	if free < uint64(size)+Reserve {
-		return fmt.Errorf("%w: the file needs %d bytes and the disk has %d free, less the reserve of %d",
-			ErrNoSpace, size, free, Reserve)
+	thumb, err := s.ThumbPath(sha)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(thumb); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
 }
 
 // TypeOf says what media type an object holds. The extension answers first,
 // because it is what the player uses to choose an image element or a video
-// element. A name with no useful extension gets the answer of http.DetectContentType,
-// which reads the first bytes of the file.
+// element. A name with no useful extension gets the answer of
+// http.DetectContentType, which reads the first bytes of the file.
 func TypeOf(origName, path string) string {
 	if ext := strings.ToLower(filepath.Ext(origName)); ext != "" {
 		if kind := mime.TypeByExtension(ext); kind != "" {

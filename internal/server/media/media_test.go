@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"hash/crc32"
 	"image"
 	"image/color"
 	"image/jpeg"
 	"image/png"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func newStore(t *testing.T) *Store {
@@ -45,10 +48,14 @@ func TestPutNamesTheObjectByItsHash(t *testing.T) {
 		t.Fatal("the store does not hold the object")
 	}
 	// The path shards on the first two characters of the hash.
-	if !strings.Contains(s.Path(res.SHA256), res.SHA256[:2]) {
-		t.Fatalf("the path is %s", s.Path(res.SHA256))
+	path, err := s.Path(res.SHA256)
+	if err != nil {
+		t.Fatal(err)
 	}
-	on, err := os.ReadFile(s.Path(res.SHA256))
+	if !strings.Contains(path, res.SHA256[:2]) {
+		t.Fatalf("the path is %s", path)
+	}
+	on, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(on, body) {
 		t.Fatalf("the file on the disk is %q, %v", on, err)
 	}
@@ -87,17 +94,142 @@ func TestPutRefusesAnEmptyBody(t *testing.T) {
 	}
 }
 
-func TestPutRefusesABodyOverTheLimit(t *testing.T) {
+// TestPutTakesABodyOfUnknownLength covers the chunked upload. Such a request gives
+// a Content-Length of -1, and the old code turned that into uint64(-1). The
+// free-space test then compared against 536870911 bytes and meant nothing.
+func TestPutTakesABodyOfUnknownLength(t *testing.T) {
 	s := newStore(t)
-	s.MaxBytes = 10
+	body := []byte("a body whose length the request did not declare")
 
-	// A body that declares its length is refused before it is read.
-	if _, err := s.Put(bytes.NewReader(make([]byte, 100)), "a.jpg", 100); err != ErrTooLarge {
-		t.Fatalf("the upload gave %v, want ErrTooLarge", err)
+	res, err := s.Put(bytes.NewReader(body), "a.bin", -1)
+	if err != nil {
+		t.Fatalf("an upload of unknown length gave %v", err)
 	}
-	// A body that declares nothing is refused while it is read.
-	if _, err := s.Put(bytes.NewReader(make([]byte, 100)), "a.jpg", 0); err != ErrTooLarge {
-		t.Fatalf("the upload with no length gave %v, want ErrTooLarge", err)
+	if res.Size != int64(len(body)) {
+		t.Fatalf("the size is %d, want %d", res.Size, len(body))
+	}
+	if !s.Has(res.SHA256) {
+		t.Fatal("the store does not hold the object")
+	}
+}
+
+// TestPathRefusesAHashOfTheWrongShape keeps the check inside the store. A caller
+// that forgot it must not reach a file, and a short value must never make Path read
+// out of range.
+func TestPathRefusesAHashOfTheWrongShape(t *testing.T) {
+	s := newStore(t)
+	for _, bad := range []string{"", "a", "../../server.toml", strings.Repeat("A", 64), strings.Repeat("g", 64)} {
+		if _, err := s.Path(bad); !errors.Is(err, ErrBadHash) {
+			t.Errorf("Path(%q) gave %v, want ErrBadHash", bad, err)
+		}
+		if _, err := s.ThumbPath(bad); !errors.Is(err, ErrBadHash) {
+			t.Errorf("ThumbPath(%q) gave %v, want ErrBadHash", bad, err)
+		}
+		if s.Has(bad) {
+			t.Errorf("Has(%q) says that the store holds it", bad)
+		}
+		if err := s.Delete(bad); !errors.Is(err, ErrBadHash) {
+			t.Errorf("Delete(%q) gave %v, want ErrBadHash", bad, err)
+		}
+	}
+}
+
+// TestPutLeavesNoPartFileAfterAFailure covers the connection that drops halfway
+// through an upload. A part file that stays behind keeps the disk full with the
+// attempt that filled it.
+func TestPutLeavesNoPartFileAfterAFailure(t *testing.T) {
+	s := newStore(t)
+	if _, err := s.Put(failingReader{}, "a.bin", -1); err == nil {
+		t.Fatal("a body that fails was accepted")
+	}
+	entries, err := os.ReadDir(filepath.Join(s.Root(), "tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("the temporary directory holds %d files after a failed upload", len(entries))
+	}
+}
+
+// failingReader gives one byte and then an error.
+type failingReader struct{}
+
+func (failingReader) Read(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	p[0] = 'x'
+	return 1, errors.New("the connection went away")
+}
+
+// TestSweepRemovesOrphans covers the blob that no row can reach.
+//
+// An upload writes the blob and then the row, and a delete removes the row and then
+// the file. Either failure leaves a file that no page counts and no route can
+// reach. On Windows a Range download that is in flight makes the delete fail, so
+// this happens on a normal day and not only after a crash.
+func TestSweepRemovesOrphans(t *testing.T) {
+	s := newStore(t)
+	body := pngOf(t, 40, 30)
+	res, err := s.Put(bytes.NewReader(body), "a.png", int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A blob that a row names is never touched, whatever its age.
+	known := map[string]bool{res.SHA256: true}
+	out, err := s.Sweep(known, time.Now().Add(2*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Blobs != 0 || !s.Has(res.SHA256) {
+		t.Fatalf("the sweep took an object that a row names: %+v", out)
+	}
+
+	// The row goes away. The blob is younger than the grace period, so the sweep
+	// leaves it: an upload that is in flight has no row yet either.
+	if out, err = s.Sweep(map[string]bool{}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if out.Blobs != 0 || !s.Has(res.SHA256) {
+		t.Fatalf("the sweep took a young object: %+v", out)
+	}
+
+	// An hour later it goes.
+	if out, err = s.Sweep(map[string]bool{}, time.Now().Add(2*orphanGrace)); err != nil {
+		t.Fatal(err)
+	}
+	if out.Blobs != 1 {
+		t.Fatalf("the sweep removed %d objects, want 1", out.Blobs)
+	}
+	if s.Has(res.SHA256) {
+		t.Fatal("the orphan is still there")
+	}
+	thumb, err := s.ThumbPath(res.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(thumb); err == nil {
+		t.Fatal("the thumbnail of the orphan is still there")
+	}
+}
+
+// TestSweepRemovesStalePartFiles covers the upload that a crash cut short.
+func TestSweepRemovesStalePartFiles(t *testing.T) {
+	s := newStore(t)
+	part := filepath.Join(s.Root(), "tmp", "upload12345")
+	if err := os.WriteFile(part, []byte("half an upload"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Sweep(map[string]bool{}, time.Now().Add(2*orphanGrace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Temps != 1 {
+		t.Fatalf("the sweep removed %d part files, want 1", out.Temps)
+	}
+	if _, err := os.Stat(part); err == nil {
+		t.Fatal("the part file is still there")
 	}
 }
 
@@ -132,7 +264,11 @@ func TestThumbnailOfAnImage(t *testing.T) {
 		t.Fatalf("the size is %d by %d", res.Width, res.Height)
 	}
 
-	f, err := os.Open(s.ThumbPath(res.SHA256))
+	thumb, err := s.ThumbPath(res.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(thumb)
 	if err != nil {
 		t.Fatalf("the thumbnail is not on the disk: %v", err)
 	}
@@ -163,7 +299,11 @@ func TestSmallImageKeepsItsSize(t *testing.T) {
 	if !res.HasThumb {
 		t.Fatal("a small image got no thumbnail")
 	}
-	f, err := os.Open(s.ThumbPath(res.SHA256))
+	thumb, err := s.ThumbPath(res.SHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(thumb)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +334,9 @@ func TestDecompressionBombIsRefused(t *testing.T) {
 	if res.Width != 40000 || res.Height != 40000 {
 		t.Fatalf("the header says %d by %d", res.Width, res.Height)
 	}
-	if _, err := os.Stat(s.ThumbPath(res.SHA256)); err == nil {
+	if thumb, pathErr := s.ThumbPath(res.SHA256); pathErr != nil {
+		t.Fatal(pathErr)
+	} else if _, err := os.Stat(thumb); err == nil {
 		t.Fatal("a thumbnail file is on the disk")
 	}
 	// The object itself is kept: it is the user's file, and only the thumbnail
@@ -267,7 +409,9 @@ func TestDeleteRemovesTheObjectAndTheThumbnail(t *testing.T) {
 	if s.Has(res.SHA256) {
 		t.Fatal("the object is still there")
 	}
-	if _, err := os.Stat(s.ThumbPath(res.SHA256)); err == nil {
+	if thumb, pathErr := s.ThumbPath(res.SHA256); pathErr != nil {
+		t.Fatal(pathErr)
+	} else if _, err := os.Stat(thumb); err == nil {
 		t.Fatal("the thumbnail is still there")
 	}
 	// A second delete is not a fault: the caller may retry.
