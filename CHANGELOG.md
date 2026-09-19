@@ -4,8 +4,8 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
-- Fix the faults that the first CI run found (760ef9d to 872455a). An update reads the version from `version --json`. The health gate cannot remove a good marker. The on-box installer adds no kernel.
-- Add the lint and release workflows for GitHub Actions and `docs/RELEASING.md`. The aarch64 image and the Docker image build for the first time.
+- Fix the faults that the first CI run found (760ef9d to 872455a). An update reads the version from `version --json`. The health gate cannot remove a good marker. The on-box installer adds no kernel. The tree does not build at commit a0fa2fc: it uses a type that the next commit, ff36380, adds. Skip a0fa2fc in a bisect.
+- Add the lint and release workflows for GitHub Actions and `docs/RELEASING.md` (43d3553, f983b59, c09fe86). The aarch64 image and the Docker image build for the first time.
 - Read the list of fleet fields from the daemon in the device admin UI (b4c17ea).
 - Add the README and the user documents (4932af3).
 - Fix the review findings in the OS layer (23f479c to e30b90e). The first boot grow of PPMEDIA is safe at each power cut. The health gate is fail safe. Add `acpid`.
