@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -295,16 +294,23 @@ func (m *Manager) verify(staging string, rel Release) (string, error) {
 	if err := os.Chmod(binary, 0o755); err != nil {
 		return "", fmt.Errorf("set the mode of %s: %w", asset, err)
 	}
-	// The binary is asked for its version on every path, and not only for a
-	// sideload that has no other source for it. The answer is the cross-check
-	// against the name that the source gave: a tag and the build that came out of it
-	// must agree, or the release installs under a name that the health gate does not
+	// The binary is asked what it is on every path, and not only for a sideload
+	// that has no other source for it. The answer is the cross-check against the
+	// name that the source gave: a tag and the build that came out of it must
+	// agree, or the release installs under a name that the health gate does not
 	// wait for.
-	version, err := m.opt.BinaryVersion(binary)
+	info, err := m.opt.BinaryVersion(binary)
 	if err != nil {
 		return "", fmt.Errorf("the release does not say which version it is: %w", err)
 	}
-	version = NormalizeVersion(version)
+	// The processor is a refusal of its own, with a message of its own. A mirror
+	// that holds the asset of another architecture gives a file with a good
+	// signature of this project, and that file installs and then never starts.
+	if info.Arch != m.opt.Arch {
+		return "", fmt.Errorf("this release holds a binary for %s and this device is %s: %w",
+			info.Arch, m.opt.Arch, ErrArch)
+	}
+	version := NormalizeVersion(info.Version)
 	if !ValidVersion(version) {
 		return "", fmt.Errorf("%q is not a release name that this device accepts", version)
 	}
@@ -558,25 +564,4 @@ func FlipSymlink(link, target string) error {
 	}
 	fsutil.SyncDir(filepath.Dir(link))
 	return nil
-}
-
-// readVersion runs a staged binary and reads the version that it prints. It runs
-// only after the signature check, so the file is a file of the project.
-//
-// A sideloaded bundle is three files with no version in any name (D52), and the
-// only place that holds the version is the binary itself.
-func readVersion(path string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, path, "version").Output()
-	if err != nil {
-		return "", err
-	}
-	// The subcommand prints one line. Take the last field, so that a line of the
-	// form "portapixeld 1.5.0" also works.
-	fields := strings.Fields(strings.TrimSpace(string(out)))
-	if len(fields) == 0 {
-		return "", errors.New("the binary printed no version")
-	}
-	return fields[len(fields)-1], nil
 }

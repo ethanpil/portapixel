@@ -98,7 +98,7 @@ func newWorld(t *testing.T, change func(*Options)) *world {
 		MarkBadRelease: func(v string) { w.bad[v] = true },
 		Restart:        func() error { w.restarts++; return nil },
 		Flip:           fileFlip,
-		BinaryVersion:  func(string) (string, error) { return "1.5.0", nil },
+		BinaryVersion:  func(string) (BinaryInfo, error) { return selfInfo("1.5.0"), nil },
 		FreeBytes:      func(string) (uint64, error) { return 1 << 30, nil },
 		Log:            func(string, string) {},
 	}
@@ -1087,11 +1087,33 @@ func TestApplyTwiceKeepsTheRunningRelease(t *testing.T) {
 	}
 }
 
+// A release whose binary is for another processor is its own refusal, with a
+// message of its own. A mirror that holds the asset of the other architecture
+// serves a file with a good signature of this project, and that file installs and
+// then never starts.
+func TestApplyRefusesABinaryOfAnotherArch(t *testing.T) {
+	w := newWorld(t, func(o *Options) {
+		o.BinaryVersion = func(string) (BinaryInfo, error) {
+			return BinaryInfo{Name: testBinary, Version: "1.5.0", Arch: "amd64"}, nil
+		}
+	})
+	b := w.newBundle("the new binary", false, false)
+	_, rel := b.serve(t, "1.5.0")
+
+	err := w.man.Apply(context.Background(), rel)
+	if !errors.Is(err, ErrArch) {
+		t.Fatalf("Apply() = %v, want ErrArch", err)
+	}
+	if got := w.current(); got != ReleasesDir+"/"+testRunning {
+		t.Errorf("current = %q, want the release that runs", got)
+	}
+}
+
 // The name of a release and the name that its binary reports must agree. The
 // checksum file cannot catch a mirror that named one release and served another.
 func TestApplyRefusesABinaryOfAnotherVersion(t *testing.T) {
 	w := newWorld(t, func(o *Options) {
-		o.BinaryVersion = func(string) (string, error) { return "1.6.0", nil }
+		o.BinaryVersion = func(string) (BinaryInfo, error) { return selfInfo("1.6.0"), nil }
 	})
 	b := w.newBundle("the new binary", false, false)
 	_, rel := b.serve(t, "1.5.0")

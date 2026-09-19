@@ -90,9 +90,9 @@ type Options struct {
 	// Flip moves a symlink in one step. "" uses FlipSymlink. A test on Windows
 	// gives a function that writes a small file instead.
 	Flip func(link, target string) error
-	// BinaryVersion gives the release name of a staged binary. "" runs the binary
-	// with the "version" argument. See readVersion.
-	BinaryVersion func(path string) (string, error)
+	// BinaryVersion gives what a staged binary says about itself. A nil function
+	// runs the binary with "version --json". See readBinaryInfo.
+	BinaryVersion func(path string) (BinaryInfo, error)
 	// FreeBytes gives the free space of a directory. "" uses fsutil.FreeBytes.
 	FreeBytes func(dir string) (uint64, error)
 	// SourceKind names the release source that this device may install from now:
@@ -157,7 +157,7 @@ func New(opt Options) *Manager {
 		opt.Flip = FlipSymlink
 	}
 	if opt.BinaryVersion == nil {
-		opt.BinaryVersion = readVersion
+		opt.BinaryVersion = readBinaryInfo
 	}
 	if opt.FreeBytes == nil {
 		opt.FreeBytes = fsutil.FreeBytes

@@ -1,9 +1,112 @@
 package updater
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"os/exec"
 	"strconv"
 	"strings"
 )
+
+// BinaryInfo is what a binary of this project says about itself. The subcommand
+// "version --json" prints exactly this shape, and the updater reads it before it
+// installs a release.
+//
+// Why a machine-readable form exists: the human line is
+// "portapixeld 1.5.0 amd64", and the first reader took the LAST field of it. It
+// then compared the processor name with the release name and refused every real
+// release with "the release says it is amd64 and the source called it 1.5.0". A
+// position in a line for a person is not a contract. This struct is the contract,
+// and the writer and the reader are in one package so the two cannot disagree.
+type BinaryInfo struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+	Arch    string `json:"arch"`
+}
+
+// JSON gives the one line that "version --json" prints, with the newline.
+//
+// The three fields are strings, so json.Marshal of this struct cannot fail. A
+// fault here would mean that the binary can say nothing about itself, and the
+// caller prints the error.
+func (i BinaryInfo) JSON() ([]byte, error) {
+	data, err := json.Marshal(i)
+	if err != nil {
+		return nil, err
+	}
+	return append(data, '\n'), nil
+}
+
+// maxVersionOutput is the most that a staged binary may print. The JSON line is
+// under 100 bytes. A binary that prints without end must not fill the memory of a
+// device with 512 MB.
+const maxVersionOutput = 4 << 10
+
+// readBinaryInfo runs a staged binary and reads what it says about itself. It
+// runs only after the signature check, so the file is a file of the project.
+//
+// A sideloaded bundle is three files with no version in any name (D52), and the
+// only place that holds the version is the binary itself.
+//
+// The child gets an empty environment and no input. It is a program that this
+// device is about to install: it must not see the settings of the daemon, and it
+// must not wait for a person to type. The context ends a binary that never stops,
+// and the cap ends one that never stops printing.
+func readBinaryInfo(path string) (BinaryInfo, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, path, "version", "--json")
+	cmd.Env = []string{}
+	cmd.Stdin = nil
+	pipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return BinaryInfo{}, err
+	}
+	if err := cmd.Start(); err != nil {
+		return BinaryInfo{}, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(pipe, maxVersionOutput+1))
+	if len(data) > maxVersionOutput {
+		// Stop the process now. Without this it blocks on a pipe that nobody reads
+		// and the caller waits for the whole timeout.
+		cancel()
+		_ = cmd.Wait()
+		return BinaryInfo{}, fmt.Errorf("the binary printed more than %d bytes", maxVersionOutput)
+	}
+	if err := cmd.Wait(); err != nil {
+		return BinaryInfo{}, err
+	}
+	if readErr != nil {
+		return BinaryInfo{}, readErr
+	}
+
+	var info BinaryInfo
+	if err := json.Unmarshal(data, &info); err != nil {
+		return BinaryInfo{}, fmt.Errorf("the binary answered %q and not the JSON of \"version --json\": %w",
+			shortText(data), err)
+	}
+	if info.Version == "" || info.Arch == "" {
+		return BinaryInfo{}, errors.New("the binary named no version and no processor")
+	}
+	return info, nil
+}
+
+// shortText gives the first line of an answer for an error message, cut to a
+// length that a log line can hold.
+func shortText(data []byte) string {
+	text := strings.TrimSpace(string(data))
+	if i := strings.IndexAny(text, "\r\n"); i >= 0 {
+		text = text[:i]
+	}
+	if len(text) > 80 {
+		text = text[:80]
+	}
+	return text
+}
 
 // CompareVersions compares two release names. It gives a value below zero when a
 // is older than b, zero when they are the same, and a value above zero when a is

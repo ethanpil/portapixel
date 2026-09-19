@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ethanpil/portapixel/internal/updater"
 	"github.com/ethanpil/portapixel/internal/version"
 )
 
@@ -44,8 +45,7 @@ func main() {
 	case "selftest":
 		os.Exit(selftestCommand(args))
 	case "version":
-		fmt.Printf("portapixel-server %s %s\n", version.Version, version.Arch())
-		os.Exit(0)
+		os.Exit(versionCommand(args))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -56,6 +56,29 @@ func main() {
 	}
 }
 
+// versionCommand prints the build identity.
+//
+// The line with no flag is for a person and its shape never changes:
+// "portapixel-server <version> <arch>". "--json" prints the machine-readable
+// form that internal/updater reads. The server replaces itself the same way that
+// a device does, so both commands answer this flag.
+func versionCommand(args []string) int {
+	if len(args) == 1 && args[0] == "--json" {
+		info := updater.BinaryInfo{Name: "portapixel-server", Version: version.Version, Arch: version.Arch()}
+		data, err := info.JSON()
+		if err != nil {
+			return fail("cannot say which version this build is: %v", err)
+		}
+		os.Stdout.Write(data)
+		return 0
+	}
+	if len(args) > 0 {
+		return fail("version takes no argument but --json")
+	}
+	fmt.Printf("portapixel-server %s %s\n", version.Version, version.Arch())
+	return 0
+}
+
 func usage() {
 	fmt.Fprint(os.Stderr, `portapixel-server -- the PortaPixel fleet server
 
@@ -63,7 +86,7 @@ Usage:
   portapixel-server run [flags]           the server. This is the default.
   portapixel-server set-password [flags]  read a new admin password and store its hash
   portapixel-server selftest [flags]      check the build, the data directory and the database
-  portapixel-server version
+  portapixel-server version [--json]      the build identity. --json is for a program.
 
 Run "portapixel-server <subcommand> -h" for the flags of a subcommand.
 `)
