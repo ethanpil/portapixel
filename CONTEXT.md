@@ -39,6 +39,38 @@ something that cost you time. Remove an entry when it is no longer true.
 
 ## 4. M0 results
 
+Proven on 2026-09-19 with a real image in QEMU (KVM, virtio-gpu, llvmpipe). Each line was
+checked with a screenshot of the virtual display or with the ops log.
+
+- The image boots with SeaBIOS and with OVMF. Chromium draws the player in `cage`.
+  `browser_state` is `running` 22 s after power on (BIOS, 2 GB) and 38 s (UEFI, 1 GB).
+- Rung 1 (CDP) works. A URL item goes to the page, stays for the dwell time and comes
+  back to the player at the next item. No relaunch occurs.
+- Rotation 90 and 270 through `wlr-randr` work. All content turns.
+- A killed browser is back in 1 s. A stopped browser (`kill -STOP`) is restarted after
+  31 s with no heartbeat. The nightly restart waits for an item boundary.
+- First boot runs one time. After a reboot the picture comes back.
+- The Chromium sandbox is complete. There is no `--no-sandbox` and no
+  `--disable-gpu-sandbox`. The user namespace sandbox works for the `kiosk` user.
+- No GPU flag is necessary. The default path draws correctly on virtio-gpu.
+- RAM: about 340 MB of anonymous memory plus 130 MB of tmpfs. 2 GB and 1 GB are good.
+  512 MB with no swap FAILS (Chromium error code 4, restart loop). 512 MB with 512 MB of
+  zram works, but 189 MB is in swap for the fallback screen alone. Do not promise the
+  Pi Zero 2 W.
+- Do not put `WAYLAND_DISPLAY` in the environment of `cage`. wlroots then selects its
+  nested backend, finds no parent compositor and stops. The screen stays black. Only an
+  outside client, `wlr-randr`, needs the variable.
+- Chromium 149 refuses a DevTools WebSocket (403) when the request has an `Origin` that
+  `--remote-allow-origins` does not name. `golang.org/x/net/websocket` always sends an
+  `Origin`. The flag names the loopback DevTools endpoint only, never `*`.
+- The daemon makes `HOME` for the kiosk user in the tmpfs. The init script must create
+  it. Chromium writes its crash reports there.
+- A status API that answers does not prove a picture. `player.js` once had a syntax
+  error: the screen was black and the status looked good. Use
+  `tests/qemu/boot-dev.sh shot` to see the screen. Check each player module with
+  `node --check` on a copy with the `.mjs` extension.
+- Not proven without real hardware: real GPU drivers, VA-API decode, CEC, DPMS, EDID and
+  `video_mode`, HDMI audio, WiFi, the aarch64 image, and the PPMEDIA grow on a real card.
 - Alpine 3.23 has no `cog` and no `wpewebkit`. The last branch with them is 3.21
   (WPE WebKit 2.40.5, from 2023). This is risk 1 of the plan's risk register. See
   section 3 for the decision.
