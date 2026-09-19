@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/fleet"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/sigverify"
@@ -62,6 +63,9 @@ func (m *Manager) Apply(ctx context.Context, rel Release) error {
 }
 
 func (m *Manager) apply(ctx context.Context, rel Release) error {
+	// The name of a tag and the name of the build that came out of it must be one
+	// name before any refusal reads it (see NormalizeVersion).
+	rel.Version = NormalizeVersion(rel.Version)
 	if err := m.refuse(rel); err != nil {
 		return err
 	}
@@ -129,6 +133,13 @@ func (m *Manager) refuse(rel Release) error {
 	if m.opt.PublicKey == "" {
 		return ErrNoKey
 	}
+	// A release of another source than the one that this device may use now. A
+	// check and an apply are minutes apart, and a device that paired between the
+	// two must install what its server approved and nothing else (D28).
+	if rel.Source != "sideload" && m.opt.SourceKind != nil && rel.Source != m.opt.SourceKind() {
+		return fmt.Errorf("this device takes its releases from %s now, and %q came from %s: %w",
+			m.opt.SourceKind(), rel.Version, rel.Source, ErrNoRelease)
+	}
 	if rel.Version == "" {
 		// A sideload. The version comes after the signature check.
 		return nil
@@ -144,6 +155,14 @@ func (m *Manager) refuse(rel Release) error {
 	// nothing to go back to.
 	if CompareVersions(rel.Version, m.opt.Running) <= 0 {
 		return fmt.Errorf("%s is not newer than %s: %w", rel.Version, m.opt.Running, ErrDowngrade)
+	}
+	// The same rule against the link and not against the process. A flip that
+	// worked and a restart that did not leaves current on the new release while the
+	// old process still runs. A second install would then point previous at the
+	// same directory as current, and prune would remove the only release that the
+	// gate could go back to.
+	if staged := m.currentVersion(); staged != "" && CompareVersions(rel.Version, staged) <= 0 {
+		return fmt.Errorf("%s is already staged as the next release: %w", staged, ErrDowngrade)
 	}
 	if err := m.space(rel.Size); err != nil {
 		return err
@@ -170,6 +189,13 @@ func (m *Manager) space(size int64) error {
 
 // stage puts the three files in the staging directory. A download gets the
 // checksum file first, so that the binary download can check its own bytes.
+//
+// The binary is downloaded into the download directory and moved into the staging
+// directory afterwards. The staging directory is made new for each attempt, and a
+// part file inside it went away with it: a release of 25 MB on a link of 2 Mbit/s
+// then started from zero at every attempt and never finished. The download
+// directory holds the part file across attempts, so a slow link needs many attempts
+// and not one long one (D24).
 func (m *Manager) stage(ctx context.Context, rel Release, staging string) error {
 	asset := m.AssetName()
 	if rel.Dir != "" {
@@ -197,9 +223,19 @@ func (m *Manager) stage(ctx context.Context, rel Release, staging string) error 
 	if err != nil {
 		return err
 	}
-	if err := store.Download(ctx, m.opt.Client, rel.BinaryURL, bearer,
-		filepath.Join(staging, asset), want, rel.Size); err != nil {
+	if err := os.MkdirAll(m.downloadDir(), 0o755); err != nil {
+		return fmt.Errorf("make %s: %w", m.downloadDir(), err)
+	}
+	holding := filepath.Join(m.downloadDir(), asset)
+	// A complete file from an attempt that failed after the download holds the bytes
+	// of some release, and nothing says which. The part file beside it is the resume
+	// and it stays.
+	os.Remove(holding)
+	if err := store.Download(ctx, m.opt.Client, rel.BinaryURL, bearer, holding, want, rel.Size); err != nil {
 		return fmt.Errorf("get %s: %w", asset, err)
+	}
+	if err := os.Rename(holding, filepath.Join(staging, asset)); err != nil {
+		return fmt.Errorf("move %s into the staging directory: %w", asset, err)
 	}
 	return nil
 }
@@ -214,11 +250,10 @@ func bearerFor(rel Release, address string) (string, error) {
 	if rel.Bearer == "" {
 		return "", nil
 	}
-	parsed, err := url.Parse(address)
-	if err != nil {
+	if _, err := url.Parse(address); err != nil {
 		return "", fmt.Errorf("the release address %q is not a URL: %w", address, err)
 	}
-	if rel.BearerHost == "" || parsed.Host != rel.BearerHost {
+	if rel.BearerOrigin == "" || !fleet.SameHost(address, rel.BearerOrigin) {
 		return "", nil
 	}
 	return rel.Bearer, nil
@@ -260,13 +295,16 @@ func (m *Manager) verify(staging string, rel Release) (string, error) {
 	if err := os.Chmod(binary, 0o755); err != nil {
 		return "", fmt.Errorf("set the mode of %s: %w", asset, err)
 	}
-	if rel.Version != "" {
-		return rel.Version, nil
-	}
+	// The binary is asked for its version on every path, and not only for a
+	// sideload that has no other source for it. The answer is the cross-check
+	// against the name that the source gave: a tag and the build that came out of it
+	// must agree, or the release installs under a name that the health gate does not
+	// wait for.
 	version, err := m.opt.BinaryVersion(binary)
 	if err != nil {
 		return "", fmt.Errorf("the release does not say which version it is: %w", err)
 	}
+	version = NormalizeVersion(version)
 	if !ValidVersion(version) {
 		return "", fmt.Errorf("%q is not a release name that this device accepts", version)
 	}
@@ -282,6 +320,11 @@ func (m *Manager) verify(staging string, rel Release) (string, error) {
 func (m *Manager) install(staging, version string) error {
 	final := filepath.Join(m.releasesDir(), version)
 
+	// The last lock on the rule of refuse: never install over the directory that
+	// current names. previous would then be current, and the gate could go nowhere.
+	if m.currentVersion() == version {
+		return fmt.Errorf("%s is the release that current names already: %w", version, ErrDowngrade)
+	}
 	if err := os.RemoveAll(final); err != nil {
 		return fmt.Errorf("remove %s: %w", final, err)
 	}
@@ -322,9 +365,19 @@ func (m *Manager) install(staging, version string) error {
 // "releases/1.4.0".
 func (m *Manager) currentTarget() string { return m.linkTarget(CurrentLink) }
 
-// prune removes every release directory that is neither current nor previous. A
-// device has 3.5 GB for the whole system, so two releases is the whole history
-// that it keeps (plan section 15).
+// currentVersion gives the release that the current link names, or "".
+func (m *Manager) currentVersion() string {
+	return strings.TrimPrefix(m.currentTarget(), ReleasesDir+"/")
+}
+
+// prune removes every release directory that is neither current nor previous nor
+// the release that runs. A device has 3.5 GB for the whole system, so two releases
+// is the whole history that it keeps (plan section 15).
+//
+// The release that runs is in the list for a reason. A flip that worked and a
+// restart that did not leaves current on the new release while the old process is
+// still the process that serves. Removing its directory takes the binary out from
+// under the service, and the health gate then has nothing to go back to.
 func (m *Manager) prune(keep string) {
 	previous := strings.TrimPrefix(m.linkTarget(PreviousLink), ReleasesDir+"/")
 	entries, err := os.ReadDir(m.releasesDir())
@@ -333,8 +386,11 @@ func (m *Manager) prune(keep string) {
 	}
 	for _, e := range entries {
 		name := e.Name()
-		if !e.IsDir() || name == keep || name == previous {
+		if !e.IsDir() || name == keep || name == previous || name == m.opt.Running {
 			continue
+		}
+		if strings.HasPrefix(name, ".") {
+			continue // the staging and the download directories of this package
 		}
 		if strings.HasSuffix(name, ".staging") {
 			continue // a staging directory of a run that is going on
@@ -392,6 +448,13 @@ func (m *Manager) CheckRollback() (string, bool) {
 		}
 		m.opt.Log("update.rolled-back", bad+" did not write a health marker; the device runs "+m.opt.Running+" and never installs "+bad+" again")
 		found = bad
+		// The marker is read one time. MarkBadRelease put the release in the state
+		// file, which is what refuses it for ever, so the file has done its work. A
+		// marker that stayed made the rollback banner come back at every boot for the
+		// life of the device.
+		if err := os.Remove(filepath.Join(m.healthDir(), name)); err != nil {
+			m.opt.Log("update.rolled-back.clear.fail", name+": "+err.Error())
+		}
 	}
 	if found == "" {
 		return "", false
@@ -410,6 +473,10 @@ func (m *Manager) fetchSmall(ctx context.Context, rel Release, address, dest str
 	if address == "" {
 		return fmt.Errorf("the release names no address for %s", filepath.Base(dest))
 	}
+	// A deadline for this one request. The client has no overall timeout, because
+	// the same client downloads the release binary.
+	ctx, cancel := context.WithTimeout(ctx, smallTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return err

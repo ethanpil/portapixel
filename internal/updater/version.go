@@ -94,6 +94,22 @@ func parseVersion(name string) (parts []int, rest string, ok bool) {
 	return parts, rest, true
 }
 
+// NormalizeVersion gives the release name that this device uses in a directory
+// name, in the pending marker and in the health marker.
+//
+// A tag can carry the letter that some projects put in front: the tag "v1.5.0"
+// builds a binary that says it is "1.5.0". Both names must become one name here.
+// Without that the release installs as releases/v1.5.0 and the gate waits for
+// health/v1.5.0.ok, while the daemon writes health/1.5.0.ok. The gate then rolls a
+// good release back and bans it for ever.
+func NormalizeVersion(name string) string {
+	text := strings.TrimSpace(name)
+	if len(text) > 1 && (text[0] == 'v' || text[0] == 'V') && text[1] >= '0' && text[1] <= '9' {
+		return text[1:]
+	}
+	return text
+}
+
 // ValidVersion reports if a release name is safe as a directory name and in a
 // URL. The name becomes a directory under <root>/releases, so a path step or a
 // separator in it would put a release somewhere else.

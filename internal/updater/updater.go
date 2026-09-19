@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/fleet"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
@@ -38,9 +39,13 @@ const (
 // file. A device that a release filled is a device that can write nothing.
 const spaceReserve = 64 << 20
 
-// httpTimeout is how long one request of the updater may take. The release check
-// must never hold anything up: nothing here is in the path of playback.
-const httpTimeout = 30 * time.Second
+// smallTimeout is how long one small request of the updater may take: the release
+// check, the signature and the checksum file. The release binary is not in it. A
+// limit on the whole download aborted every release on a slow link, because
+// http.Client.Timeout covers the body read as well (see fleet.NewClient).
+//
+// It is a var so that a test can lower it.
+var smallTimeout = 30 * time.Second
 
 // The refusals. Every one of them happens before the symlink flip.
 var (
@@ -90,6 +95,14 @@ type Options struct {
 	BinaryVersion func(path string) (string, error)
 	// FreeBytes gives the free space of a directory. "" uses fsutil.FreeBytes.
 	FreeBytes func(dir string) (uint64, error)
+	// SourceKind names the release source that this device may install from now:
+	// "fleet" for a paired device and "github" for a standalone one. A nil function
+	// switches the test off.
+	//
+	// It exists because a check and an apply are two steps with minutes between
+	// them. A device that paired in that time must not install the release that the
+	// GitHub check offered: its server approved another version, or none (D28).
+	SourceKind func() string
 
 	Log func(event, details string)
 	Now func() time.Time
@@ -108,6 +121,10 @@ type Options struct {
 // than one goroutine, and only one update runs at a time.
 type Manager struct {
 	opt Options
+
+	// sideload holds the one look at the sideload directory. It is not mu: the look
+	// itself calls Apply, which takes mu many times.
+	sideload sync.Mutex
 
 	mu    sync.Mutex
 	state manifest.UpdateState
@@ -134,7 +151,7 @@ func New(opt Options) *Manager {
 		opt.PublicKey = version.PublicKey
 	}
 	if opt.Client == nil {
-		opt.Client = &http.Client{Timeout: httpTimeout, CheckRedirect: dropBearerOnAnotherHost}
+		opt.Client = fleet.NewClient()
 	}
 	if opt.Flip == nil {
 		opt.Flip = FlipSymlink
@@ -190,10 +207,15 @@ func (m *Manager) Offered() *Release {
 // "portapixeld-arm64".
 func (m *Manager) AssetName() string { return m.opt.BinaryName + "-" + m.opt.Arch }
 
-// paths under the release root.
+// paths under the release root. DownloadDir holds the part file of a download that
+// did not finish, so an attempt that failed does not lose the bytes that arrived.
+// Its name starts with a full stop, which ValidVersion refuses and prune skips.
+const DownloadDir = ".download"
+
 func (m *Manager) releasesDir() string { return filepath.Join(m.opt.Root, ReleasesDir) }
 func (m *Manager) healthDir() string   { return filepath.Join(m.opt.Root, HealthDir) }
 func (m *Manager) pendingPath() string { return filepath.Join(m.opt.Root, PendingFile) }
+func (m *Manager) downloadDir() string { return filepath.Join(m.releasesDir(), DownloadDir) }
 
 // setState records the state and the error text.
 func (m *Manager) setState(state, errText string) {
@@ -224,24 +246,16 @@ func (m *Manager) release() {
 // randomMinute gives a minute of the day for the automatic check.
 func randomMinute() int { return rand.IntN(1440) }
 
-// maxRedirects is how many redirects one download may follow. It is the number
-// that net/http uses by default.
-const maxRedirects = 10
-
-// dropBearerOnAnotherHost takes the device token off a request that a redirect sent
-// to another host.
+// Reset forgets the release of the last check.
 //
-// The token is the key to this device on its fleet server. net/http already refuses
-// to copy the header to another domain, and its rule accepts a subdomain of the same
-// domain. This rule is stricter: the host must be the host that the request started
-// on. A release mirror that answers with a redirect to a content network must not
-// carry the token there.
-func dropBearerOnAnotherHost(req *http.Request, via []*http.Request) error {
-	if len(via) >= maxRedirects {
-		return errors.New("the release download followed too many redirects")
-	}
-	if len(via) > 0 && req.URL.Host != via[0].URL.Host {
-		req.Header.Del("Authorization")
-	}
-	return nil
+// The daemon calls it when the device pairs or unpairs. Without it a release that a
+// GitHub check offered stayed installable after the device paired, and the nightly
+// apply then installed a version that the fleet server never approved (D28).
+func (m *Manager) Reset() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.offered = nil
+	m.state = manifest.UpdateState{State: manifest.UpdateIdle, Current: m.opt.Running}
+	m.lastCheckDay = ""
+	m.lastApplyDay = ""
 }

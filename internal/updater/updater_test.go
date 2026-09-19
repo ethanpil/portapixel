@@ -15,10 +15,15 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"aead.dev/minisign"
+
+	"github.com/ethanpil/portapixel/internal/fleet"
+	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
 // ---------------------------------------------------------------- the fixture
@@ -223,6 +228,10 @@ func TestApplyRefusesBeforeTheFlip(t *testing.T) {
 		unsigned bool
 		wrongSum bool
 		version  string
+		// installs is the name that the release takes on the disk. "" means the same
+		// name that the source gave. A tag with a "v" in front installs under the
+		// name that the binary itself reports (NormalizeVersion).
+		installs string
 		badList  string
 		key      string
 		free     uint64
@@ -243,7 +252,7 @@ func TestApplyRefusesBeforeTheFlip(t *testing.T) {
 			want: ErrBadRelease,
 		},
 		{name: "a release that is older", version: "1.3.0", want: ErrDowngrade},
-		{name: "a version name with a letter in front", version: "v1.5.0"},
+		{name: "a version name with a letter in front", version: "v1.5.0", installs: "1.5.0"},
 		{name: "the release that runs", version: testRunning, want: ErrDowngrade},
 		{name: "a build with no public key", version: "1.5.0", key: "none", want: ErrNoKey},
 		{name: "a partition that is nearly full", version: "1.5.0", free: 1 << 20, want: ErrNoSpace},
@@ -281,13 +290,17 @@ func TestApplyRefusesBeforeTheFlip(t *testing.T) {
 			}
 
 			if good {
-				if got := w.current(); got != ReleasesDir+"/"+tt.version {
+				installs := tt.installs
+				if installs == "" {
+					installs = tt.version
+				}
+				if got := w.current(); got != ReleasesDir+"/"+installs {
 					t.Errorf("current = %q, want the new release", got)
 				}
-				if got := w.pending(); got != tt.version {
-					t.Errorf("the pending marker = %q, want %q", got, tt.version)
+				if got := w.pending(); got != installs {
+					t.Errorf("the pending marker = %q, want %q", got, installs)
 				}
-				if body, err := w.installed(tt.version); err != nil || body != "the new binary" {
+				if body, err := w.installed(installs); err != nil || body != "the new binary" {
 					t.Errorf("the installed binary = %q, %v", body, err)
 				}
 				if w.restarts != 1 {
@@ -349,6 +362,11 @@ func TestPrune(t *testing.T) {
 	}
 	var left []string
 	for _, e := range entries {
+		// The download directory holds the part file of a download that did not
+		// finish. prune keeps it on purpose, so it is not a release.
+		if strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
 		left = append(left, e.Name())
 	}
 	want := []string{testRunning, "1.5.0"}
@@ -882,7 +900,7 @@ func TestFleetReleaseWithoutATokenFails(t *testing.T) {
 	defer server.Close()
 
 	rel, err := w.man.Check(context.Background(), Source{
-		BaseURL: server.URL + "/api/v1/releases/1.5.0", Version: "1.5.0",
+		ServerURL: server.URL, BaseURL: "/api/v1/releases/1.5.0", Version: "1.5.0",
 	})
 	if err != nil {
 		t.Fatalf("Check() = %v", err)
@@ -906,19 +924,19 @@ func TestBearerGoesToTheFleetHostOnly(t *testing.T) {
 	}{
 		{
 			name:    "the fleet host",
-			rel:     Release{Bearer: "t", BearerHost: "signage.example.com"},
+			rel:     Release{Bearer: "t", BearerOrigin: "https://signage.example.com"},
 			address: "https://signage.example.com/api/v1/releases/1.5.0/portapixeld-arm64",
 			want:    "t",
 		},
 		{
 			name:    "another host",
-			rel:     Release{Bearer: "t", BearerHost: "signage.example.com"},
+			rel:     Release{Bearer: "t", BearerOrigin: "https://signage.example.com"},
 			address: "https://cdn.example.net/portapixeld-arm64",
 			want:    "",
 		},
 		{
 			name:    "a subdomain of the fleet host",
-			rel:     Release{Bearer: "t", BearerHost: "signage.example.com"},
+			rel:     Release{Bearer: "t", BearerOrigin: "https://signage.example.com"},
 			address: "https://files.signage.example.com/portapixeld-arm64",
 			want:    "",
 		},
@@ -948,7 +966,8 @@ func TestBearerGoesToTheFleetHostOnly(t *testing.T) {
 	}
 }
 
-// A redirect that leaves the host must not carry the token with it.
+// A redirect that leaves the host must not carry the token with it. The rule lives
+// in internal/fleet now, because the sync client needs the same one.
 func TestRedirectDropsTheToken(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, "https://cdn.example.net/file", nil)
 	if err != nil {
@@ -959,7 +978,7 @@ func TestRedirectDropsTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := dropBearerOnAnotherHost(req, []*http.Request{first}); err != nil {
+	if err := fleet.DropBearerOffHost(req, []*http.Request{first}); err != nil {
 		t.Fatal(err)
 	}
 	if req.Header.Get("Authorization") != "" {
@@ -972,7 +991,7 @@ func TestRedirectDropsTheToken(t *testing.T) {
 		t.Fatal(err)
 	}
 	same.Header.Set("Authorization", "Bearer t")
-	if err := dropBearerOnAnotherHost(same, []*http.Request{first}); err != nil {
+	if err := fleet.DropBearerOffHost(same, []*http.Request{first}); err != nil {
 		t.Fatal(err)
 	}
 	if same.Header.Get("Authorization") == "" {
@@ -980,42 +999,251 @@ func TestRedirectDropsTheToken(t *testing.T) {
 	}
 }
 
-func TestResolveBase(t *testing.T) {
+// A manifest names the release directory, and a manifest is not trusted input. A
+// base URL on another host must give no release at all: before this the device sent
+// its token to whatever host the manifest named.
+func TestFleetReleaseRefusesABaseURLOnAnotherHost(t *testing.T) {
+	m := New(Options{Root: t.TempDir(), PublicKey: "k", Running: "1.4.0"})
+
 	tests := []struct {
-		name      string
-		serverURL string
-		baseURL   string
-		want      string
-		wantErr   bool
+		name    string
+		baseURL string
+		want    string
 	}{
-		{
-			name: "a path against a server address", serverURL: "https://s.example.com/",
-			baseURL: "/api/v1/releases/1.5.0", want: "https://s.example.com/api/v1/releases/1.5.0",
-		},
-		{
-			name: "a path with no leading slash", serverURL: "https://s.example.com",
-			baseURL: "api/v1/releases/1.5.0", want: "https://s.example.com/api/v1/releases/1.5.0",
-		},
-		{
-			name: "a whole address wins", serverURL: "https://s.example.com",
-			baseURL: "https://mirror.example.net/r/1.5.0", want: "https://mirror.example.net/r/1.5.0",
-		},
-		{
-			name: "a trailing slash goes", serverURL: "https://s.example.com",
-			baseURL: "/r/1.5.0/", want: "https://s.example.com/r/1.5.0",
-		},
-		{name: "a path and no server", baseURL: "/r/1.5.0", wantErr: true},
-		{name: "nothing at all", wantErr: true},
+		{name: "a path of the server", baseURL: "/api/v1/releases/1.5.0",
+			want: "https://signage.example.com/api/v1/releases/1.5.0/portapixeld-" + m.opt.Arch},
+		{name: "a path with no leading slash", baseURL: "api/v1/releases/1.5.0",
+			want: "https://signage.example.com/api/v1/releases/1.5.0/portapixeld-" + m.opt.Arch},
+		{name: "the whole address of the server", baseURL: "https://signage.example.com/r/1.5.0",
+			want: "https://signage.example.com/r/1.5.0/portapixeld-" + m.opt.Arch},
+		{name: "another host", baseURL: "https://attacker.example.net/r"},
+		{name: "another scheme", baseURL: "http://signage.example.com/r"},
+		{name: "another port", baseURL: "https://signage.example.com:8443/r"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := resolveBase(tt.serverURL, tt.baseURL)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("resolveBase() = %q, %v", got, err)
+			rel, err := m.fleetRelease(Source{
+				ServerURL: "https://signage.example.com",
+				BaseURL:   tt.baseURL,
+				Version:   "1.5.0",
+				Bearer:    "DEVICE-TOKEN",
+			})
+			if tt.want == "" {
+				if err == nil {
+					t.Fatalf("fleetRelease() took %q and gave %s", tt.baseURL, rel.BinaryURL)
+				}
+				return
 			}
-			if got != tt.want && !tt.wantErr {
-				t.Errorf("resolveBase() = %q, want %q", got, tt.want)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rel.BinaryURL != tt.want {
+				t.Errorf("BinaryURL = %q, want %q", rel.BinaryURL, tt.want)
+			}
+			// The token goes to the paired server and to nothing else.
+			bearer, err := bearerFor(rel, rel.BinaryURL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bearer != "DEVICE-TOKEN" {
+				t.Errorf("the mirror of the paired server got no token")
 			}
 		})
+	}
+}
+
+// A base URL of a path needs the address of the paired server.
+func TestFleetReleaseNeedsAServerAddress(t *testing.T) {
+	m := New(Options{Root: t.TempDir(), PublicKey: "k", Running: "1.4.0"})
+	if _, err := m.fleetRelease(Source{BaseURL: "/r/1.5.0", Version: "1.5.0"}); err == nil {
+		t.Error("fleetRelease() took a path with no server address")
+	}
+}
+
+// A second Apply of one release must not point previous at the directory that
+// current already names, and prune must never remove the release that runs.
+//
+// A flip that worked and a restart that did not leaves the device in this state:
+// current says 1.5.0 and the process is still 1.4.0. Before this fix the second
+// pass put previous on 1.5.0 as well and prune then removed 1.4.0, so the health
+// gate rolled the bad release onto itself and the device looped.
+func TestApplyTwiceKeepsTheRunningRelease(t *testing.T) {
+	w := newWorld(t, nil)
+	b := w.newBundle("the new binary", false, false)
+	_, rel := b.serve(t, "1.5.0")
+
+	if err := w.man.Apply(context.Background(), rel); err != nil {
+		t.Fatal(err)
+	}
+	// The restart did not happen: Running is still the old release.
+	if err := w.man.Apply(context.Background(), rel); err == nil {
+		t.Fatal("the second Apply of one release gave no error")
+	}
+	if got := w.man.linkTarget(PreviousLink); got != ReleasesDir+"/"+testRunning {
+		t.Errorf("previous = %q, want the release that runs", got)
+	}
+	if _, err := w.installed(testRunning); err != nil {
+		t.Errorf("the release that runs is gone: %v", err)
+	}
+}
+
+// The name of a release and the name that its binary reports must agree. The
+// checksum file cannot catch a mirror that named one release and served another.
+func TestApplyRefusesABinaryOfAnotherVersion(t *testing.T) {
+	w := newWorld(t, func(o *Options) {
+		o.BinaryVersion = func(string) (string, error) { return "1.6.0", nil }
+	})
+	b := w.newBundle("the new binary", false, false)
+	_, rel := b.serve(t, "1.5.0")
+
+	err := w.man.Apply(context.Background(), rel)
+	if err == nil || !strings.Contains(err.Error(), "the source called it") {
+		t.Fatalf("Apply() = %v, want the cross-check of the two version names", err)
+	}
+	if got := w.current(); got != ReleasesDir+"/"+testRunning {
+		t.Errorf("current = %q, want the release that runs", got)
+	}
+}
+
+// A Sideload that loses the race against another update must leave the bundle of
+// the person where it is. Before this it removed the bundle and installed nothing.
+func TestSideloadKeepsTheBundleWhenAnUpdateRuns(t *testing.T) {
+	w := newWorld(t, nil)
+	b := w.newBundle("the new binary", false, false)
+	b.writeDir(t, filepath.Join(w.media, "_update"))
+
+	// Another update holds the manager.
+	if !w.man.take() {
+		t.Fatal("take() gave false on a manager that is idle")
+	}
+	defer w.man.release()
+
+	if err := w.man.Sideload(context.Background()); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Sideload() = %v, want ErrBusy", err)
+	}
+	if _, err := os.Stat(filepath.Join(w.media, "_update", testAsset)); err != nil {
+		t.Errorf("the bundle of the person is gone: %v", err)
+	}
+}
+
+// The rollback marker is read one time. MarkBadRelease is what refuses the release
+// for ever, so a marker that stayed replayed the banner at every boot.
+func TestCheckRollbackClearsTheMarker(t *testing.T) {
+	w := newWorld(t, nil)
+	marker := filepath.Join(w.root, HealthDir, "1.5.0"+BadSuffix)
+	mustWrite(t, marker, nil)
+
+	if bad, ok := w.man.CheckRollback(); !ok || bad != "1.5.0" {
+		t.Fatalf("CheckRollback() = %q, %v", bad, ok)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Errorf("the marker is still there: %v", err)
+	}
+	if !w.bad["1.5.0"] {
+		t.Error("the release is not in the bad list")
+	}
+	// A second start reports no rollback and shows no banner.
+	if _, ok := w.man.CheckRollback(); ok {
+		t.Error("CheckRollback() reported the same rollback again")
+	}
+}
+
+// A release that a GitHub check offered must not install after the device paired.
+// Its server approved another version, or none (D28).
+func TestApplyRefusesAReleaseOfAnotherSource(t *testing.T) {
+	kind := "github"
+	w := newWorld(t, func(o *Options) { o.SourceKind = func() string { return kind } })
+	b := w.newBundle("the new binary", false, false)
+	_, rel := b.serve(t, "1.5.0")
+
+	if _, err := w.man.Check(context.Background(), Source{Repo: "x/y", APIRoot: "http://127.0.0.1:1"}); err == nil {
+		t.Fatal("Check() gave no error for an API that does not answer")
+	}
+	kind = "fleet" // the device paired between the check and the apply
+	if err := w.man.Apply(context.Background(), rel); err == nil {
+		t.Fatal("Apply() installed a GitHub release on a paired device")
+	}
+	if got := w.current(); got != ReleasesDir+"/"+testRunning {
+		t.Errorf("current = %q, want the release that runs", got)
+	}
+}
+
+// Reset forgets the offer of the last check. The daemon calls it when the device
+// pairs or unpairs.
+func TestResetForgetsTheOffer(t *testing.T) {
+	w := newWorld(t, nil)
+
+	w.man.mu.Lock()
+	w.man.offered = &Release{Version: "1.6.0", Source: "github"}
+	w.man.state.State = manifest.UpdateAvailable
+	w.man.mu.Unlock()
+
+	w.man.Reset()
+	if w.man.Offered() != nil {
+		t.Error("Offered() still names a release after Reset()")
+	}
+	if got := w.man.State().State; got != manifest.UpdateIdle {
+		t.Errorf("state = %q, want idle", got)
+	}
+}
+
+// A source with no repository and no base URL is a paired device whose server
+// approved nothing. That is not a fault, so it gives ErrNoRelease and the About
+// page says one sentence instead of an update fault.
+func TestCheckWithNoSourceGivesNoRelease(t *testing.T) {
+	w := newWorld(t, nil)
+	if _, err := w.man.Check(context.Background(), Source{}); !errors.Is(err, ErrNoRelease) {
+		t.Errorf("Check() = %v, want ErrNoRelease", err)
+	}
+}
+
+// A download that failed after some bytes arrived must keep them. The staging
+// directory is made new for each attempt, so the part file lives beside it.
+func TestDownloadResumesAfterAFailedAttempt(t *testing.T) {
+	w := newWorld(t, nil)
+	body := strings.Repeat("x", 4096)
+	b := w.newBundle(body, false, false)
+
+	// The first attempt sends half the binary and drops the connection.
+	full := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+testAsset, func(rw http.ResponseWriter, r *http.Request) {
+		if !full {
+			rw.Header().Set("Content-Length", strconv.Itoa(len(body)))
+			rw.Write([]byte(body[:2048]))
+			return
+		}
+		http.ServeContent(rw, r, testAsset, time.Time{}, strings.NewReader(body))
+	})
+	mux.HandleFunc("/"+testAsset+SigSuffix, func(rw http.ResponseWriter, r *http.Request) { rw.Write(b.sig) })
+	mux.HandleFunc("/"+SumsName, func(rw http.ResponseWriter, r *http.Request) { rw.Write(b.sums) })
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	rel := Release{
+		Version: "1.5.0", Source: "github",
+		BinaryURL: server.URL + "/" + testAsset,
+		SigURL:    server.URL + "/" + testAsset + SigSuffix,
+		SumsURL:   server.URL + "/" + SumsName,
+	}
+	if err := w.man.Apply(context.Background(), rel); err == nil {
+		t.Fatal("Apply() gave no error for a body that stopped in the middle")
+	}
+	part := filepath.Join(w.root, ReleasesDir, DownloadDir, testAsset+".part")
+	info, err := os.Stat(part)
+	if err != nil {
+		t.Fatalf("the part file is gone: %v", err)
+	}
+	if info.Size() != 2048 {
+		t.Errorf("the part file holds %d bytes, want 2048", info.Size())
+	}
+
+	// The second attempt continues and the release installs.
+	full = true
+	if err := w.man.Apply(context.Background(), rel); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := w.installed("1.5.0"); err != nil || got != body {
+		t.Errorf("the installed binary is %d bytes, %v", len(got), err)
 	}
 }

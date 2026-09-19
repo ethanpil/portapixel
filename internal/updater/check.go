@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/fleet"
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
@@ -38,13 +38,19 @@ type Source struct {
 	// under it with their own names. A path with no host, for example
 	// "/api/v1/releases/1.5.0", is resolved against ServerURL: the manifest of the
 	// server gives a path and not a whole address.
+	//
+	// The value comes out of the manifest, which is not trusted input.
+	// fleet.ResolveURL is the guard: the address must be on the server that
+	// ServerURL names.
 	BaseURL string
 	// ServerURL is the address of the fleet server, for example
-	// "https://signage.example.com". A relative BaseURL needs it.
+	// "https://signage.example.com". It comes from the pairing state of the device
+	// and never from the manifest: it is what BaseURL is measured against, and it is
+	// the only host that may see Bearer.
 	ServerURL string
 	// Bearer is the device token. The release mirror of the server needs it on
 	// every one of the three files. It goes to the fleet host and to no other:
-	// see fleetRelease and mustSameHost.
+	// see fleetRelease and bearerFor.
 	Bearer string
 	// Version is the release that the fleet server approved. BaseURL needs it,
 	// because a mirror path carries no version.
@@ -65,12 +71,15 @@ type Release struct {
 	SigURL    string `json:"-"`
 	SumsURL   string `json:"-"`
 	// Bearer is the device token of a fleet release. The release mirror of the
-	// server needs it. It never leaves the host that BearerHost names.
+	// server needs it. It never leaves the server that BearerOrigin names.
 	Bearer string `json:"-"`
-	// BearerHost is the host that may see Bearer. A URL with another host gets no
-	// header at all: the device token must never go to GitHub or to a redirect
-	// that leaves the server.
-	BearerHost string `json:"-"`
+	// BearerOrigin is the address of the paired fleet server, for example
+	// "https://signage.example.com". Only a request to that scheme, host and port
+	// carries Bearer; every other address gets no header at all, so the device token
+	// never goes to GitHub or to a redirect that leaves the server.
+	//
+	// It comes from the pairing state of the device and never from the manifest.
+	BearerOrigin string `json:"-"`
 	// Dir is the directory that holds a sideloaded bundle.
 	Dir string `json:"-"`
 	// Size is the size of the binary when the source reports it, else 0.
@@ -124,12 +133,18 @@ func (m *Manager) Check(ctx context.Context, src Source) (Release, error) {
 }
 
 // find gives the release of a source, or ErrNoRelease.
+//
+// A source with no repository and no base URL is the normal state of a paired
+// device whose server approved nothing. It is not a fault, so it gives
+// ErrNoRelease: the About page then says "there is no newer release" and the device
+// reports no update fault. Every caller had its own copy of this test before, and
+// two of them did not have it.
 func (m *Manager) find(ctx context.Context, src Source) (Release, error) {
 	if src.BaseURL != "" {
 		return m.fleetRelease(src)
 	}
 	if src.Repo == "" {
-		return Release{}, fmt.Errorf("no release source is set")
+		return Release{}, ErrNoRelease
 	}
 	return m.githubRelease(ctx, src)
 }
@@ -141,54 +156,32 @@ func (m *Manager) find(ctx context.Context, src Source) (Release, error) {
 // into the Release with the host that may see it. A token that went anywhere else
 // would give a stranger control of this device.
 func (m *Manager) fleetRelease(src Source) (Release, error) {
-	if src.Version == "" {
+	version := NormalizeVersion(src.Version)
+	if version == "" {
 		return Release{}, fmt.Errorf("the fleet server named a release directory and no version")
 	}
-	if !m.newer(src.Version) {
+	if !m.newer(version) {
 		return Release{}, ErrNoRelease
 	}
-	base, err := resolveBase(src.ServerURL, src.BaseURL)
-	if err != nil {
-		return Release{}, err
+	if strings.TrimSpace(src.ServerURL) == "" {
+		return Release{}, fmt.Errorf("the fleet server named the release path %s and this device knows no server address", src.BaseURL)
 	}
-	host, err := url.Parse(base)
+	base, err := fleet.ResolveURL(src.ServerURL, src.BaseURL)
 	if err != nil {
-		return Release{}, fmt.Errorf("the release address of the fleet server is not a URL: %w", err)
+		return Release{}, fmt.Errorf("the release address of the fleet server is not usable: %w", err)
 	}
+	base = strings.TrimSuffix(base, "/")
 	asset := m.AssetName()
 	return Release{
-		Version:    src.Version,
-		Notes:      src.Notes,
-		Source:     "fleet",
-		BinaryURL:  base + "/" + asset,
-		SigURL:     base + "/" + asset + SigSuffix,
-		SumsURL:    base + "/" + SumsName,
-		Bearer:     src.Bearer,
-		BearerHost: host.Host,
+		Version:      version,
+		Notes:        src.Notes,
+		Source:       "fleet",
+		BinaryURL:    base + "/" + asset,
+		SigURL:       base + "/" + asset + SigSuffix,
+		SumsURL:      base + "/" + SumsName,
+		Bearer:       src.Bearer,
+		BearerOrigin: strings.TrimSpace(src.ServerURL),
 	}, nil
-}
-
-// resolveBase gives the whole address of a release directory.
-//
-// The manifest of the server carries a path, for example
-// "/api/v1/releases/1.5.0". The device knows the address of its server, so the two
-// make the whole address here and in no other place.
-func resolveBase(serverURL, baseURL string) (string, error) {
-	base := strings.TrimSuffix(strings.TrimSpace(baseURL), "/")
-	if base == "" {
-		return "", fmt.Errorf("the fleet server named no release directory")
-	}
-	if strings.HasPrefix(base, "http://") || strings.HasPrefix(base, "https://") {
-		return base, nil
-	}
-	server := strings.TrimSuffix(strings.TrimSpace(serverURL), "/")
-	if server == "" {
-		return "", fmt.Errorf("the fleet server named the release path %s and this device knows no server address", base)
-	}
-	if !strings.HasPrefix(base, "/") {
-		base = "/" + base
-	}
-	return server + base, nil
 }
 
 // apiRelease is the part of a GitHub release document that the updater reads.
@@ -216,9 +209,13 @@ func (m *Manager) githubRelease(ctx context.Context, src Source) (Release, error
 	if root == "" {
 		root = defaultGitHubAPI
 	}
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimSuffix(root, "/"), src.Repo)
+	address := fmt.Sprintf("%s/repos/%s/releases/latest", strings.TrimSuffix(root, "/"), src.Repo)
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	// A deadline for this one request. The client has no overall timeout, because
+	// the same client downloads a release binary.
+	ctx, cancel := context.WithTimeout(ctx, smallTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if err != nil {
 		return Release{}, err
 	}
@@ -247,13 +244,16 @@ func (m *Manager) githubRelease(ctx context.Context, src Source) (Release, error
 	if doc.Draft || doc.Prerelease || doc.TagName == "" {
 		return Release{}, ErrNoRelease
 	}
-	if !m.newer(doc.TagName) {
+	// The tag can carry a "v" that the build does not. One name from here on, or the
+	// release installs under a name that the health gate does not wait for.
+	tag := NormalizeVersion(doc.TagName)
+	if !m.newer(tag) {
 		return Release{}, ErrNoRelease
 	}
 
 	asset := m.AssetName()
 	out := Release{
-		Version:     doc.TagName,
+		Version:     tag,
 		Notes:       strings.TrimSpace(doc.Body),
 		Source:      "github",
 		PublishedAt: doc.Published,
@@ -269,10 +269,10 @@ func (m *Manager) githubRelease(ctx context.Context, src Source) (Release, error
 		}
 	}
 	if out.BinaryURL == "" {
-		return Release{}, fmt.Errorf("%s has no %s, so it is not for this device: %w", doc.TagName, asset, ErrArch)
+		return Release{}, fmt.Errorf("%s has no %s, so it is not for this device: %w", tag, asset, ErrArch)
 	}
 	if out.SigURL == "" || out.SumsURL == "" {
-		return Release{}, fmt.Errorf("%s has no signature or no %s, so this device refuses it", doc.TagName, SumsName)
+		return Release{}, fmt.Errorf("%s has no signature or no %s, so this device refuses it", tag, SumsName)
 	}
 	return out, nil
 }

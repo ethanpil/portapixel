@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/fleet"
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
@@ -52,7 +53,7 @@ func (m *Manager) RunSource(done <-chan struct{}, source func() Source) {
 
 // step is one pass of the loop.
 func (m *Manager) step(done <-chan struct{}, src Source) {
-	ctx, cancel := contextUntil(done, stepTimeout)
+	ctx, cancel := fleet.ContextUntil(done, stepTimeout)
 	defer cancel()
 
 	if err := m.Sideload(ctx); err != nil {
@@ -112,17 +113,4 @@ func (m *Manager) applyWhenDue(ctx context.Context, day string, minute int) {
 	}
 	m.opt.Log("update.auto", "the automatic update installs "+offered.Version)
 	_ = m.Apply(ctx, *offered)
-}
-
-// contextUntil gives a context that ends when done closes or after the limit.
-func contextUntil(done <-chan struct{}, limit time.Duration) (context.Context, context.CancelFunc) {
-	ctx, cancel := context.WithTimeout(context.Background(), limit)
-	go func() {
-		select {
-		case <-done:
-			cancel()
-		case <-ctx.Done():
-		}
-	}()
-	return ctx, cancel
 }

@@ -43,6 +43,15 @@ func (m *Manager) Sideload(ctx context.Context) error {
 	if m.opt.SideloadDir == "" {
 		return nil
 	}
+	// One look at a time. POST /api/rescan starts this in a goroutine and the loop
+	// of the updater starts it every 60 seconds, so two calls can meet. The loser
+	// used to unpack into the directory that the winner was reading and then remove
+	// the bundle under it.
+	if !m.sideload.TryLock() {
+		return nil
+	}
+	defer m.sideload.Unlock()
+
 	dir, ok := m.findBundle()
 	if !ok {
 		return nil
@@ -50,6 +59,11 @@ func (m *Manager) Sideload(ctx context.Context) error {
 
 	m.opt.Log("update.sideload", "a release bundle is in "+m.opt.SideloadDir)
 	err := m.Apply(ctx, Release{Source: "sideload", Dir: dir})
+	if errors.Is(err, ErrBusy) {
+		// Another update is running, so this bundle was not read at all. The bundle
+		// of the person stays where it is and the next pass tries it again.
+		return err
+	}
 	if err != nil {
 		m.opt.Log("update.sideload.refused", err.Error()+"; the bundle is removed, so a reboot does not try it again")
 	}
