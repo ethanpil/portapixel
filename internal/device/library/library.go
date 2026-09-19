@@ -252,7 +252,11 @@ func (l *Library) Snapshot() Snapshot {
 	}
 	pending := 0
 	for i, p := range snap.Playlists {
-		p.Items = append([]Item(nil), p.Items...)
+		// make and not append: append to a nil slice with nothing to add gives nil
+		// again, and the JSON then holds null in place of [].
+		items := make([]Item, len(p.Items))
+		copy(items, p.Items)
+		p.Items = items
 		for j := range p.Items {
 			if p.Items[j].path == "" || p.Items[j].Missing {
 				continue
@@ -397,6 +401,10 @@ func (l *Library) readPlaylist(snap *Snapshot, name, dir string, fleet bool) {
 	if out.Title == "" {
 		out.Title = name
 	}
+	// An empty list must be [] in the JSON and never null. A UI that has to test for
+	// both is a UI with a bug waiting in it, and an empty playlist is a normal state
+	// (the editor makes one before the first item).
+	out.Items = make([]Item, 0, len(p.Items))
 	for i, it := range p.Items {
 		out.Items = append(out.Items, l.readItem(i, it, dir))
 	}

@@ -98,6 +98,16 @@ func TestWPASupplicant(t *testing.T) {
 	quoted.Network.WifiSSID = `He said "hi"\`
 	quoted.Network.WifiPSK = `back\slash"quote`
 
+	// The regulatory domain (network.wifi_country). Without it some radios permit
+	// fewer channels, and a 5 GHz network can be invisible.
+	country := base()
+	country.Network.WifiSSID = "Office WiFi"
+	country.Network.WifiPSK = "correct horse"
+	country.Network.WifiCountry = "de" // it comes out in capital letters
+
+	countryOnly := base()
+	countryOnly.Network.WifiCountry = "US"
+
 	tests := []struct {
 		name string
 		cfg  config.Config
@@ -107,6 +117,8 @@ func TestWPASupplicant(t *testing.T) {
 		{"wpa-hex-key", hexKey},
 		{"wpa-open", open},
 		{"wpa-escapes", quoted},
+		{"wpa-country", country},
+		{"wpa-country-no-ssid", countryOnly},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -22,6 +22,7 @@ Permitted dependencies. Each new dependency needs a rationale line here.
 | `golang.org/x/net/websocket` | CDP client for navigation rung 1. The standard library has no WebSocket client. |
 | `golang.org/x/sys` | Indirect, through minisign. |
 | `github.com/hashicorp/mdns` | mDNS announce (D20). |
+| `github.com/miekg/dns` | Indirect, through `hashicorp/mdns`. |
 | `github.com/skip2/go-qrcode` | QR code on the fallback screen (D18). |
 
 The standard library does all other work. Use `net/http` with Go 1.22 pattern routes
@@ -42,7 +43,8 @@ internal/playlist         playlist.toml model, Parse, Render, item kind detectio
 internal/manifest         Fleet wire types (section 5). Shared by device and server.
 internal/store            SHA-256 object store paths, HashFile, resumable Range download.
 internal/sigverify        minisign verify of a file against the embedded key.
-internal/updater          A/B release swap, health gate, rollback. Device and server use it.
+internal/updater          A/B release swap, minisign verify, health gate, rollback, sideload.
+                          Device and server use it. No device specifics in it.
 internal/httpguard        Host allowlist, CSRF header check, session store, login limiter.
 
 internal/device/slug      One safe-name rule. A playlist directory and a host name share it.
@@ -50,12 +52,12 @@ internal/device/identity  Device ID derivation and repair semantics (D21).
 internal/device/library   Scan media root, parse playlists, hash cache, item warnings.
 internal/device/scheduler Rule evaluation each minute, clock-sync gate (D17, D40).
 internal/device/browser   cage + Chromium supervisor, navigation ladder, watchdog, URL items, kiosk mode.
-internal/device/power     CEC or DPMS, screen schedule.
+internal/device/power     CEC or DPMS, screen schedule, manual override (D31).
 internal/device/syncer    Fleet client: enroll, poll, download, fleet playlists, commands.
-internal/device/mdns      Announce.
+internal/device/mdns      Announce _http._tcp as <name>.local (D20).
 internal/device/health    Status struct for /api/status.
 internal/device/netcfg    Render wpa_supplicant.conf and /etc/network/interfaces.
-internal/device/installer install-to-disk (D54).
+internal/device/installer install-to-disk: disk list, GPT clone, media copy, boot bits (D54).
 internal/device/httpd     Routes, handlers, SSE hub. No business logic.
 
 internal/server/db        Schema, migrations, queries. Single writer.
@@ -159,7 +161,7 @@ type Item struct {
 type Rule struct {
     Playlist string   `json:"playlist"`
     Days     []string `json:"days"`  // "mon".."sun"; empty = all days
-    Start    string   `json:"start"` // "HH:MM"
+    Start    string   `json:"start"` // "HH:MM"; both times empty = the whole day
     End      string   `json:"end"`
 }
 type MediaRef struct {
@@ -196,6 +198,18 @@ type Heartbeat struct {
 `Status` is the same struct that the device serves at `/api/status` (plan section 8,
 `health`). It lives in `internal/manifest` so the two ends share it.
 
+`Status.Warnings` is `[]Warning{Code, Message}`. The code is the contract; the message
+is the sentence for a person. The codes are the constants of
+`internal/manifest/status.go`: `default-web-password`, `default-root-password`,
+`timezone-utc`, `clock-unsynced`, `config-shadow`, `config-repaired`,
+`config-bad-edit`, `playlist-problem`, `hardware-changed`, `update-rolled-back`.
+
+`Status.Codecs` is the codec report of the player (D12). The player probes
+MediaCapabilities one time and sends it as `codecs` with its FIRST heartbeat. The daemon
+keeps it and serves it again; `web/shared/item-warnings.js` prefers it over its own
+probe. `hardware_id` is NOT in `Status`: it is a secret between the device and its
+server. `Status.HardwareChanged` is a bool.
+
 The device stores fleet objects at `_fleet/media/<first 8 hex of sha>-<safe name>`.
 
 ## 6. Local API rules (D46)
@@ -208,7 +222,28 @@ The device stores fleet objects at `_fleet/media/<first 8 hex of sha>-<safe name
   `X-PortaPixel-Player` header with the same value. The secret is 32 random hex chars made
   at daemon start. The browser opens `/player?k=<secret>`.
 - `/api/status` needs no session. It includes `pairing_code` for loopback peers only.
+- `GET /licenses` needs no session. A licence list is a public document (D33).
 - The server uses the same package with an allowlist made from `public_url`.
+
+### 6a. The v0.2 device routes
+
+```
+GET    /api/media/{playlist}       {files:[{name,size,kind,src,in_playlist}]}
+POST   /api/update/check           {current, available?, source?, notes?, blocked?}
+POST   /api/update/apply           {ok:true}; the work runs in the background
+GET    /api/disks                  {disks:[{device,model,size_bytes,removable,too_small}], error?}
+POST   /api/install-to-disk        {device, confirm} -> {ok:true}. confirm must equal device.
+GET    /api/install-to-disk/events SSE: "progress" {phase,percent,message}, "done" {ok,error?,instruction?}
+GET    /licenses                   text/plain, the licence list
+GET|POST|DELETE /api/pair          501 JSON until the fleet client ships (v0.3)
+```
+
+`blocked` in the check answer is the reason that this build can install nothing, for
+example a development build with no minisign public key. It is not an error: the route
+answers 200 and the About page says the sentence.
+
+The install stream replays its last event to a new subscriber. The admin UI sends the
+POST and opens the stream after the answer, so the first events are already gone.
 
 ## 7. Navigation ladder (`internal/device/browser`)
 
@@ -285,6 +320,10 @@ item is `/media/_fleet/media/<object>`.
 {"playlist": "default", "index": 1, "name": "promo.mp4", "kind": "video",
  "state": "playing", "frames": 18211, "position": 12.4}
 ```
+
+The FIRST heartbeat also carries `"codecs"`: the answer of MediaCapabilities for h264,
+hevc, vp9 and av1 at 1080 and 2160 (D12). The daemon keeps it and serves it in
+`status.codecs`. It is sent one time, not on every beat.
 
 `state` is `playing`, `fallback` or `handoff`. `frames` is a requestAnimationFrame
 counter that only grows in one page life (D45). A new page starts at 0: the watchdog

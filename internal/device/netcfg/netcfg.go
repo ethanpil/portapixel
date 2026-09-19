@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/config"
-	"github.com/ethanpil/portapixel/internal/device/slug"
 	"github.com/ethanpil/portapixel/internal/fsutil"
+	"github.com/ethanpil/portapixel/internal/slug"
 )
 
 // The names of the two network interfaces that PortaPixel knows. One image runs
@@ -76,14 +76,19 @@ func writeStatic(b *strings.Builder, iface string, cfg config.Config) {
 // old file. A device that no longer has WiFi settings must not join the network
 // of last month.
 //
-// The country code stays out. A wrong regulatory domain is worse than none, and
-// portapixel.toml has no country key to read it from.
+// network.wifi_country gives the regulatory domain. An empty value writes no
+// country line: a wrong domain is worse than none. With no domain some radios
+// permit fewer channels, and a 5 GHz network can be invisible. The code goes in
+// capital letters, which is the form that wpa_supplicant documents.
 func WPASupplicant(cfg config.Config) []byte {
 	var b strings.Builder
 	b.WriteString("# PortaPixel writes this file from portapixel.toml.\n")
 	b.WriteString("# Your changes are lost at the next boot. Edit portapixel.toml instead.\n")
 	b.WriteString("ctrl_interface=/var/run/wpa_supplicant\n")
 	b.WriteString("update_config=0\n")
+	if country := strings.ToUpper(strings.TrimSpace(cfg.Network.WifiCountry)); country != "" {
+		b.WriteString("country=" + country + "\n")
+	}
 
 	ssid := cfg.Network.WifiSSID
 	if ssid == "" {

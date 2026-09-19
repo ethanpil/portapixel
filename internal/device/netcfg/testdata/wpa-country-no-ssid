@@ -1,0 +1,5 @@
+# PortaPixel writes this file from portapixel.toml.
+# Your changes are lost at the next boot. Edit portapixel.toml instead.
+ctrl_interface=/var/run/wpa_supplicant
+update_config=0
+country=US

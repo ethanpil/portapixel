@@ -5,12 +5,14 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
-	"github.com/ethanpil/portapixel/internal/device/slug"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/playlist"
+	"github.com/ethanpil/portapixel/internal/slug"
 	"github.com/ethanpil/portapixel/internal/store"
 )
 
@@ -245,6 +247,78 @@ func (l *Library) room() int64 {
 		return 0
 	}
 	return room
+}
+
+// MediaFile is one file in a playlist directory, for GET /api/media/{playlist}.
+type MediaFile struct {
+	Name string `json:"name"`
+	Size int64  `json:"size"`
+	Kind string `json:"kind"` // image | video | unknown
+	// Src is the URL that serves the file, so the editor can show a picture.
+	Src string `json:"src"`
+	// InPlaylist is false for a file that nobody added to playlist.toml yet. A
+	// person who copied a folder of pictures onto the stick from a laptop has a
+	// directory full of them.
+	InPlaylist bool `json:"in_playlist"`
+}
+
+// MediaFiles lists the files of a playlist directory and says which ones the
+// playlist names.
+//
+// It exists so that the editor can offer a file that is on the stick and not in the
+// playlist. Before it, a person who dropped twenty pictures in from a laptop saw an
+// empty playlist and no way to add them but a hand edit of playlist.toml.
+func (l *Library) MediaFiles(name string) ([]MediaFile, error) {
+	dir, p, _, err := l.localPlaylist(name)
+	if err != nil {
+		return nil, err
+	}
+	used := make(map[string]bool, len(p.Items))
+	for _, it := range p.Items {
+		if it.File != "" {
+			used[path.Base(it.File)] = true
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", dir, err)
+	}
+	out := make([]MediaFile, 0, len(entries))
+	for _, e := range entries {
+		if e.IsDir() || !listableMedia(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil {
+			continue
+		}
+		out = append(out, MediaFile{
+			Name:       e.Name(),
+			Size:       info.Size(),
+			Kind:       playlist.Kind(playlist.Item{File: e.Name()}),
+			Src:        l.srcURL(filepath.Join(dir, e.Name())),
+			InPlaylist: used[e.Name()],
+		})
+	}
+	sort.Slice(out, func(a, b int) bool { return out[a].Name < out[b].Name })
+	return out, nil
+}
+
+// listableMedia reports if a file name belongs in the list. playlist.toml is the
+// description of the playlist and not content, and a name that starts with a full
+// stop is a name that a person does not see. The staging file of an upload starts
+// with ".upload-", so it is out for the same reason.
+func listableMedia(name string) bool {
+	if name == playlist.FileName || strings.HasPrefix(name, ".") {
+		return false
+	}
+	switch playlist.Kind(playlist.Item{File: name}) {
+	case playlist.KindImage, playlist.KindVideo:
+		return true
+	default:
+		return false
+	}
 }
 
 // DeleteMedia removes one file from a playlist directory. It does not change
