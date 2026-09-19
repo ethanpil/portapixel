@@ -113,15 +113,26 @@ expect {
 send_user "\n==> poll http://127.0.0.1:$port/api/status\n"
 set deadline [expr {[clock seconds] + $t_api}]
 set ok 0
+set playing 0
 while {[clock seconds] < $deadline} {
 	if {[catch {exec curl -sS -m 5 "http://127.0.0.1:$port/api/status"} out] == 0} {
 		if {[string match {*device_id*} $out] || [string match "*\{*" $out]} {
-			send_user "==> /api/status answered: $out\n"
+			if {$ok == 0} { send_user "==> /api/status answered: $out\n" }
 			set ok 1
-			break
+			# The browser needs longer than the API. Keep polling until the
+			# daemon says that the cage session runs, because "the API answers"
+			# alone passed on a device with a black screen.
+			if {[string match {*"browser_state":"running"*} $out]} {
+				send_user "==> browser_state is running\n"
+				set playing 1
+				break
+			}
 		}
 	}
 	after 3000
+}
+if {$ok == 1 && $playing == 0} {
+	send_user "\n==> the browser never reached the running state:\n    $out\n"
 }
 
 # ---------------------------------------------------------- 5. the browser check
@@ -160,6 +171,11 @@ if {$ok == 0} {
 }
 if {$browser == 0} {
 	die "the daemon did not start the browser in the cage session"
+}
+if {$playing == 0} {
+	die "/api/status never reported browser_state running.
+ A browser process alone is not a picture: cage can start and then stop, or
+ Chromium can hold a black window. Read the ops log on the guest."
 }
 send_user "\nPASS: the image boots, /api/status answers, the browser runs\n"
 exit 0

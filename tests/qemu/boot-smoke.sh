@@ -1,10 +1,14 @@
 #!/bin/sh
 # tests/qemu/boot-smoke.sh -- boot a PortaPixel image in QEMU and check it.
 #
-# It proves three things:
+# It proves four things:
 #   1. the image boots to a login prompt (the boot chain works),
 #   2. the daemon answers on port 80 through a host forwarded port,
-#   3. /api/status returns something that looks like our status.
+#   3. /api/status returns something that looks like our status,
+#   4. /api/status reports browser_state "running", so the cage session came up.
+#
+# It does NOT prove that a picture is on the screen. Use tests/qemu/boot-dev.sh
+# for that: it keeps the guest up and takes a screenshot of the display.
 #
 # SeaBIOS is the default firmware. --uefi selects OVMF instead. Both must pass,
 # because the image carries both boot paths (plan section 6).
