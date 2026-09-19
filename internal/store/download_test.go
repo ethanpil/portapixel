@@ -348,3 +348,68 @@ func assertFile(t *testing.T, dest string) {
 		t.Fatal("the part file must be gone after a good download")
 	}
 }
+
+// A caller that knows no size must still have a ceiling. Without it a body with no
+// end fills the media partition, and a device that filled its own partition can
+// write no configuration, no state file and no log line.
+func TestDownloadWithNoSizeHasACeiling(t *testing.T) {
+	// A body that is longer than the ceiling. The test lowers the ceiling through
+	// the part file: it asks for the whole body and counts what arrives.
+	body := bytes.Repeat([]byte("x"), 64<<10)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// A stream with no Content-Length and no end inside the test.
+		for i := 0; i < 4; i++ {
+			w.Write(body)
+		}
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "object")
+	err := Download(context.Background(), server.Client(), server.URL, "", dest, strings.Repeat("a", 64), 0)
+	if err == nil {
+		t.Fatal("Download() took a body of the wrong content")
+	}
+	// The part file holds what arrived and no more than the ceiling.
+	info, statErr := os.Stat(dest + ".part")
+	if statErr == nil && info.Size() > MaxUnknownBytes {
+		t.Errorf("the part file holds %d bytes, and the ceiling is %d", info.Size(), MaxUnknownBytes)
+	}
+}
+
+// A download that makes no progress must stop and keep the bytes that arrived. A
+// limit on the whole request would abort a video of 1 GB on a slow link, which is
+// not a fault.
+func TestDownloadStopsWhenNoBytesArrive(t *testing.T) {
+	old := idleLimit
+	idleLimit = 150 * time.Millisecond
+	defer func() { idleLimit = old }()
+
+	const size = 1 << 20
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", strconv.Itoa(size))
+		w.Write(bytes.Repeat([]byte("x"), 1024))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		// Then nothing at all.
+		time.Sleep(3 * time.Second)
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "object")
+	start := time.Now()
+	err := Download(context.Background(), server.Client(), server.URL, "", dest, strings.Repeat("a", 64), size)
+	if err == nil {
+		t.Fatal("Download() gave no error for a body that stopped")
+	}
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("Download() waited %v for a body that sent nothing", took)
+	}
+	info, statErr := os.Stat(dest + ".part")
+	if statErr != nil {
+		t.Fatalf("the part file is gone: %v", statErr)
+	}
+	if info.Size() != 1024 {
+		t.Errorf("the part file holds %d bytes, want the 1024 that arrived", info.Size())
+	}
+}

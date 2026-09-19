@@ -171,14 +171,24 @@ func hasParentStep(file string) bool {
 	return false
 }
 
-// isFleetRef reports if the path is the one shape that a fleet playlist may
-// use: ../media/<name>, which points at the shared object store.
+// FleetRefPrefix is the one shape of a file reference in a fleet playlist:
+// ../media/<name>, which points at the shared object store beside the playlist
+// directory. exFAT has no hard links, so the playlist names the object by a path.
+//
+// The writer and the reader of that shape are two packages, and each one had the
+// text of the path in it. One spelling here, so the two cannot drift.
+const FleetRefPrefix = "../media/"
+
+// FleetRef gives the reference of one object of the fleet store.
+func FleetRef(objectName string) string { return FleetRefPrefix + objectName }
+
+// isFleetRef reports if the path is the one shape that a fleet playlist may use.
 func isFleetRef(file string) bool {
 	parts := strings.Split(file, "/")
 	if len(parts) != 3 {
 		return false
 	}
-	return parts[0] == ".." && parts[1] == "media" && parts[2] != "" && parts[2] != ".."
+	return parts[0]+"/"+parts[1]+"/" == FleetRefPrefix && parts[2] != "" && parts[2] != ".."
 }
 
 // IsKiosk reports if this playlist is the single-URL kiosk mode (D42). The

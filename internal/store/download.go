@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
 )
@@ -17,6 +18,22 @@ import (
 // errRangeRejected says that the server refused the Range request. The caller
 // deletes the part file and starts again.
 var errRangeRejected = errors.New("the server refused the byte range")
+
+// MaxUnknownBytes is the largest download that a caller may take when it does not
+// know the size. A release binary is about 25 MB and the fleet release mirror
+// names no size, so the value is generous.
+//
+// Without it a body with no end fills the partition, and a device that filled its
+// own partition can write no configuration, no state file and no log line.
+const MaxUnknownBytes = 512 << 20
+
+// idleLimit is how long a download may make no progress before it stops.
+//
+// A limit on the whole request is wrong here: a video of 1 GB on a slow link needs
+// many minutes and is not a fault. A connection that stopped sending is a fault,
+// and the part file keeps the bytes that did arrive, so the next round continues
+// where this one stopped (D24). A test lowers the value.
+var idleLimit = 60 * time.Second
 
 // Download fetches url into destPath and checks it.
 //
@@ -141,11 +158,23 @@ func fetch(ctx context.Context, client *http.Client, url, bearer, part string, w
 	// Take the promised number of bytes and no more. A server that sends more
 	// than the manifest promises must not be able to fill the media partition:
 	// the card would then hold a part file that no later download can remove.
-	var body io.Reader = resp.Body
-	if wantSize > 0 {
-		body = io.LimitReader(resp.Body, wantSize-offset)
+	//
+	// A caller that knows no size gets the ceiling instead of no limit at all.
+	limit := wantSize - offset
+	if wantSize <= 0 {
+		limit = MaxUnknownBytes - offset
 	}
-	if _, err := io.Copy(f, body); err != nil {
+	if limit < 0 {
+		limit = 0
+	}
+	body := io.LimitReader(resp.Body, limit)
+
+	// A read that makes no progress ends the copy. Without it a connection that
+	// stopped in the middle holds the round until the context of the caller ends.
+	// That is half an hour on a device in the middle of a sync.
+	guard := time.AfterFunc(idleLimit, func() { resp.Body.Close() })
+	defer guard.Stop()
+	if _, err := io.Copy(f, &progressReader{r: body, guard: guard}); err != nil {
 		f.Sync() // keep the bytes that did arrive, so that a retry can continue
 		return fmt.Errorf("read the body of %s: %w", url, err)
 	}
@@ -153,6 +182,21 @@ func fetch(ctx context.Context, client *http.Client, url, bearer, part string, w
 		return fmt.Errorf("sync %s: %w", part, err)
 	}
 	return nil
+}
+
+// progressReader puts the idle guard forward at every block that arrives. io.Copy
+// reads in blocks of 32 kB, so a download that moves at all keeps the guard back.
+type progressReader struct {
+	r     io.Reader
+	guard *time.Timer
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	if n > 0 {
+		p.guard.Reset(idleLimit)
+	}
+	return n, err
 }
 
 // rangeStart gives the first byte number of a Content-Range header value, for

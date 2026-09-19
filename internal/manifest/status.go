@@ -76,16 +76,20 @@ type Warning struct {
 // The warning codes. The list is the contract between the daemon and the two
 // admin UIs.
 const (
-	WarnWebPassword      = "default-web-password"
-	WarnRootPassword     = "default-root-password"
-	WarnTimezoneUTC      = "timezone-utc"
-	WarnClockUnsynced    = "clock-unsynced"
-	WarnConfigShadow     = "config-shadow"
-	WarnConfigRepaired   = "config-repaired"
-	WarnConfigBadEdit    = "config-bad-edit"
-	WarnPlaylistProblem  = "playlist-problem"
-	WarnHardwareChanged  = "hardware-changed"
-	WarnUpdateRolledBack = "update-rolled-back"
+	WarnWebPassword    = "default-web-password"
+	WarnRootPassword   = "default-root-password"
+	WarnTimezoneUTC    = "timezone-utc"
+	WarnClockUnsynced  = "clock-unsynced"
+	WarnConfigShadow   = "config-shadow"
+	WarnConfigRepaired = "config-repaired"
+	WarnConfigBadEdit  = "config-bad-edit"
+	// WarnConfigManagedIgnored says that a hand edit of portapixel.toml changed a
+	// field that the fleet server owns while this device is paired (D48). The
+	// running value stays and the other edited fields apply as they are.
+	WarnConfigManagedIgnored = "config-managed-ignored"
+	WarnPlaylistProblem      = "playlist-problem"
+	WarnHardwareChanged      = "hardware-changed"
+	WarnUpdateRolledBack     = "update-rolled-back"
 	// WarnServerInsecure says that the fleet server address is http:// on an
 	// address that is not local, so the device token goes over the internet in
 	// clear text.
