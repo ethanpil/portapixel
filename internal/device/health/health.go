@@ -71,6 +71,9 @@ type Inputs struct {
 	LastSync       time.Time
 	LastSyncResult string
 	SyncError      string
+	// ServerInsecure is true when the server address is http:// on a network that
+	// is not local. The device token then goes over the internet in clear text.
+	ServerInsecure bool
 
 	ClockSynced bool
 	// Problems are the playlist faults that the library found. Each one is a
@@ -240,6 +243,9 @@ func (r *Reporter) warnings(in Inputs) []manifest.Warning {
 	}
 	if in.HardwareChanged {
 		add(manifest.WarnHardwareChanged, "The hardware of this device changed. The device kept its name and its pairing, and it reports the new identity.")
+	}
+	if in.ServerInsecure {
+		add(manifest.WarnServerInsecure, "The server address starts with http:// and it is not on this network. The device token goes over the internet in clear text. Use https://.")
 	}
 	if in.Update.State == manifest.UpdateRolledBack {
 		add(manifest.WarnUpdateRolledBack, "An update did not come up and the device went back to "+in.Update.Current+". It never tries that release again.")

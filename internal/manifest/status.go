@@ -86,6 +86,10 @@ const (
 	WarnPlaylistProblem  = "playlist-problem"
 	WarnHardwareChanged  = "hardware-changed"
 	WarnUpdateRolledBack = "update-rolled-back"
+	// WarnServerInsecure says that the fleet server address is http:// on an
+	// address that is not local, so the device token goes over the internet in
+	// clear text.
+	WarnServerInsecure = "server-insecure"
 )
 
 // CodecReport says which video formats a device decodes (D12). The player probes

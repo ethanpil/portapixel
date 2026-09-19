@@ -6,8 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
+	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
 )
 
@@ -35,14 +37,50 @@ type State struct {
 	// code that the fallback screen shows.
 	ClaimSecret string `json:"claim_secret,omitempty"`
 	PairingCode string `json:"pairing_code,omitempty"`
+	// PendingSince is when the code pairing started. The fleet client polls every
+	// 10 seconds for the first 10 minutes and every 60 seconds after it, and the
+	// value must survive a reboot with the claim secret.
+	PendingSince time.Time `json:"pending_since,omitempty"`
 	// ServerURL is the server that paired this device. It can be different from
 	// the URL in the TOML while the user edits the TOML.
 	ServerURL string `json:"server_url,omitempty"`
+
+	// Fleet is the last manifest that the device applied, without its commands.
+	//
+	// It is here for two reasons. The fleet client compares the new manifest with
+	// it, so a poll that brings the same answer writes nothing at all. And the
+	// daemon hands the schedule to the scheduler at start, so a paired device uses
+	// the fleet rules before its first poll answers.
+	Fleet *manifest.Manifest `json:"fleet,omitempty"`
+
+	// Commands are the IDs of the commands that the device ran. The server sends a
+	// command again when no acknowledgement arrives, so a repeated ID must be
+	// acknowledged and never run twice.
+	Commands []int64 `json:"commands,omitempty"`
 
 	// BadReleases are the releases that failed their health gate. The updater
 	// never tries them again.
 	BadReleases []string `json:"bad_releases,omitempty"`
 }
+
+// MaxCommands is how many executed command IDs the state keeps. The server stops
+// sending a command after three deliveries, so a hundred IDs cover far more than
+// the window in which a repeat can arrive.
+const MaxCommands = 100
+
+// MarkCommand records a command that ran. It keeps the newest MaxCommands IDs.
+func (s *State) MarkCommand(id int64) {
+	if slices.Contains(s.Commands, id) {
+		return
+	}
+	s.Commands = append(s.Commands, id)
+	if len(s.Commands) > MaxCommands {
+		s.Commands = s.Commands[len(s.Commands)-MaxCommands:]
+	}
+}
+
+// RanCommand reports if a command ID already ran on this device.
+func (s State) RanCommand(id int64) bool { return slices.Contains(s.Commands, id) }
 
 // StatePath gives the path of the state file.
 func StatePath(stateDir string) string { return filepath.Join(stateDir, FileName) }

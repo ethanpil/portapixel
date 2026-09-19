@@ -28,6 +28,15 @@ const stepTimeout = 10 * time.Minute
 // Nothing here may hold up the start of the daemon. Run is a goroutine and every
 // fault is an ops log line.
 func (m *Manager) Run(done <-chan struct{}, src Source) {
+	m.RunSource(done, func() Source { return src })
+}
+
+// RunSource is Run with a source that can change while the daemon runs.
+//
+// A paired device takes the release that its fleet server approved, and the server
+// can approve another version at any time, or the device can be unpaired. So the
+// loop asks for the source at each pass and never holds a copy of it (D28).
+func (m *Manager) RunSource(done <-chan struct{}, source func() Source) {
 	t := time.NewTicker(m.opt.Tick)
 	defer t.Stop()
 
@@ -36,7 +45,7 @@ func (m *Manager) Run(done <-chan struct{}, src Source) {
 		case <-done:
 			return
 		case <-t.C:
-			m.step(done, src)
+			m.step(done, source())
 		}
 	}
 }
