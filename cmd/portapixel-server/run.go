@@ -17,16 +17,27 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/opslog"
+	srvpkg "github.com/ethanpil/portapixel/internal/server"
 	"github.com/ethanpil/portapixel/internal/server/admin"
 	"github.com/ethanpil/portapixel/internal/server/api"
 	"github.com/ethanpil/portapixel/internal/server/db"
+	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/server/media"
 	"github.com/ethanpil/portapixel/internal/server/releases"
 )
 
 // shutdownGrace is how long a shutdown waits for the requests that are in flight.
-// A device that downloads a large video gets that time to finish.
-const shutdownGrace = 20 * time.Second
+//
+// Eight seconds, and not more: Docker sends SIGKILL ten seconds after SIGTERM by
+// default, and OpenRC supervise-daemon waits about five. A grace period longer
+// than the supervisor allows is a grace period that never finishes, and the
+// process dies in the middle of the work that it was protecting. The deploy files
+// raise the supervisor limits to fifteen seconds, which leaves room for this one.
+const shutdownGrace = 8 * time.Second
+
+// sweepInterval is how often the media store looks for files that no row can
+// reach, and how often the pending list loses its old requests.
+const sweepInterval = time.Hour
 
 // runCommand is the server.
 func runCommand(args []string) int {
@@ -59,10 +70,25 @@ type server struct {
 	log     *opslog.Log
 	store   *media.Store
 	mirror  *releases.Mirror
+	proxies *httpjson.Proxies
 	handler http.Handler
 
-	// mu guards cfg, which the settings route writes.
+	// bg is the life of the process. The mirror and the GitHub lister take it, so
+	// that a request that ends does not cancel work that the fleet needs, and a
+	// shutdown does cancel it.
+	bg       context.Context
+	cancelBG context.CancelFunc
+	// stopSweep ends the background sweeps.
+	stopSweep chan struct{}
+	sweepOnce sync.Once
+
+	// mu guards cfg and fleet, which the settings route writes.
 	mu sync.RWMutex
+	// fleet holds the values that every manifest needs. They come from the
+	// settings table and from the releases table, and a poll reads them from here:
+	// a fleet of 200 screens would otherwise ask the database for the same three
+	// values 200 times a minute.
+	fleet api.Fleet
 }
 
 // newServer opens the data directory and builds the routes.
@@ -84,6 +110,10 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 
 	// The first run has no password. Make one, print it one time, and store its
 	// hash. See GeneratePassword for why.
+	//
+	// The password goes to the standard output and nowhere else. The ops log, the
+	// database and server.toml never hold it: the file holds the bcrypt hash, and
+	// the line below runs one time, because the next start finds that hash.
 	if cfg.AdminPasswordHash == "" {
 		password := GeneratePassword()
 		hash, err := HashPassword(password)
@@ -101,8 +131,8 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 			"     user:     admin (there is one account)\n"+
 			"     password: %s\n"+
 			"\n"+
-			" Write it down now. The server keeps only its hash, so it cannot\n"+
-			" print it again. Change it on the Settings page or with\n"+
+			" Record it now. The server keeps only its hash, so it cannot print it\n"+
+			" again. Change it on the Settings page or with\n"+
 			" \"portapixel-server set-password\".\n"+
 			"=====================================================================\n\n", password)
 		log.Log("first-run", "the server made the admin password and stored its hash")
@@ -117,7 +147,22 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 		database.Close()
 		return nil, err
 	}
+	proxies, proxyWarnings := httpjson.NewProxies(cfg.TrustedProxies)
+	for _, warning := range proxyWarnings {
+		slog.Warn("server.toml", "detail", warning)
+		log.Log("config-warning", warning)
+	}
+
 	mirror := releases.NewMirror(dataDir, cfg.GitHubRepo)
+	// A stopped process can leave a staging directory and a part file behind.
+	mirror.CleanStaging()
+
+	bg, cancelBG := context.WithCancel(context.Background())
+	s := &server{
+		cfg: cfg, dataDir: dataDir, db: database,
+		log: log, store: store, mirror: mirror, proxies: proxies,
+		bg: bg, cancelBG: cancelBG, stopSweep: make(chan struct{}),
+	}
 	mirror.Report = func(version, state, errText string) {
 		if err := database.SetMirrorState(version, state, errText); err != nil {
 			slog.Error("write the mirror state", "version", version, "error", err)
@@ -127,21 +172,30 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 		} else {
 			log.Log("mirror-"+state, version)
 		}
+		s.refreshFleet()
 	}
 
-	s := &server{
-		cfg: cfg, dataDir: dataDir, db: database,
-		log: log, store: store, mirror: mirror,
-	}
+	s.refreshFleet()
 	s.handler = s.routes()
 	return s, nil
 }
 
-// Close gives the database back.
+// Close gives the database back and ends the background work.
 func (s *server) Close() {
+	s.stopBackground()
 	if s.db != nil {
 		s.db.Close()
 	}
+}
+
+// stopBackground ends the background context and the sweeps one time.
+func (s *server) stopBackground() {
+	s.sweepOnce.Do(func() {
+		if s.cancelBG != nil {
+			s.cancelBG()
+		}
+		close(s.stopSweep)
+	})
 }
 
 // config gives the configuration as it is now.
@@ -151,51 +205,59 @@ func (s *server) config() Config {
 	return s.cfg
 }
 
-// routes builds the handler.
-//
-// The device API and the admin UI get different guards, which is why they are two
-// muxes. The device API takes no Host allowlist and no CSRF header: a device is
-// not a browser, it carries a bearer token and no cookie, and its Host header is
-// whatever the admin typed into its configuration. The browser side takes both
-// guards (D46).
+// background gives the life of the process.
+func (s *server) background() context.Context { return s.bg }
+
+// routes builds the handler. internal/server holds the stack, and the route tests
+// call the same constructor.
 func (s *server) routes() http.Handler {
-	deviceMux := http.NewServeMux()
-	api.Deps{
-		DB:          s.db,
-		Media:       s.store,
-		Mirror:      s.mirror,
-		Log:         s.log,
-		Limiter:     httpguard.NewLimiter(),
-		ServerName:  s.serverName,
-		DefaultPoll: s.defaultPoll,
-	}.Routes(deviceMux)
+	return srvpkg.New(srvpkg.Deps{
+		Device: api.Deps{
+			DB:             s.db,
+			Media:          s.store,
+			Mirror:         s.mirror,
+			Log:            s.log,
+			Limiter:        httpguard.NewLimiter(),
+			PendingLimiter: httpguard.NewPendingLimiter(),
+			ClientIP:       s.proxies.ClientIP,
+			Fleet:          s.readFleet,
+		},
+		Admin: admin.Deps{
+			DB:            s.db,
+			Media:         s.store,
+			Mirror:        s.mirror,
+			Log:           s.log,
+			Sessions:      s.sessions(),
+			Limiter:       httpguard.NewLimiter(),
+			ClientIP:      s.proxies.ClientIP,
+			DataDir:       s.dataDir,
+			StartedAt:     time.Now(),
+			Background:    s.background,
+			CheckPassword: s.checkPassword,
+			SetPassword:   s.setPassword,
+			Settings:      s.settings,
+			SaveSettings:  s.saveSettings,
+			FleetChanged:  s.refreshFleet,
+		},
+		Hosts: s.hosts,
+	})
+}
 
-	uiMux := http.NewServeMux()
-	admin.Deps{
-		DB:            s.db,
-		Media:         s.store,
-		Mirror:        s.mirror,
-		Log:           s.log,
-		Sessions:      httpguard.NewSessions(),
-		Limiter:       httpguard.NewLimiter(),
-		DataDir:       s.dataDir,
-		StartedAt:     time.Now(),
-		Hosts:         s.hosts,
-		CheckPassword: s.checkPassword,
-		SetPassword:   s.setPassword,
-		Settings:      s.settings,
-		SaveSettings:  s.saveSettings,
-	}.Routes(uiMux)
-	s.staticRoutes(uiMux)
-
-	var ui http.Handler = uiMux
-	ui = httpguard.RequireHeader(ui)
-	ui = httpguard.HostAllowlist(s.hosts)(ui)
-
-	root := http.NewServeMux()
-	root.Handle("/api/v1/", deviceMux)
-	root.Handle("/", ui)
-	return root
+// sessions makes the session store of the admin UI.
+//
+// The cookie takes the Secure attribute when the caller reached the server over
+// TLS, either directly or through a proxy that we trust. A cookie with Secure over
+// plain HTTP would never come back, so the flag cannot be a constant: a homelab
+// server on a closed network answers plain HTTP by design.
+func (s *server) sessions() *httpguard.Sessions {
+	sessions := httpguard.NewSessions()
+	sessions.Secure = func(r *http.Request) bool {
+		if s.proxies.ClientIsHTTPS(r) {
+			return true
+		}
+		return strings.HasPrefix(s.config().PublicURL, "https://")
+	}
+	return sessions
 }
 
 // Serve listens and answers until the context ends.
@@ -204,13 +266,17 @@ func (s *server) Serve(ctx context.Context) int {
 	httpSrv := &http.Server{
 		Addr:    cfg.Listen,
 		Handler: s.handler,
-		// A device that uploads nothing and reads a large video needs no write
-		// deadline, and a deadline here would cut a download of a 1 GB file. The
-		// read header timeout is the one that stops a connection that sends
-		// nothing at all.
+		// There is no ReadTimeout and no WriteTimeout. One would cut a 1 GB media
+		// upload and a Range download of the same file. ReadHeaderTimeout is the
+		// one that stops a connection that sends no headers at all, and the JSON
+		// routes and the upload routes each set a deadline of their own on the
+		// body (internal/server/httpjson).
 		ReadHeaderTimeout: 20 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
+
+	go s.store.SweepEvery(sweepInterval, s.db.KnownHashes, s.stopSweep)
+	go s.sweepPendingEvery(sweepInterval)
 
 	scheme := "http"
 	if cfg.TLSCert != "" {
@@ -245,6 +311,9 @@ func (s *server) Serve(ctx context.Context) int {
 	// time. A download of a large video is the request that needs it.
 	slog.Info("stopping")
 	s.log.Log("stop", "the server stops")
+	// The mirror and the release list stop now. A download of 200 MB must not hold
+	// the process open past the grace period of the supervisor.
+	s.stopBackground()
 	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
@@ -253,17 +322,49 @@ func (s *server) Serve(ctx context.Context) int {
 	return 0
 }
 
+// sweepPendingEvery drops the enroll requests that waited too long.
+func (s *server) sweepPendingEvery(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopSweep:
+			return
+		case <-ticker.C:
+			if err := s.db.SweepPending(); err != nil {
+				slog.Warn("the sweep of the pending list failed", "error", err)
+			}
+		}
+	}
+}
+
 // The functions below are what the route packages call for the values that live
 // in server.toml or in the settings table.
 
 func (s *server) hosts() []string { return AllowedHosts(s.config()) }
 
-func (s *server) serverName() string {
-	return s.db.Setting(db.SettingServerName, "PortaPixel")
+// readFleet gives the cached values of the manifest.
+func (s *server) readFleet() api.Fleet {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.fleet
 }
 
-func (s *server) defaultPoll() int {
-	return s.db.SettingInt(db.SettingPollSeconds, s.config().DefaultPollSeconds)
+// refreshFleet reads the values of the manifest from the database into the cache.
+// Every write that changes one of them calls it.
+func (s *server) refreshFleet() {
+	name := s.db.Setting(db.SettingServerName, "PortaPixel")
+	poll := s.db.SettingInt(db.SettingPollSeconds, db.DefaultPollSeconds)
+	if poll < db.MinPollSeconds {
+		poll = db.MinPollSeconds
+	}
+	var release *db.Release
+	if rel, err := s.db.ApprovedRelease(); err == nil {
+		release = &rel
+	}
+	s.mu.Lock()
+	s.fleet = api.Fleet{ServerName: name, DefaultPoll: poll, Release: release}
+	s.mu.Unlock()
 }
 
 func (s *server) checkPassword(password string) bool {
@@ -277,13 +378,14 @@ func (s *server) setPassword(password string) error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cfg := s.cfg
 	cfg.AdminPasswordHash = hash
 	if err := SaveConfig(s.dataDir, cfg); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 	s.cfg = cfg
+	s.mu.Unlock()
 	// The admin chose this password, so the "still on the installer password"
 	// banner goes away.
 	return s.db.SetSetting(settingPasswordSet, "yes")
@@ -292,12 +394,12 @@ func (s *server) setPassword(password string) error {
 // settings gives the settings of the admin UI.
 func (s *server) settings() admin.Settings {
 	cfg := s.config()
-	poll := s.defaultPoll()
+	fleet := s.readFleet()
 	return admin.Settings{
-		ServerName:        s.serverName(),
-		PollSeconds:       poll,
+		ServerName:        fleet.ServerName,
+		PollSeconds:       fleet.DefaultPoll,
 		PublicURL:         cfg.PublicURL,
-		QuietAfterSeconds: poll * 5 / 2,
+		QuietAfterSeconds: fleet.DefaultPoll * 5 / 2,
 		WeakPassword:      s.db.Setting(settingPasswordSet, "") != "yes",
 	}
 }
@@ -307,8 +409,9 @@ func (s *server) settings() admin.Settings {
 // "this is the password that the installer made" until somebody changes it.
 const settingPasswordSet = "password_chosen"
 
-// saveSettings writes the settings. The name and the poll interval take effect at
-// once; the public URL needs a restart, and the route says so.
+// saveSettings writes the settings. Every value takes effect at once: the Host
+// allowlist comes from a function that runs on each request, and the manifest
+// values come from a cache that this function fills again.
 func (s *server) saveSettings(in admin.Settings) error {
 	if err := s.db.SetSetting(db.SettingServerName, strings.TrimSpace(in.ServerName)); err != nil {
 		return err
@@ -317,16 +420,17 @@ func (s *server) saveSettings(in admin.Settings) error {
 		return err
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	if in.PublicURL == s.cfg.PublicURL && in.PollSeconds == s.cfg.DefaultPollSeconds {
-		return nil
+	changed := in.PublicURL != s.cfg.PublicURL
+	if changed {
+		cfg := s.cfg
+		cfg.PublicURL = in.PublicURL
+		if err := SaveConfig(s.dataDir, cfg); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		s.cfg = cfg
 	}
-	cfg := s.cfg
-	cfg.PublicURL = in.PublicURL
-	cfg.DefaultPollSeconds = in.PollSeconds
-	if err := SaveConfig(s.dataDir, cfg); err != nil {
-		return err
-	}
-	s.cfg = cfg
+	s.mu.Unlock()
+	s.refreshFleet()
 	return nil
 }

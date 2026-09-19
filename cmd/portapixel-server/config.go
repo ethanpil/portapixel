@@ -15,6 +15,7 @@ import (
 	"github.com/BurntSushi/toml"
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 )
 
@@ -28,29 +29,42 @@ const DatabaseName = "portapixel.db"
 const (
 	defaultListen = ":8080"
 	defaultRepo   = "ethanpil/portapixel"
-	defaultPoll   = 60
 )
 
-// Config is server.toml. It holds the values that a restart applies: the listen
-// address, the certificate, the public URL and the password hash. Everything that
-// the admin UI changes while the server runs is in the settings table of the
-// database, except the four values that the UI writes back here.
+// The environment variables that replace a value of server.toml. A Docker user
+// expects to set an address in the compose file, and the file in the volume is not
+// where they would look. The environment wins over the file.
+const (
+	envPublicURL      = "PORTAPIXEL_PUBLIC_URL"
+	envListen         = "PORTAPIXEL_LISTEN"
+	envTrustedProxies = "PORTAPIXEL_TRUSTED_PROXIES"
+)
+
+// Config is server.toml. It holds the values that the file owns: the listen
+// address, the certificate, the public URL, the password hash and the proxies that
+// the server believes.
+//
+// The poll interval is not here. It lives in the settings table, which the admin UI
+// writes, and one value in two places needs a precedence rule that nobody
+// remembers.
 type Config struct {
-	Listen             string `toml:"listen"`
-	PublicURL          string `toml:"public_url"`
-	AdminPasswordHash  string `toml:"admin_password_hash"`
-	TLSCert            string `toml:"tls_cert"`
-	TLSKey             string `toml:"tls_key"`
-	GitHubRepo         string `toml:"github_repo"`
-	DefaultPollSeconds int    `toml:"default_poll_seconds"`
+	Listen            string `toml:"listen"`
+	PublicURL         string `toml:"public_url"`
+	AdminPasswordHash string `toml:"admin_password_hash"`
+	TLSCert           string `toml:"tls_cert"`
+	TLSKey            string `toml:"tls_key"`
+	GitHubRepo        string `toml:"github_repo"`
+	// TrustedProxies names the peer addresses whose X-Forwarded-For and
+	// X-Forwarded-Proto headers the server believes. Each entry is an address or a
+	// CIDR block. See internal/server/httpjson.Proxies.
+	TrustedProxies []string `toml:"trusted_proxies"`
 }
 
 // defaults gives a configuration with nothing set.
 func defaults() Config {
 	return Config{
-		Listen:             defaultListen,
-		GitHubRepo:         defaultRepo,
-		DefaultPollSeconds: defaultPoll,
+		Listen:     defaultListen,
+		GitHubRepo: defaultRepo,
 	}
 }
 
@@ -95,16 +109,35 @@ func LoadConfig(dataDir string) (Config, []string, error) {
 		cfg.GitHubRepo = defaultRepo
 		warnings = append(warnings, "github_repo was empty, so the server uses "+defaultRepo)
 	}
-	if cfg.DefaultPollSeconds < 5 || cfg.DefaultPollSeconds > 86400 {
-		warnings = append(warnings, fmt.Sprintf(
-			"default_poll_seconds was %d, so the server uses %d", cfg.DefaultPollSeconds, defaultPoll))
-		cfg.DefaultPollSeconds = defaultPoll
-	}
 	if (cfg.TLSCert == "") != (cfg.TLSKey == "") {
 		warnings = append(warnings, "tls_cert and tls_key need each other, so the server answers plain HTTP")
 		cfg.TLSCert, cfg.TLSKey = "", ""
 	}
-	return cfg, warnings, nil
+	cfg, envWarnings := applyEnv(cfg)
+	return cfg, append(warnings, envWarnings...), nil
+}
+
+// applyEnv lets the environment replace three values of the file.
+//
+// A Docker user sets an address in the compose file and expects the program to read
+// it. The value never goes back into server.toml: the file is the record of what a
+// person typed there, and a variable of the container is not.
+func applyEnv(cfg Config) (Config, []string) {
+	var warnings []string
+	if v := strings.TrimSpace(os.Getenv(envPublicURL)); v != "" {
+		if !strings.HasPrefix(v, "http://") && !strings.HasPrefix(v, "https://") {
+			warnings = append(warnings, envPublicURL+" must start with http:// or https://, so the server ignores it")
+		} else {
+			cfg.PublicURL = v
+		}
+	}
+	if v := strings.TrimSpace(os.Getenv(envListen)); v != "" {
+		cfg.Listen = v
+	}
+	if v := strings.TrimSpace(os.Getenv(envTrustedProxies)); v != "" {
+		cfg.TrustedProxies = strings.Split(v, ",")
+	}
+	return cfg, warnings
 }
 
 // SaveConfig writes server.toml.
@@ -121,46 +154,48 @@ func SaveConfig(dataDir string, cfg Config) error {
 
 # The address that the server listens on. ":8080" answers on every interface.
 `)
-	fmt.Fprintf(&b, "listen = %s\n\n", quote(cfg.Listen))
+	fmt.Fprintf(&b, "listen = %s\n\n", config.Quote(cfg.Listen))
 	b.WriteString(`# The address that a browser and a device use to reach this server. The Host
 # header allowlist and the pairing block for a card come from it. Leave it empty
-# on a closed network.
+# on a closed network. PORTAPIXEL_PUBLIC_URL replaces this value.
 `)
-	fmt.Fprintf(&b, "public_url = %s\n\n", quote(cfg.PublicURL))
+	fmt.Fprintf(&b, "public_url = %s\n\n", config.Quote(cfg.PublicURL))
 	b.WriteString(`# The bcrypt hash of the admin password. The first run makes a random password,
 # prints it one time, and stores its hash here. Change it in the admin UI or with
 # "portapixel-server set-password".
 `)
-	fmt.Fprintf(&b, "admin_password_hash = %s\n\n", quote(cfg.AdminPasswordHash))
+	fmt.Fprintf(&b, "admin_password_hash = %s\n\n", config.Quote(cfg.AdminPasswordHash))
 	b.WriteString(`# The certificate and the private key of HTTPS. Set both, or neither for plain
 # HTTP behind a reverse proxy. There is no automatic certificate in this release.
 `)
-	fmt.Fprintf(&b, "tls_cert = %s\n", quote(cfg.TLSCert))
-	fmt.Fprintf(&b, "tls_key = %s\n\n", quote(cfg.TLSKey))
+	fmt.Fprintf(&b, "tls_cert = %s\n", config.Quote(cfg.TLSCert))
+	fmt.Fprintf(&b, "tls_key = %s\n\n", config.Quote(cfg.TLSKey))
 	b.WriteString("# The repository that the release list comes from.\n")
-	fmt.Fprintf(&b, "github_repo = %s\n\n", quote(cfg.GitHubRepo))
-	b.WriteString("# How often a device calls, in seconds, when it has no value of its own.\n")
-	fmt.Fprintf(&b, "default_poll_seconds = %d\n", cfg.DefaultPollSeconds)
+	fmt.Fprintf(&b, "github_repo = %s\n\n", config.Quote(cfg.GitHubRepo))
+	b.WriteString(`# The addresses of the reverse proxies that this server believes. Each entry is
+# an address or a CIDR block. For a peer inside the list the server reads the
+# client address from X-Forwarded-For and the scheme from X-Forwarded-Proto. For
+# every other peer it ignores the two headers.
+#
+# Leave it empty when no proxy is in front. A wrong entry here would let a caller
+# choose the address that the rate limiters count.
+`)
+	fmt.Fprintf(&b, "trusted_proxies = %s\n", quoteList(cfg.TrustedProxies))
 
 	// The file holds a password hash, so only the owner may read it.
 	return fsutil.WriteFileAtomic(ConfigPath(dataDir), []byte(b.String()), 0o600)
 }
 
-// quote puts a value in the TOML basic form.
-func quote(s string) string {
-	out := make([]rune, 0, len(s)+2)
-	out = append(out, '"')
-	for _, r := range s {
-		switch r {
-		case '"', '\\':
-			out = append(out, '\\', r)
-		case '\n', '\r', '\t':
-			out = append(out, ' ')
-		default:
-			out = append(out, r)
+// quoteList makes a TOML array of strings. config.Quote writes each value, so the
+// server and the device escape a string the same way.
+func quoteList(values []string) string {
+	quoted := make([]string, 0, len(values))
+	for _, v := range values {
+		if v = strings.TrimSpace(v); v != "" {
+			quoted = append(quoted, config.Quote(v))
 		}
 	}
-	return string(append(out, '"'))
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 // minPasswordLength is the shortest admin password that the server takes.

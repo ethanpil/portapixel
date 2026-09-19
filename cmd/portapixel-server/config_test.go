@@ -2,6 +2,8 @@ package main
 
 import (
 	"os"
+	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -16,8 +18,11 @@ func TestLoadConfigMakesTheFileOnTheFirstRun(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Fatalf("a new file gave warnings: %v", warnings)
 	}
-	if cfg.Listen != defaultListen || cfg.GitHubRepo != defaultRepo || cfg.DefaultPollSeconds != defaultPoll {
+	if cfg.Listen != defaultListen || cfg.GitHubRepo != defaultRepo {
 		t.Fatalf("the defaults are %+v", cfg)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("a new file trusts the proxies %v", cfg.TrustedProxies)
 	}
 	if cfg.AdminPasswordHash != "" {
 		t.Fatal("a new file holds a password hash")
@@ -30,13 +35,13 @@ func TestLoadConfigMakesTheFileOnTheFirstRun(t *testing.T) {
 func TestConfigRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	want := Config{
-		Listen:             "127.0.0.1:9000",
-		PublicURL:          "https://signage.example.com",
-		AdminPasswordHash:  "$2a$10$abcdefghijklmnopqrstuv",
-		TLSCert:            "/etc/ssl/cert.pem",
-		TLSKey:             "/etc/ssl/key.pem",
-		GitHubRepo:         "someone/else",
-		DefaultPollSeconds: 120,
+		Listen:            "127.0.0.1:9000",
+		PublicURL:         "https://signage.example.com",
+		AdminPasswordHash: "$2a$10$abcdefghijklmnopqrstuv",
+		TLSCert:           "/etc/ssl/cert.pem",
+		TLSKey:            "/etc/ssl/key.pem",
+		GitHubRepo:        "someone/else",
+		TrustedProxies:    []string{"127.0.0.1", "172.16.0.0/12"},
 	}
 	if err := SaveConfig(dir, want); err != nil {
 		t.Fatal(err)
@@ -48,17 +53,17 @@ func TestConfigRoundTrip(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Fatalf("the round trip gave warnings: %v", warnings)
 	}
-	if got != want {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("the file read back as\n%+v\nwant\n%+v", got, want)
 	}
 }
 
 func TestConfigRepairsBadValues(t *testing.T) {
 	dir := t.TempDir()
-	// Only the certificate is set, the poll interval is out of range, and the
-	// listen address is empty. Each one gets its default back with a warning, and
-	// the good values stay.
-	content := "listen = \"\"\ndefault_poll_seconds = 0\ntls_cert = \"/a/cert\"\n" +
+	// Only the certificate is set, the repository is empty, and the listen address
+	// is empty. Each one gets its default back with a warning, and the good values
+	// stay.
+	content := "listen = \"\"\ngithub_repo = \"\"\ntls_cert = \"/a/cert\"\n" +
 		"public_url = \"https://keep.example.com\"\n"
 	if err := os.WriteFile(ConfigPath(dir), []byte(content), 0o600); err != nil {
 		t.Fatal(err)
@@ -71,7 +76,7 @@ func TestConfigRepairsBadValues(t *testing.T) {
 	if len(warnings) != 3 {
 		t.Fatalf("the load gave %d warnings, want 3: %v", len(warnings), warnings)
 	}
-	if cfg.Listen != defaultListen || cfg.DefaultPollSeconds != defaultPoll {
+	if cfg.Listen != defaultListen || cfg.GitHubRepo != defaultRepo {
 		t.Fatalf("the repair gave %+v", cfg)
 	}
 	if cfg.TLSCert != "" || cfg.TLSKey != "" {
@@ -91,9 +96,73 @@ func TestConfigFileIsNotReadableByEverybody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Windows has no POSIX modes, so the check runs where it means something.
-	if info.Mode().Perm()&0o077 != 0 && info.Mode().Perm() != 0o666 {
+	// Windows has no POSIX modes, so the check runs where it means something. The
+	// old form also let 0666 through, which is the worst mode that a POSIX system
+	// could give this file.
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no POSIX file modes")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("the mode of the file is %v; it holds a password hash", info.Mode().Perm())
+	}
+}
+
+func TestEnvironmentReplacesTheFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := SaveConfig(dir, Config{
+		Listen: ":8080", GitHubRepo: defaultRepo,
+		PublicURL: "https://from-the-file.example",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(envPublicURL, "https://from-the-environment.example")
+	t.Setenv(envListen, "127.0.0.1:9999")
+	t.Setenv(envTrustedProxies, "127.0.0.1, 172.16.0.0/12")
+
+	cfg, warnings, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("the load gave warnings: %v", warnings)
+	}
+	if cfg.PublicURL != "https://from-the-environment.example" {
+		t.Fatalf("the public URL is %q", cfg.PublicURL)
+	}
+	if cfg.Listen != "127.0.0.1:9999" {
+		t.Fatalf("the listen address is %q", cfg.Listen)
+	}
+	if len(cfg.TrustedProxies) != 2 {
+		t.Fatalf("the trusted proxies are %v", cfg.TrustedProxies)
+	}
+
+	// A public URL with no scheme is refused, and the value of the file stays.
+	t.Setenv(envPublicURL, "from-the-environment.example")
+	cfg, warnings, err = LoadConfig(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("a bad %s gave %d warnings", envPublicURL, len(warnings))
+	}
+	if cfg.PublicURL != "https://from-the-file.example" {
+		t.Fatalf("a bad environment value cost the file value: %q", cfg.PublicURL)
+	}
+}
+
+func TestHealthURL(t *testing.T) {
+	for in, want := range map[string]string{
+		":8080":          "http://127.0.0.1:8080",
+		"0.0.0.0:9000":   "http://127.0.0.1:9000",
+		"127.0.0.1:8097": "http://127.0.0.1:8097",
+		"not-an-address": "http://127.0.0.1:8080",
+	} {
+		if got := healthURL(Config{Listen: in}); got != want {
+			t.Errorf("the health URL of %q is %q, want %q", in, got, want)
+		}
+	}
+	if got := healthURL(Config{Listen: ":8443", TLSCert: "/a/cert"}); got != "https://127.0.0.1:8443" {
+		t.Errorf("a server with a certificate gives %q", got)
 	}
 }
 
