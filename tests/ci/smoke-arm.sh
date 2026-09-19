@@ -136,8 +136,11 @@ out="$(chroot "$R" /opt/portapixel/current/portapixeld version 2>&1)" ||
 	die "the aarch64 daemon does not run under qemu-user:
 $out"
 say "version: $out"
-printf '%s' "$out" | grep -q "portapixeld $VERSION aarch64" ||
-	die "the binary says \"$out\" and CI built $VERSION for aarch64"
+# The binary prints the Go name of the processor, "arm64". The image and apk use
+# the Alpine name, "aarch64". The release assets carry the Go name, because the
+# updater builds the asset name from it (internal/version Arch).
+printf '%s' "$out" | grep -q "portapixeld $VERSION arm64" ||
+	die "the binary says \"$out\" and CI built $VERSION for arm64"
 
 out="$(chroot "$R" /opt/portapixel/current/portapixeld selftest 2>&1)" || {
 	printf '%s\n' "$out"
