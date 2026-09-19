@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PortaPixel component gallery</title>
+<link rel="stylesheet" href="pp.css">
+</head>
+<body>
+<div id="root"></div>
+
+<script type="module">
+/* Static gallery for the shared components. It needs no backend: every value
+   here is made up. Open it from a static server and look at it at desktop and
+   phone widths, in the light theme and the dark theme. */
+
+import {
+  h, fill, icon, toast, modal, confirmDialog, typedConfirm,
+  fmtBytes, fmtDuration, fmtAgo, statusDot, badge, banner, factList,
+  table, progress, spinner, route, renderShell,
+} from './ui.js';
+import { mountPlaylistEditor } from './playlist-editor.js';
+
+/* ------------------------------------------------------------- fake data */
+
+const NOW = Date.now();
+const ago = (s) => new Date(NOW - s * 1000).toISOString();
+
+// A capability report of the kind a device sends in /api/status.
+const DEVICE_CAPS = {
+  source: 'device',
+  tier: 'high',
+  codecs: {
+    h264: { 1080: { supported: true, smooth: true, powerEfficient: true }, 2160: { supported: true, smooth: true, powerEfficient: true } },
+    hevc: { 1080: { supported: false, smooth: false, powerEfficient: false }, 2160: { supported: false, smooth: false, powerEfficient: false } },
+    vp9: { 1080: { supported: true, smooth: true, powerEfficient: false }, 2160: { supported: false, smooth: false, powerEfficient: false } },
+    av1: { 1080: { supported: false, smooth: false, powerEfficient: false }, 2160: { supported: false, smooth: false, powerEfficient: false } },
+  },
+};
+
+const LOBBY = {
+  name: 'Lobby loop',
+  transition: 'crossfade',
+  shuffle: false,
+  items: [
+    { file: 'welcome-autumn.jpg', name: 'welcome-autumn.jpg', kind: 'image', duration: 15 },
+    { file: 'hours-and-directions.jpg', name: 'hours-and-directions.jpg', kind: 'image', duration: 12 },
+    { file: 'promo-fall.mp4', name: 'promo-fall.mp4', kind: 'video', mute: false, length: 24 },
+    { file: 'product-hero-4k.mp4', name: 'product-hero-4k.mp4', kind: 'video', mute: false, codec: 'hvc1', width: 3840, height: 2160, length: 31 },
+    { url: 'https://dashboards.example.com/sales', name: 'dashboards.example.com/sales', kind: 'url', duration: 60, refresh_seconds: 300 },
+    { file: 'seasonal-menu.jpg', name: 'seasonal-menu.jpg', kind: 'image', duration: 10 },
+  ],
+};
+
+const WINDOW_PL = {
+  name: 'Front window',
+  transition: 'cut',
+  shuffle: false,
+  items: [{ url: 'https://dashboards.example.com/lobby', name: 'dashboards.example.com/lobby', kind: 'url', refresh_seconds: 300 }],
+};
+
+const BREAK_ROOM = { name: 'Break room', transition: 'crossfade', shuffle: false, items: [] };
+
+const LIBRARY = [
+  { sha256: 'a1', name: 'safety-01.jpg', kind: 'image', size: 2_400_000 },
+  { sha256: 'a2', name: 'safety-02.jpg', kind: 'image', size: 1_900_000 },
+  { sha256: 'a3', name: 'forklift-rules.mp4', kind: 'video', size: 148_000_000 },
+  { sha256: 'a4', name: 'menu-board-week.png', kind: 'image', size: 840_000 },
+];
+
+const deviceSource = {
+  thumbUrl: () => null,
+  // Pretend the file lands in the playlist folder after a short upload.
+  upload: (file, onProgress) => new Promise((resolve) => {
+    let p = 0;
+    const t = setInterval(() => {
+      p += 0.2;
+      onProgress(Math.min(p, 1));
+      if (p >= 1) { clearInterval(t); resolve({ file: file.name, name: file.name, duration: 10 }); }
+    }, 120);
+  }),
+};
+
+const serverSource = {
+  thumbUrl: () => null,
+  list: async () => LIBRARY,
+};
+
+/* ----------------------------------------------------------------- shell */
+
+const NAV = [
+  { id: 'foundations', label: 'Foundations' },
+  { id: 'buttons', label: 'Buttons' },
+  { id: 'badges', label: 'Badges' },
+  { id: 'banners', label: 'Banners' },
+  { id: 'forms', label: 'Forms' },
+  { id: 'tables', label: 'Tables' },
+  { id: 'cards', label: 'Cards' },
+  { id: 'overlays', label: 'Modal and toast' },
+  { id: 'media', label: 'Media' },
+  { id: 'editor', label: 'Playlist editor' },
+  { id: 'login', label: 'Login' },
+];
+
+const shell = renderShell({
+  brand: 'PortaPixel',
+  subtitle: [h('span', { text: 'Component gallery' }), h('span', { class: 'pp-mono pp-muted', text: 'px-4a91c7e2' })],
+  tools: [h('span', { class: 'pp-badge pp-badge--brand pp-hide-sm', text: 'fake data' })],
+  nav: NAV,
+  footer: [
+    h('div', { class: 'pp-mono', text: 'v1.5.0' }),
+    h('div', { text: 'Raspberry Pi 4 · 2 GB' }),
+  ],
+});
+document.getElementById('root').append(shell.el);
+
+/* --------------------------------------------------------------- helpers */
+
+function page(title, lead, ...blocks) {
+  return [
+    h('div', { class: 'pp-page-head' },
+      h('div', null, h('h1', { class: 'pp-h1', text: title }), lead ? h('p', { class: 'pp-lead' }, lead) : null),
+      h('div', { class: 'pp-status' }, statusDot('ok'), h('span', { text: 'Screen on · playing' }))),
+    ...blocks,
+  ];
+}
+
+function section(title, ...kids) {
+  return h('div', { style: { 'margin-bottom': '18px' } },
+    h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: title }),
+    h('div', { class: 'pp-card pp-card--pad' }, h('div', { class: 'pp-row', style: { gap: '10px' } }, kids)));
+}
+
+/* ------------------------------------------------------------- the pages */
+
+function foundations() {
+  const swatches = [
+    ['Page background', 'var(--pp-bg)'], ['Card', 'var(--pp-surface)'], ['Border', 'var(--pp-border)'],
+    ['Table head', 'var(--pp-head)'], ['Brand', 'var(--pp-brand)'], ['Brand tint', 'var(--pp-brand-tint)'],
+    ['Danger', 'var(--pp-danger)'], ['Danger tint', 'var(--pp-danger-tint)'],
+    ['Warning', 'var(--pp-warn)'], ['Warning tint', 'var(--pp-warn-tint)'], ['Quiet', 'var(--pp-quiet)'],
+  ];
+  return page('Foundations', 'Tokens, type and the small parts everything else is built from.',
+    h('div', { class: 'pp-cards' },
+      h('div', { class: 'pp-card' },
+        h('div', { class: 'pp-card__head' }, h('div', { class: 'pp-h2', text: 'Colors' })),
+        h('div', { class: 'pp-card__body' },
+          h('div', { class: 'pp-grid', style: { 'grid-template-columns': 'repeat(auto-fill,minmax(130px,1fr))', gap: '10px' } },
+            swatches.map(([name, v]) => h('div', null,
+              h('div', { style: { background: v, border: '1px solid var(--pp-border)', 'border-radius': '7px', height: '38px' } }),
+              h('div', { class: 'pp-small pp-muted', style: { 'margin-top': '5px' }, text: name })))))),
+      h('div', { class: 'pp-card' },
+        h('div', { class: 'pp-card__head' }, h('div', { class: 'pp-h2', text: 'Type' })),
+        h('div', { class: 'pp-card__body' },
+          h('h1', { class: 'pp-h1', text: 'Page title, 21px semibold' }),
+          h('p', { class: 'pp-lead' }, 'Lead text at 13.5px. Rules are read top to bottom and the first match wins. Any time nothing matches, ', h('strong', { text: 'Lobby loop' }), ' plays.'),
+          h('div', { class: 'pp-h2', style: { 'margin-top': '14px' }, text: 'Card title, 14px semibold' }),
+          h('div', { style: { 'margin-top': '6px' } }, 'Body text at 13px.'),
+          h('div', { class: 'pp-small pp-muted', style: { 'margin-top': '6px' } }, 'Small muted text at 12.5px.'),
+          h('div', { class: 'pp-mono', style: { 'margin-top': '6px' } }, 'IBM Plex Mono 400 — px-4a91c7e2 · 09:12:40 · 3.4 GB'),
+          h('div', { class: 'pp-mono', style: { 'margin-top': '2px', 'font-weight': '500' } }, 'IBM Plex Mono 500 — 1920x1080@60'),
+          h('div', { style: { 'margin-top': '10px' } }, 'Arrows from the Pi subset: → ← ↑ ↓ ✓ · × ≤ ≥')))),
+    section('Status dots',
+      h('span', { class: 'pp-status' }, statusDot('ok'), 'Checked in'),
+      h('span', { class: 'pp-status' }, statusDot('alert'), 'Needs a look'),
+      h('span', { class: 'pp-status' }, statusDot('busy'), 'Installing 1.5.0'),
+      h('span', { class: 'pp-status' }, statusDot('quiet'), 'Quiet')),
+    section('Progress and spinner',
+      h('div', { style: { flex: '1 1 220px' } }, progress(0.47)),
+      h('div', { style: { flex: '1 1 220px' } }, progress(0.82, { thin: true, brand: true })),
+      spinner('Waiting for approval'),
+      h('span', { class: 'pp-small pp-muted', text: 'Waiting for someone to approve this code' })),
+    section('Icons', ['drag', 'up', 'down', 'close', 'plus', 'image', 'video', 'url'].map((n) =>
+      h('span', { class: 'pp-status', style: { gap: '5px' } }, icon(n), h('span', { class: 'pp-small pp-muted', text: n })))),
+    section('Formatting',
+      h('span', { class: 'pp-small' }, h('span', { class: 'pp-mono' }, fmtBytes(3_650_000_000)), ' from fmtBytes'),
+      h('span', { class: 'pp-small' }, h('span', { class: 'pp-mono' }, fmtDuration(133)), ' from fmtDuration'),
+      h('span', { class: 'pp-small' }, h('span', { class: 'pp-mono' }, fmtAgo(ago(40))), ' from fmtAgo'),
+      h('span', { class: 'pp-small' }, h('span', { class: 'pp-mono' }, fmtAgo(ago(260000))), ' from fmtAgo')));
+}
+
+function buttons() {
+  const seg = (labels) => {
+    let active = 0;
+    const el = h('div', { class: 'pp-seg', role: 'group' });
+    const draw = () => fill(el, labels.map((l, i) => h('button', {
+      type: 'button', class: 'pp-seg__btn', text: l, 'aria-pressed': String(i === active),
+      onClick: () => { active = i; draw(); },
+    })));
+    draw();
+    return el;
+  };
+  return page('Buttons', 'Every variant and size, plus the segmented control.',
+    section('Kinds',
+      h('button', { class: 'pp-btn pp-btn--primary', text: 'Save playlist' }),
+      h('button', { class: 'pp-btn', text: 'Cancel' }),
+      h('button', { class: 'pp-btn pp-btn--danger', text: 'Change it' }),
+      h('button', { class: 'pp-btn pp-btn--danger-outline', text: 'Remove this screen' }),
+      h('button', { class: 'pp-btn pp-btn--warn-outline', text: 'Keep anyway' }),
+      h('button', { class: 'pp-btn pp-btn--dashed' }, icon('plus'), 'Add a rule'),
+      h('button', { class: 'pp-btn pp-btn--ghost', text: 'See everything →' })),
+    section('Sizes and states',
+      h('button', { class: 'pp-btn pp-btn--sm', text: 'Which ones?' }),
+      h('button', { class: 'pp-btn', text: 'Restart player' }),
+      h('button', { class: 'pp-btn pp-btn--primary', text: 'Save — 24 screens pick this up' }),
+      h('button', { class: 'pp-btn', disabled: true, text: 'Save schedule' }),
+      h('button', { class: 'pp-btn pp-btn--primary', disabled: true, text: 'Save playlist' }),
+      h('button', { class: 'pp-btn pp-btn--icon', 'aria-label': 'Remove' }, icon('close', 14))),
+    section('Segmented', seg(['Desktop', 'Phone']), seg(['List', 'Wall'])),
+    section('Filter chips', ['Everything', 'Playback', 'Player', 'Screen', 'Files', 'System'].map((l, i) =>
+      h('button', { class: 'pp-chip', text: l, 'aria-pressed': String(i === 0) }))));
+}
+
+function badges() {
+  return page('Badges and pills', 'Small labels for state, kind and identity.',
+    section('Badges',
+      badge('Needs a reboot'), badge('In use', 'brand'), badge('Form post limit', 'warn'), badge('No HTTPS', 'danger'),
+      h('span', { class: 'pp-badge pp-badge--mono', text: 'px-b71e33d0' })),
+    section('Kind labels',
+      h('span', { class: 'pp-kind pp-kind--chip', text: 'Image' }),
+      h('span', { class: 'pp-kind pp-kind--chip', text: 'Video' }),
+      h('span', { class: 'pp-kind', text: 'Web page' })),
+    section('Pairing codes',
+      h('span', { class: 'pp-code pp-code--lg', text: 'K7M2QP' }),
+      h('span', { class: 'pp-code pp-code--md', text: 'J4T8ZR' }),
+      h('span', { class: 'pp-code', text: 'px-4a91c7e2' })),
+    section('Legend',
+      h('span', { class: 'pp-status' }, h('span', { class: 'pp-swatch pp-swatch--ok' }), 'Rule'),
+      h('span', { class: 'pp-status' }, h('span', { class: 'pp-swatch' }), 'Default')));
+}
+
+function banners() {
+  return page('Banners', 'The nags, the alerts and the read-only notice.',
+    banner({
+      kind: 'danger',
+      title: 'Change the admin password',
+      body: 'This device still uses the password it shipped with. Anyone on this network can sign in and change what’s on the screen.',
+      actions: [h('button', { class: 'pp-btn pp-btn--danger', text: 'Change it' })],
+    }),
+    banner({
+      kind: 'warn',
+      title: 'Set the time zone',
+      body: 'The clock is on UTC, so scheduled playlists stay off and the default playlist keeps looping. Pick where this screen lives and schedules start working.',
+      actions: [h('button', { class: 'pp-btn', text: 'Set time zone' })],
+    }),
+    banner({
+      kind: 'info',
+      title: 'This device has new hardware',
+      body: ['The ID went from ', h('span', { class: 'pp-mono', text: 'px-3f0ba117' }), ' to ',
+        h('span', { class: 'pp-mono', text: 'px-4a91c7e2' }),
+        '. If you moved this USB stick into a different box, nothing else to do — the name, settings and pairing all came across.'],
+      actions: [h('button', { class: 'pp-btn', text: 'Got it' })],
+    }),
+    banner({
+      kind: 'paired',
+      title: 'Managed by control.example.com',
+      body: 'Playlists and schedules come from the server, so they’re read-only here. Display, sound and network settings are still yours. Unpairing hands control back to this page.',
+      actions: [h('button', { class: 'pp-btn', text: 'Unpair' })],
+    }),
+    h('div', { class: 'pp-card', style: { 'margin-top': '14px' } },
+      h('div', { class: 'pp-note' }, 'One web page and nothing else, so this screen just stays on it — no looping, no gaps. It reloads on the interval below.')));
+}
+
+function forms() {
+  const days = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+  const on = [true, true, true, true, true, false, false];
+  const dayRow = h('div', { class: 'pp-days' }, days.map((d, i) => {
+    const b = h('button', {
+      type: 'button', class: 'pp-day', text: d, 'aria-pressed': String(on[i]),
+      'aria-label': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][i],
+      onClick: () => { on[i] = !on[i]; b.setAttribute('aria-pressed', String(on[i])); },
+    });
+    return b;
+  }));
+
+  return page('Forms', 'Inputs, selects, toggles, day chips and the sticky save bar.',
+    h('div', { class: 'pp-cards' },
+      h('div', { class: 'pp-card' },
+        h('div', { class: 'pp-card__head' }, h('div', { class: 'pp-h2', text: 'This device' })),
+        h('div', { class: 'pp-card__body' },
+          h('label', { class: 'pp-label pp-field' }, 'Name',
+            h('input', { class: 'pp-input', value: 'Lobby North' }),
+            h('span', { class: 'pp-help' }, 'Also its address on the network: ', h('span', { class: 'pp-mono', text: 'lobby-north.local' }))),
+          h('label', { class: 'pp-label pp-field' }, 'ID',
+            h('input', { class: 'pp-input pp-input--mono', value: 'px-4a91c7e2', readOnly: true }),
+            h('span', { class: 'pp-help', text: 'Comes from the hardware. Can’t be edited.' })),
+          h('div', { class: 'pp-field pp-field--warn' },
+            h('label', { class: 'pp-label' },
+              'Time zone ', h('span', { class: 'pp-label__hint', text: '— needed for schedules' }),
+              h('select', { class: 'pp-select' },
+                h('option', { text: 'UTC — not set' }), h('option', { text: 'America/New_York' }),
+                h('option', { text: 'Europe/London' }), h('option', { text: 'Asia/Tokyo' }))),
+            h('div', { class: 'pp-help', text: 'Schedules use this. The clock syncs over the network.' })),
+          h('div', { class: 'pp-field pp-field--invalid' },
+            h('label', { class: 'pp-label' }, 'New password',
+              h('input', { class: 'pp-input', type: 'password', placeholder: 'at least 8 characters' })),
+            h('div', { class: 'pp-error', text: 'Still on the password it shipped with.' })),
+          h('div', { class: 'pp-fields', style: { 'margin-top': '14px' } },
+            h('label', { class: 'pp-label pp-field' }, 'Address',
+              h('input', { class: 'pp-input pp-input--mono', value: '192.168.1.50/24' })),
+            h('label', { class: 'pp-label pp-field' }, 'Router',
+              h('input', { class: 'pp-input pp-input--mono', value: '192.168.1.1' }))))),
+      h('div', { class: 'pp-card' },
+        h('div', { class: 'pp-card__head' },
+          h('div', { class: 'pp-h2', text: 'Screen and sound' }),
+          badge('Needs a reboot')),
+        h('div', { class: 'pp-card__body' },
+          h('label', { class: 'pp-label pp-field' }, 'Rotation',
+            h('select', { class: 'pp-select' }, h('option', { text: 'Normal' }), h('option', { text: '90° portrait CW' }),
+              h('option', { text: '180° upside down' }), h('option', { text: '270° portrait CCW' }))),
+          h('div', { class: 'pp-field' },
+            h('label', { class: 'pp-label', text: 'Volume — 100%' }),
+            h('input', { class: 'pp-range', type: 'range', value: '100' }),
+            h('div', { class: 'pp-help', text: 'Videos play with sound unless a playlist item is muted.' })),
+          h('div', { class: 'pp-field' },
+            h('label', { class: 'pp-switch' }, h('input', { type: 'checkbox', checked: true }), h('span', { text: 'Turn the screen off overnight' })),
+            h('div', { class: 'pp-help', text: 'It saves the panel and some power. The nightly restart is skipped while the screen is off.' })),
+          h('div', { class: 'pp-field' },
+            h('label', { class: 'pp-switch' }, h('input', { type: 'checkbox' }), h('span', { text: 'Install updates on its own' })),
+            h('div', { class: 'pp-help', text: 'Off is the safe default: you decide when a screen changes.' })),
+          h('div', { class: 'pp-field' },
+            h('label', { class: 'pp-label', text: 'Days' }), dayRow),
+          h('div', { class: 'pp-field' },
+            h('label', { class: 'pp-check' }, h('input', { type: 'checkbox', checked: true }), h('span', { text: 'Shuffle' }))),
+          h('div', { class: 'pp-field' },
+            h('label', { class: 'pp-label' }, 'Reason we cannot save',
+              h('input', { class: 'pp-input', disabled: true, value: 'Managed by the server' })))))),
+    h('div', { class: 'pp-savebar' },
+      h('span', { text: 'Saving rewrites the settings file on the stick. Notes you typed into it yourself will be dropped.' }),
+      h('div', { class: 'pp-btns' },
+        h('button', { class: 'pp-btn', text: 'Discard' }),
+        h('button', { class: 'pp-btn pp-btn--primary', text: 'Save settings', onClick: () => toast('Settings saved to the stick.') }))));
+}
+
+function tables() {
+  const screens = [
+    { name: 'Lobby North', id: 'px-4a91c7e2', group: 'Lobby', seen: ago(22), now: 'welcome-autumn.jpg', temp: '48 °C', free: '18.4 GB', ver: '1.5.0', state: 'ok' },
+    { name: 'Cafeteria 1', id: 'px-7c02ae91', group: 'Cafeteria', seen: ago(48), now: 'menu-board-week.png', temp: '52 °C', free: '22.1 GB', ver: '1.5.0', state: 'ok' },
+    { name: 'Warehouse A', id: 'px-b71e33d0', group: 'Warehouse', seen: ago(22), now: 'Safety loop (yesterday)', temp: '61 °C', free: '1.1 GB', ver: '1.4.2', state: 'alert' },
+    { name: 'Retail 14', id: 'px-31f9c0aa', group: 'Retail', seen: ago(9), now: 'Installing 1.5.0…', temp: '55 °C', free: '12.0 GB', ver: '1.4.2', state: 'busy' },
+    { name: 'Meeting 3', id: 'px-0ab4e771', group: 'Meeting rooms', seen: ago(260000), now: 'Room signs', temp: '—', free: '9.8 GB', ver: '1.3.1', state: 'quiet' },
+  ];
+
+  const fleet = table({
+    columns: [
+      {
+        key: 'name', label: 'Screen', grow: true, render: (r) => h('span', { class: 'pp-status' },
+          statusDot(r.state), h('span', { text: r.name }), h('span', { class: 'pp-mono pp-muted', style: { 'font-size': '12px' }, text: r.id })),
+      },
+      { key: 'group', label: 'Group', width: '120px' },
+      { key: 'seen', label: 'Last check-in', width: '120px', mono: true, render: (r) => h('span', { class: r.state === 'quiet' ? 'pp-cell--danger' : '', text: fmtAgo(r.seen) }) },
+      { key: 'now', label: 'On screen now', width: '190px', render: (r) => h('span', { class: 'pp-status', style: { gap: '8px' } }, h('span', { class: 'pp-thumb pp-thumb--sm' }), h('span', { class: 'pp-trunc', text: r.now })) },
+      { key: 'temp', label: 'Temp', width: '64px', mono: true },
+      { key: 'free', label: 'Free', width: '76px', mono: true, render: (r) => h('span', { class: parseFloat(r.free) < 2 ? 'pp-cell--danger' : '', text: r.free }) },
+      { key: 'ver', label: 'Version', width: '68px', mono: true },
+    ],
+    rows: screens,
+    onRowClick: (r) => toast(`Would open ${r.name}`),
+    rowAlert: (r) => r.state !== 'alert' ? null : [
+      h('span', null, 'Sync failed — Safety loop needs 3.4 GB, this stick has 1.1 GB free. Still playing yesterday’s copy.'),
+      h('button', { class: 'pp-btn pp-btn--sm pp-btn--danger-outline', text: 'Open the screen' }),
+    ],
+    foot: [
+      h('span', { text: 'Showing 5 of 142 screens' }),
+      h('div', { class: 'pp-btns' },
+        h('button', { class: 'pp-btn pp-btn--sm', disabled: true, text: '← Previous' }),
+        h('button', { class: 'pp-btn pp-btn--sm', text: 'Next →' })),
+    ],
+  });
+
+  const log = table({
+    columns: [
+      { key: 'when', label: 'When', width: '96px', mono: true },
+      { key: 'what', label: 'What happened', grow: true },
+      { key: 'kind', label: 'Kind', width: '90px', render: (r) => h('span', { class: 'pp-kind', text: r.kind }) },
+    ],
+    rows: [
+      { when: '09:12:40', what: 'Playlist switched to Lobby loop by schedule rule 1', kind: 'Playback' },
+      { when: '08:41:12', what: 'Player restarted on the nightly schedule, back up in 3.1 s', kind: 'Player' },
+      { when: '08:12:02', what: 'Web page item skipped: dashboards.example.com did not answer', kind: 'Playback' },
+      { when: '07:00:00', what: 'Screen turned on for the day over HDMI', kind: 'Screen' },
+      { when: '06:58:31', what: '6 files added after a scan of the stick', kind: 'Files' },
+    ],
+    foot: [h('span', { text: 'Showing 5 of 847 entries' }), h('button', { class: 'pp-btn pp-btn--ghost', text: 'Download the whole log' })],
+  });
+
+  const empty = table({
+    columns: [{ key: 'a', label: 'Rule', grow: true }, { key: 'b', label: 'When', width: '160px' }],
+    rows: [],
+    empty: 'No times yet. Screens in this group play the fallback playlist all day.',
+  });
+
+  return page('Tables', 'One flex table. Horizontal rules only, no stripes, no column dividers.',
+    h('div', { class: 'pp-stack' },
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Fleet list, with a row alert' }), fleet),
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Activity log' }), log),
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Empty table' }), empty)));
+}
+
+function cards() {
+  const bar = progress(0.47, { thin: true, brand: true });
+  return page('Cards', 'Cards, panels and fact lists.',
+    h('div', { class: 'pp-cards' },
+      h('div', { class: 'pp-card' },
+        h('div', { class: 'pp-card__head' },
+          h('div', { class: 'pp-h2', text: 'On screen now' }),
+          h('span', { class: 'pp-card__meta', text: 'Lobby loop' })),
+        h('div', { class: 'pp-card__body' },
+          h('div', { class: 'pp-thumb pp-thumb--wide' }, h('span', { class: 'pp-thumb__name', text: 'welcome-autumn.jpg' })),
+          h('div', { class: 'pp-row', style: { 'margin-top': '12px', 'justify-content': 'space-between' } },
+            h('span', { class: 'pp-small', text: 'Item 3 of 12' }),
+            h('span', { class: 'pp-small pp-mono pp-muted', text: '8s left of 15s' })),
+          h('div', { style: { 'margin-top': '8px' } }, bar)),
+        h('div', { class: 'pp-card__foot' },
+          h('span', { text: 'Next: promo-fall.mp4 · video, 24s, sound on' }),
+          h('button', { class: 'pp-btn pp-btn--sm', text: 'Restart player' }))),
+      h('div', { class: 'pp-card' },
+        h('div', { class: 'pp-card__head' }, h('div', { class: 'pp-h2', text: 'Facts' })),
+        h('div', { class: 'pp-card__body' },
+          factList([
+            ['Running for', '6 days 4 h'],
+            ['Temperature', '48 °C'],
+            ['Network', '192.168.1.84'],
+            ['Clock', '09:12:40 UTC'],
+            ['Version', '1.5.0'],
+            { k: 'Free space', v: '18.4 GB of 28.6 GB' },
+            { k: 'Served over HTTPS', v: 'no', kind: 'danger' },
+            { k: 'Form post limit', v: '8 MB', kind: 'warn' },
+          ]),
+          h('div', { class: 'pp-small pp-muted', style: { 'margin-top': '12px' }, text: 'Space on the stick' }),
+          h('div', { style: { 'margin-top': '5px' } }, progress(0.64)),
+          h('div', { class: 'pp-panel', style: { 'margin-top': '14px' } },
+            h('div', { class: 'pp-h2', text: 'From the Warehouse group' }),
+            h('div', { class: 'pp-help' }, 'Safety loop, Mon–Fri 06:00–18:00. ',
+              h('button', { class: 'pp-btn pp-btn--ghost', text: 'Edit the group’s times →' })))))),
+    h('div', { class: 'pp-card', style: { 'margin-top': '14px' } },
+      h('div', { class: 'pp-card__head' }, h('div', { class: 'pp-h2', text: 'Empty state' })),
+      h('div', { class: 'pp-empty' },
+        h('div', { class: 'pp-empty__title', text: 'Nothing in this playlist yet' }),
+        h('div', { class: 'pp-empty__body' }, 'Drag images or videos here, or pull the stick and copy them into the ',
+          h('span', { class: 'pp-mono', text: 'break-room' }), ' folder from any computer. Either way this screen keeps playing what it has.'),
+        h('div', { class: 'pp-empty__actions' },
+          h('button', { class: 'pp-btn pp-btn--primary', text: 'Upload files' }),
+          h('button', { class: 'pp-btn', text: 'Add a web page' })))));
+}
+
+function overlays() {
+  return page('Modal and toast', 'Every one of these is the real component.',
+    section('Toasts',
+      h('button', { class: 'pp-btn', text: 'Playlist saved', onClick: () => toast('Playlist saved — the screen picks it up on the next item') }),
+      h('button', { class: 'pp-btn', text: 'Fleet save', onClick: () => toast('Saved — 16 screens will fetch the changes on their next check-in.') }),
+      h('button', { class: 'pp-btn', text: 'Something failed', onClick: () => toast('That did not save. The stick is full.', 'danger') })),
+    section('Dialogs',
+      h('button', {
+        class: 'pp-btn', text: 'Save this playlist?',
+        onClick: () => modal({
+          title: 'Save this playlist?',
+          body: ['Saving rewrites ', h('span', { class: 'pp-mono', text: 'lobby-loop/playlist.toml' }),
+            ' on the stick. Your items, times and settings are kept exactly as shown. Comments you typed into that file by hand will be gone.'],
+          actions: [{ label: 'Cancel', value: false }, { label: 'Save and rewrite', value: true, kind: 'primary', autofocus: true }],
+        }).then((ok) => ok && toast('Playlist saved — the screen picks it up on the next item')),
+      }),
+      h('button', {
+        class: 'pp-btn', text: 'confirmDialog',
+        onClick: () => confirmDialog({
+          title: 'Remove this screen?',
+          body: 'The token stops working, so the screen pairs again from scratch. It keeps playing what it has.',
+          confirm: 'Remove it', kind: 'danger',
+        }).then((ok) => toast(ok ? 'Screen removed' : 'Nothing changed')),
+      }),
+      h('button', {
+        class: 'pp-btn pp-btn--danger-outline', text: 'typedConfirm (install to disk)',
+        onClick: () => typedConfirm({
+          title: 'Install onto /dev/sda?',
+          body: 'Everything on that disk is written over. When it finishes, power off and pull the stick before the box boots again.',
+          expect: '/dev/sda', confirm: 'Install to disk',
+        }).then((ok) => toast(ok ? 'Installing — do not pull the power' : 'Nothing changed')),
+      }),
+      h('button', {
+        class: 'pp-btn pp-btn--danger-outline', text: 'typedConfirm (unpair)',
+        onClick: () => typedConfirm({
+          title: 'Unpair from control.example.com?',
+          body: 'Playlists and schedules come back to this page. The fleet copy stays on the stick until the space is needed.',
+          expect: 'Lobby North', confirm: 'Unpair', label: 'Type the screen name ',
+        }).then((ok) => toast(ok ? 'Unpaired' : 'Nothing changed')),
+      })));
+}
+
+function media() {
+  const tile = (m) => h('div', { class: 'pp-tile' },
+    h('div', { class: 'pp-thumb pp-thumb--wide' },
+      h('span', { class: 'pp-thumb__label' }, h('span', { class: 'pp-kind pp-kind--chip', text: m.kind === 'video' ? 'Video' : 'Image' }))),
+    h('div', { class: 'pp-tile__body' },
+      h('div', { class: 'pp-tile__name', text: m.name }),
+      h('div', { class: 'pp-tile__meta', text: `${fmtBytes(m.size)} · 1920x1080` }),
+      h('div', { class: 'pp-tile__use', text: m.use })));
+
+  const walls = [
+    { name: 'Lobby North', now: 'welcome-autumn.jpg', state: 'ok', seen: '22s ago', temp: '48 °C' },
+    { name: 'Cafeteria 1', now: 'menu-board-week.png', state: 'ok', seen: '48s ago', temp: '52 °C' },
+    { name: 'Warehouse A', now: 'Safety loop (yesterday)', state: 'alert', seen: '22s ago', temp: '61 °C' },
+    { name: 'Meeting 3', now: 'Room signs', state: 'quiet', seen: '3 days ago', temp: '—' },
+  ];
+
+  return page('Media and the wall view', 'The same tile grid holds the media library and the fleet wall.',
+    h('div', { class: 'pp-card', style: { 'margin-bottom': '14px' } },
+      h('div', { class: 'pp-card__foot', style: { 'border-top': '0' } },
+        h('span', null, h('span', { class: 'pp-mono', text: '184 files · 41.2 GB' }), ' · Up to 1 GB per file on this host · No conversion happens here: what you upload is what plays'),
+        h('button', { class: 'pp-btn pp-btn--ghost', text: 'Check the host’s limits →' }))),
+    h('div', { class: 'pp-h2', style: { margin: '0 0 10px' }, text: 'Media library' }),
+    h('div', { class: 'pp-grid' }, [
+      { ...LIBRARY[0], use: 'In 2 playlists' }, { ...LIBRARY[1], use: 'In Safety loop' },
+      { ...LIBRARY[2], use: 'In Safety loop' }, { ...LIBRARY[3], use: 'Not used yet' },
+    ].map(tile)),
+    h('div', { class: 'pp-h2', style: { margin: '18px 0 10px' }, text: 'Fleet wall' }),
+    h('div', { class: 'pp-grid pp-grid--wide' }, walls.map((w) => h('div', { class: 'pp-tile' },
+      h('div', { class: 'pp-thumb pp-thumb--wide' }),
+      h('div', { class: 'pp-tile__body' },
+        h('div', { class: 'pp-status' }, statusDot(w.state), h('span', { class: 'pp-trunc', text: w.name })),
+        h('div', { class: 'pp-tile__use', text: w.now }),
+        h('div', { class: 'pp-tile__meta', text: `${w.seen} · ${w.temp}` }))))));
+}
+
+function editor() {
+  const deviceBox = h('div');
+  const serverBox = h('div');
+  const kioskBox = h('div');
+  const pairedBox = h('div');
+  const emptyBox = h('div');
+
+  mountPlaylistEditor(deviceBox, {
+    playlist: LOBBY,
+    mediaSource: deviceSource,
+    capabilities: {
+      commentLossWarning: true, configFile: 'lobby-loop/playlist.toml', folder: 'lobby-loop',
+      decode: DEVICE_CAPS, tier: 'high',
+      warnPrefix: 'Might not play smoothly here.',
+      warnAction: { label: 'Keep anyway', onClick: () => toast('Kept. It plays as it is.') },
+    },
+    onSave: async () => { await wait(400); toast('Playlist saved — the screen picks it up on the next item'); },
+  });
+
+  mountPlaylistEditor(serverBox, {
+    playlist: LOBBY,
+    mediaSource: serverSource,
+    capabilities: {
+      decode: DEVICE_CAPS, tier: 'high',
+      saveLabel: 'Save — 16 screens pick this up',
+      warnPrefix: '3 screens in this group may struggle with it.',
+      warnAction: { label: 'Which ones?', onClick: () => toast('Retail 14, Retail 22 and Meeting 3') },
+      impact: {
+        text: ['Used by the ', h('strong', { text: 'Warehouse' }), ' group — 16 screens · 3.4 GB of media'],
+        note: 'Changes reach screens within a minute',
+      },
+    },
+    onSave: async () => { await wait(400); toast('Saved — 16 screens will fetch the changes on their next check-in.'); },
+  });
+
+  mountPlaylistEditor(kioskBox, {
+    playlist: WINDOW_PL,
+    mediaSource: deviceSource,
+    capabilities: { commentLossWarning: true, configFile: 'front-window/playlist.toml', folder: 'front-window', decode: DEVICE_CAPS },
+    onSave: async () => toast('Playlist saved — the screen picks it up on the next item'),
+  });
+
+  mountPlaylistEditor(pairedBox, {
+    playlist: LOBBY,
+    readOnly: true,
+    mediaSource: serverSource,
+    capabilities: { managedBy: 'control.example.com', decode: DEVICE_CAPS, folder: '_fleet/lobby-loop' },
+  });
+
+  mountPlaylistEditor(emptyBox, {
+    playlist: BREAK_ROOM,
+    mediaSource: deviceSource,
+    capabilities: { commentLossWarning: true, configFile: 'break-room/playlist.toml', folder: 'break-room', decode: DEVICE_CAPS },
+    onSave: async () => toast('Playlist saved'),
+  });
+
+  const list = h('div', { class: 'pp-card pp-col-narrow', style: { padding: '8px', flex: '0 0 244px' } },
+    [['Lobby loop', '6 items · 2m 13s', true], ['Evening slow loop', '3 items · 1m 02s'], ['Front window', '1 web page · kiosk'], ['Break room', 'empty']]
+      .map(([name, meta, active]) => h('button', {
+        class: 'pp-nav__item', style: { padding: '9px 11px' }, 'aria-current': active ? 'page' : null,
+      }, h('div', { style: { 'font-size': '13.5px', 'font-weight': active ? '600' : '400' }, text: name }),
+        h('div', { class: 'pp-mono', style: { 'font-size': '12px', color: 'var(--pp-muted)', 'margin-top': '2px' }, text: meta }))),
+    h('button', { class: 'pp-btn pp-btn--ghost', style: { padding: '9px 11px', 'border-top': '1px solid var(--pp-border-2)', 'margin-top': '6px', width: '100%', 'justify-content': 'flex-start' }, text: '+ New playlist' }));
+
+  return page('Playlist editor', 'One editor. The device uploads into the playlist; the server picks from the library.',
+    h('div', { class: 'pp-stack' },
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Device: list and editor side by side' }),
+        h('div', { class: 'pp-cards' }, list, h('div', { style: { flex: '1 1 480px', 'min-width': 'min(300px, 100%)' } }, deviceBox))),
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Server: impact strip and the library picker' }), serverBox),
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Single URL: kiosk mode' }), kioskBox),
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Paired: read-only' }), pairedBox),
+      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Empty playlist' }), emptyBox)));
+}
+
+function login() {
+  return page('Login', 'The one page that is served before a session exists.',
+    h('div', { class: 'pp-card', style: { padding: '0', overflow: 'hidden' } },
+      h('div', { class: 'pp-login', style: { 'min-height': '420px', background: 'var(--pp-bg)' } },
+        h('form', { class: 'pp-login__card', onSubmit: (e) => { e.preventDefault(); toast('Wrong password. Try again.', 'danger'); } },
+          h('div', { class: 'pp-login__brand' },
+            h('span', { class: 'pp-brand__mark' }), h('span', { class: 'pp-brand__name', text: 'PortaPixel' })),
+          h('div', { class: 'pp-lead', style: { margin: '0 0 18px' } }, 'Sign in to ', h('span', { class: 'pp-mono', text: 'lobby-north.local' })),
+          h('label', { class: 'pp-label pp-field' }, 'Password',
+            h('input', { class: 'pp-input', type: 'password', autocomplete: 'current-password' })),
+          h('button', { class: 'pp-btn pp-btn--primary pp-btn--block', style: { 'margin-top': '18px' }, text: 'Sign in' }),
+          h('div', { class: 'pp-help', text: 'One administrator. The password lives in the settings file on the stick.' })))));
+}
+
+function wait(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+/* ---------------------------------------------------------------- routing */
+
+const show = (build) => () => { fill(shell.main, build()); scrollTo(0, 0); };
+
+route({
+  '': show(foundations),
+  foundations: show(foundations),
+  buttons: show(buttons),
+  badges: show(badges),
+  banners: show(banners),
+  forms: show(forms),
+  tables: show(tables),
+  cards: show(cards),
+  overlays: show(overlays),
+  media: show(media),
+  editor: show(editor),
+  login: show(login),
+});
+</script>
+</body>
+</html>
