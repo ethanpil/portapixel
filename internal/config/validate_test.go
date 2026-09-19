@@ -253,7 +253,7 @@ var validateCases = []validateCase{
 		change: func(c *Config) {
 			c.Schedule = []Rule{{Playlist: "a", Start: "08:00"}}
 		},
-		wantField: "schedule[0].start",
+		wantField: "schedule[0].end",
 	},
 	{
 		name: "a rule with a bad end time",
@@ -261,6 +261,21 @@ var validateCases = []validateCase{
 			c.Schedule = []Rule{{Playlist: "a", Start: "08:00", End: "6pm"}}
 		},
 		wantField: "schedule[0].end",
+	},
+	{
+		// Both times empty is the whole day. A rule of "weekends: this playlist"
+		// needs no hours.
+		name: "a rule with no times at all",
+		change: func(c *Config) {
+			c.Schedule = []Rule{{Playlist: "a", Days: []string{"sat", "sun"}}}
+		},
+	},
+	{
+		name: "a rule with no start time",
+		change: func(c *Config) {
+			c.Schedule = []Rule{{Playlist: "a", End: "18:00"}}
+		},
+		wantField: "schedule[0].start",
 	},
 	{
 		name: "a rule with a bad day",

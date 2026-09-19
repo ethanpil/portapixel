@@ -49,6 +49,10 @@ func Repair(cfg Config) (Config, Errors) {
 		case field == "network.wifi_ssid", field == "network.wifi_psk":
 			out.Network.WifiSSID = def.Network.WifiSSID
 			out.Network.WifiPSK = def.Network.WifiPSK
+		case field == "network.wifi_country":
+			// The country stands alone. A bad code must not cost the network name
+			// and the key beside it: the radio then joins nothing at all.
+			out.Network.WifiCountry = def.Network.WifiCountry
 
 		case field == "display.rotation":
 			out.Display.Rotation = def.Display.Rotation

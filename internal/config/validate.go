@@ -112,6 +112,9 @@ func (c Config) Validate() Errors {
 	if c.Network.WifiPSK != "" && c.Network.WifiSSID == "" {
 		add("network.wifi_ssid", "is necessary when wifi_psk is set")
 	}
+	if !isCountryCode(c.Network.WifiCountry) {
+		add("network.wifi_country", "must be two letters, for example US, or empty")
+	}
 
 	// [display]
 	if !slices.Contains([]int{0, 90, 180, 270}, c.Display.Rotation) {
@@ -155,11 +158,20 @@ func (c Config) Validate() Errors {
 		if r.Playlist == "" {
 			add(field+".playlist", "must not be empty")
 		}
-		if r.Start == "" || r.End == "" {
-			add(field+".start", "a rule needs a start time and an end time")
+		// The two times are both-or-neither. Both empty means the whole day, which
+		// is what a rule of "weekends: this playlist" needs. One empty time is a
+		// half-written rule, and a rule that matches nothing is worse than an error:
+		// the person sees the default playlist and nothing says why.
+		switch {
+		case r.Start == "" && r.End == "":
+		case r.Start == "":
+			add(field+".start", "is necessary when there is an end time. Leave both out for the whole day.")
+		case r.End == "":
+			add(field+".end", "is necessary when there is a start time. Leave both out for the whole day.")
+		default:
+			clockTime(field+".start", r.Start)
+			clockTime(field+".end", r.End)
 		}
-		clockTime(field+".start", r.Start)
-		clockTime(field+".end", r.End)
 		dayList(field+".days", r.Days)
 	}
 
@@ -193,6 +205,24 @@ func isIPPrefix(value string) bool {
 		return true
 	}
 	return isIP(value)
+}
+
+// isCountryCode reports if value is a two-letter regulatory domain, or empty.
+// The value goes into wpa_supplicant.conf as a directive, so nothing else may
+// pass. Either case is good: netcfg writes the code in capital letters.
+func isCountryCode(value string) bool {
+	if value == "" {
+		return true
+	}
+	if len(value) != 2 {
+		return false
+	}
+	for _, r := range value {
+		if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') {
+			return false
+		}
+	}
+	return true
 }
 
 // hasControl reports if value holds a character that would change the meaning of

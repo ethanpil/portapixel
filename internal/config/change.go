@@ -54,6 +54,7 @@ func ChangeClass(old, next Config) []Change {
 	add("network.dns", Reboot, !slices.Equal(old.Network.DNS, next.Network.DNS))
 	add("network.wifi_ssid", Reboot, old.Network.WifiSSID != next.Network.WifiSSID)
 	add("network.wifi_psk", Reboot, old.Network.WifiPSK != next.Network.WifiPSK)
+	add("network.wifi_country", Reboot, old.Network.WifiCountry != next.Network.WifiCountry)
 
 	// [display]. cog gets the rotation and the output mode when it starts, so a
 	// new browser process applies them. The power method and the screen schedule

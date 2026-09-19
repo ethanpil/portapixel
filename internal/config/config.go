@@ -50,6 +50,10 @@ type Network struct {
 	DNS      []string `toml:"dns,omitempty" json:"dns,omitempty"`
 	WifiSSID string   `toml:"wifi_ssid" json:"wifi_ssid"`
 	WifiPSK  string   `toml:"wifi_psk" json:"wifi_psk"`
+	// WifiCountry is the two-letter regulatory domain, for example "US" or "DE".
+	// An empty value leaves the domain out of wpa_supplicant.conf. Some radios
+	// then permit fewer channels, and a 5 GHz network can be invisible.
+	WifiCountry string `toml:"wifi_country,omitempty" json:"wifi_country,omitempty"`
 }
 
 // Display is the [display] table.
