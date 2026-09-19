@@ -4,6 +4,9 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Add the QEMU boot test and the builder VM.
+- Add the image builder, the boot files, the OpenRC services and first boot.
+- Add the package list and the installer. Each name is checked on Alpine 3.23.2.
 - Fix the remaining review findings in `web/shared` (4396d0f).
 - Ignore a refused chmod only on a filesystem without modes. Add `TotalBytes` (6148e24).
 - Repair bad config values one field at a time (7091201).
