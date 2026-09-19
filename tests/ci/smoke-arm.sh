@@ -63,9 +63,11 @@ R="$WORK/root"
 say "the release identity"
 [ -f "$R/etc/portapixel-release" ] || die "no /etc/portapixel-release"
 cat "$R/etc/portapixel-release"
-grep -qx "PORTAPIXEL_VERSION=$VERSION" "$R/etc/portapixel-release" ||
+# "-F", because a version holds full stops and a "+" is a legal character. A basic
+# regular expression reads both as a pattern, so "1x0y0" would pass for "1.0.0".
+grep -qxF "PORTAPIXEL_VERSION=$VERSION" "$R/etc/portapixel-release" ||
 	die "/etc/portapixel-release does not name the version $VERSION"
-grep -qx "ARCH=aarch64" "$R/etc/portapixel-release" || die "the image does not say ARCH=aarch64"
+grep -qxF "ARCH=aarch64" "$R/etc/portapixel-release" || die "the image does not say ARCH=aarch64"
 
 # ---------------------------------------------------------- 2. the release layout
 say "the release layout"
@@ -140,8 +142,11 @@ say "version: $out"
 # The binary prints the Go name of the processor, "arm64". The image and apk use
 # the Alpine name, "aarch64". The release assets carry the Go name, because the
 # updater builds the asset name from it (internal/version Arch).
-printf '%s' "$out" | grep -q "portapixeld $VERSION arm64" ||
-	die "the binary says \"$out\" and CI built $VERSION for arm64"
+# A full comparison of the whole line, not a search for a pattern. The shape of
+# this line is a contract for a person who reads a log, so an added or a moved
+# field must fail here.
+[ "$out" = "portapixeld $VERSION arm64" ] ||
+	die "the binary says \"$out\" and it must say \"portapixeld $VERSION arm64\""
 
 # The machine-readable form, which is the one that internal/updater reads before
 # it installs a release (readBinaryInfo). The updater checks the version AND the
@@ -152,7 +157,8 @@ json="$(chroot "$R" /opt/portapixel/current/portapixeld version --json 2>&1)" ||
 $json"
 say "version --json: $json"
 for want in "\"version\":\"$VERSION\"" "\"arch\":\"arm64\"" "\"name\":\"portapixeld\""; do
-	printf '%s' "$json" | grep -q "$want" ||
+	# "-F" again: the version in $want holds full stops.
+	printf '%s' "$json" | grep -qF "$want" ||
 		die "\"version --json\" says \"$json\" and it must hold $want"
 done
 

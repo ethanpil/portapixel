@@ -185,23 +185,37 @@ jobs:
           VERSION: ${{ needs.settings.outputs.version }}
         run: |
           set -eu
-          # The updater reads the JSON answer, so this step reads it too. A word
-          # position in the line for a person is not a contract: the updater
-          # once read the processor name as the version.
+          # TWO answers, and both are a contract.
+          #
+          # The JSON answer is the one internal/updater reads before it installs a
+          # release. Every test of it uses "grep -qF": a version holds full stops,
+          # and a basic regular expression reads a full stop as "any character", so
+          # a binary that said "1x0y0" passed a test for 1.0.0.
+          #
+          # The line for a person, "<name> <version> <arch>", is a contract too.
+          # Both commands document its shape and docs/RELEASING.md names it, so a
+          # moved or a lost field must stop the release. Compare the WHOLE line.
+          arch='${{ matrix.arch }}'
           for name in portapixeld portapixel-server; do
-            bin="./dist/$name-${{ matrix.arch }}"
-            "$bin" version
+            bin="./dist/$name-$arch"
+            human="$("$bin" version)"
+            echo "$name version -> $human"
+            [ "$human" = "$name $VERSION $arch" ] || {
+              echo "FAIL: the line for a person says \"$human\""
+              echo "      and it must say \"$name $VERSION $arch\"."
+              exit 1
+            }
             json="$("$bin" version --json)"
             echo "$name version --json -> $json"
-            printf '%s' "$json" | grep -q "\"name\":\"$name\"" ||
+            printf '%s' "$json" | grep -qF "\"name\":\"$name\"" ||
               { echo "FAIL: the binary does not say that it is $name"; exit 1; }
-            printf '%s' "$json" | grep -q "\"version\":\"$VERSION\"" || {
+            printf '%s' "$json" | grep -qF "\"version\":\"$VERSION\"" || {
               echo "FAIL: the binary does not say $VERSION."
               echo "      The health gate waits for $VERSION.ok, so the two must agree."
               exit 1
             }
-            printf '%s' "$json" | grep -q "\"arch\":\"${{ matrix.arch }}\"" ||
-              { echo "FAIL: the binary does not say ${{ matrix.arch }}"; exit 1; }
+            printf '%s' "$json" | grep -qF "\"arch\":\"$arch\"" ||
+              { echo "FAIL: the binary does not say $arch"; exit 1; }
           done
           echo "ok: the health marker of this release is $VERSION.ok"
 
@@ -369,13 +383,28 @@ jobs:
           VERSION: ${{ needs.settings.outputs.version }}
         run: |
           set -eu
+          # "pipefail", because the boot test below goes through "tee". Without it
+          # the status of the pipe is the status of tee, which is always 0, and a
+          # failed boot would pass. The runner shell is bash, so the option exists.
+          set -o pipefail
           image="out/portapixel-$VERSION-x86_64.img.gz"
           [ -f "$image" ] || { echo "FAIL: no $image"; ls -l out; exit 1; }
           if [ '${{ matrix.firmware }}' = uefi ]; then
-            sh tests/qemu/boot-smoke.sh --uefi --port 18080 "$image"
+            sh tests/qemu/boot-smoke.sh --uefi --port 18080 "$image" | tee smoke.log
           else
-            sh tests/qemu/boot-smoke.sh --port 18080 "$image"
+            sh tests/qemu/boot-smoke.sh --port 18080 "$image" | tee smoke.log
           fi
+          # The boot test reads PORTAPIXEL_VERSION from the guest and prints it.
+          # Reading it is not a check: an image that names another version, or a
+          # value that the console cut short, passed both firmware legs. The
+          # release publishes this image under the name of $VERSION, so the guest
+          # must say the same value. "-F", because a version holds full stops.
+          grep -qF "==> image version $VERSION" smoke.log || {
+            echo "FAIL: the guest does not say that it is version $VERSION."
+            grep -F '==> image version' smoke.log || echo "      it printed no version at all"
+            exit 1
+          }
+          echo "ok: the image in the guest says version $VERSION"
 
   # What this job proves (blocking, reduced): the aarch64 image holds a daemon
   # that starts and passes selftest under qemu-user, the packages of the display
@@ -521,9 +550,37 @@ jobs:
           echo "--- /api/admin/session ---"
           cat /tmp/session.json
           echo
-          docker exec pps /portapixel-server version | grep -q "$VERSION" ||
+          # The JSON answer, not the line for a person, and "-F" because a version
+          # holds full stops.
+          json="$(docker exec pps /portapixel-server version --json)"
+          echo "amd64 image: $json"
+          printf '%s' "$json" | grep -qF "\"version\":\"$VERSION\"" ||
             { echo "FAIL: the image does not hold version $VERSION"; docker rm -f pps; exit 1; }
+          printf '%s' "$json" | grep -qF '"arch":"amd64"' ||
+            { echo "FAIL: the amd64 image does not hold an amd64 binary"; docker rm -f pps; exit 1; }
           docker rm -f pps
+
+      # The build above pushes two platforms and the check above runs only one of
+      # them. A cross compile that names the wrong processor gives an arm64 image
+      # with an amd64 binary in it, and nothing on an amd64 runner sees that. The
+      # job already installs the qemu-user handlers, so run the arm64 variant too.
+      - name: the arm64 variant of the image says arm64
+        env:
+          IMAGE: ${{ steps.tags.outputs.image }}
+          VERSION: ${{ needs.settings.outputs.version }}
+        run: |
+          set -eu
+          json="$(docker run --rm --platform linux/arm64 "$IMAGE" version --json)"
+          echo "arm64 image: $json"
+          printf '%s' "$json" | grep -qF '"arch":"arm64"' || {
+            echo "FAIL: the arm64 image does not hold an arm64 binary."
+            echo "      The Docker build compiled for the wrong processor."
+            exit 1
+          }
+          printf '%s' "$json" | grep -qF "\"version\":\"$VERSION\"" ||
+            { echo "FAIL: the arm64 image does not hold version $VERSION"; exit 1; }
+          printf '%s' "$json" | grep -qF '"name":"portapixel-server"' ||
+            { echo "FAIL: the arm64 image does not hold portapixel-server"; exit 1; }
 
   # What this job proves: os/install.sh puts PortaPixel on a stock Alpine of the
   # pinned release, live, as root, and the box answers after a reboot (D51).
