@@ -209,6 +209,33 @@ checked with a screenshot of the virtual display or with the ops log.
   the token of any device ID. Now a pending request lives in its own table. A paired row
   changes only when the admin approves, or when the request has a valid enrollment token
   and the same `hardware_id` as the row (a card that was flashed again).
+- A program never reads a line that a person reads. The updater took the last word of
+  `portapixeld <version> <arch>` as the version, so each real update failed. Each binary
+  answers `version --json`. `updater.BinaryInfo` is the writer and the reader.
+- A test double for the one function that touches the world hides the only path that
+  matters. Each updater test gave its own version reader, so the real one never ran. To
+  cover a real reader, start the test binary again from `TestMain` as the program under
+  test. This needs no compiler and works on Windows and Linux.
+- When the order of two processes decides the result, the design is wrong. The health
+  gate removed the marker after the daemon started. The gate now removes an old marker in
+  `start_pre` only. The daemon writes its marker again while `.swap-pending` names it.
+- The first run on Linux found five tests that pass on Windows only. Run the tests on
+  Linux before you trust them: `go test` on the Alpine test container works, also with
+  `-race` after `apk add build-base`.
+- Alpine and a distroless container have no `/etc/mime.types`. `mime.TypeByExtension`
+  then knows almost no extension, and Go cannot identify SVG, AVIF or Matroska from the
+  first bytes. Windows reads the registry and Ubuntu has mailcap, so the two hide it.
+  `internal/playlist` has the one table. Call `playlist.MediaType` directly: a fix that
+  depends on the `init` of an imported package fails when an import goes away.
+- A `--root` rule must not run in the on-box mode. The installer counted the kernels of
+  the host. The `@image` tag marks the packages that only an image gets.
+- BuildKit ignores `ARG TARGETARCH` unless the stage starts with
+  `FROM --platform=$BUILDPLATFORM`. Without it, a cross compile is an emulation.
+- A console of 80 columns cuts a long typed line inside the value that a test reads. Send
+  `stty cols 200` first and keep the line short.
+- A public key for `-ldflags -X` is the base64 line only. A flag cannot hold a new line.
+- A wrong path in `git add a b c` stops the whole command, and the next commit then holds
+  other files. Check the list of a commit after each commit of a group.
 - A `.part` file in a directory that the caller removes at each attempt is not a resume.
   The updater staged into `<version>.staging` and removed it in a defer, so a slow link
   started from zero each time. A download now goes to `releases/.download/`.
