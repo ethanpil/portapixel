@@ -1,0 +1,460 @@
+package installer
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// fakeRunner records every program call and can make one of them fail.
+type fakeRunner struct {
+	calls []string
+	fail  map[string]bool
+}
+
+func newRunner() *fakeRunner { return &fakeRunner{fail: map[string]bool{}} }
+
+func (f *fakeRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
+	f.calls = append(f.calls, strings.TrimSpace(name+" "+strings.Join(args, " ")))
+	if f.fail[name] {
+		return []byte("the tool says no"), fmt.Errorf("exit status 1")
+	}
+	return nil, nil
+}
+
+func (f *fakeRunner) joined() string { return strings.Join(f.calls, " | ") }
+
+// machine is a fake /sys, /proc and /dev. The partitions are ordinary files, so the
+// copy is a real copy that a test can compare byte for byte.
+type machine struct {
+	t        *testing.T
+	sys      string
+	proc     string
+	dev      string
+	media    string
+	mount    string
+	run      *fakeRunner
+	inst     *Installer
+	bootBody []byte
+	rootBody []byte
+	mbrBody  []byte
+}
+
+const (
+	bootBytes = 4 << 20  // p1 of the fake stick
+	rootBytes = 12 << 20 // p2 of the fake stick
+)
+
+// newMachine builds a stick (sda, 64 MB) and a disk (sdb, 2 GB).
+func newMachine(t *testing.T) *machine {
+	t.Helper()
+	base := t.TempDir()
+	m := &machine{
+		t:     t,
+		sys:   filepath.Join(base, "sys"),
+		proc:  filepath.Join(base, "proc"),
+		dev:   filepath.Join(base, "dev"),
+		media: filepath.Join(base, "media"),
+		mount: filepath.Join(base, "run"),
+		run:   newRunner(),
+	}
+	mkdir(t, m.dev, m.media, m.mount)
+
+	// The stick: three partitions, the two that matter hold random bytes.
+	m.block("sda", 64<<20, false, false, "Generic", "Flash Disk")
+	m.part("sda", "sda1", bootBytes)
+	m.part("sda", "sda2", rootBytes)
+	m.part("sda", "sda3", 40<<20)
+	m.bootBody = randomBody(t, bootBytes)
+	m.rootBody = randomBody(t, rootBytes)
+	m.mbrBody = randomBody(t, 512)
+	write(t, filepath.Join(m.dev, "sda1"), m.bootBody)
+	write(t, filepath.Join(m.dev, "sda2"), m.rootBody)
+	write(t, filepath.Join(m.dev, "sda"), m.mbrBody)
+
+	// The target disk and the devices that its partitions will be.
+	m.block("sdb", 2<<30, false, false, "Samsung", "SSD 860 EVO")
+	write(t, filepath.Join(m.dev, "sdb"), make([]byte, 512))
+
+	// The kernel says that the root filesystem is the second partition of the
+	// stick.
+	write(t, filepath.Join(m.proc, "mounts"), []byte(
+		"proc /proc proc rw 0 0\n"+
+			filepath.Join(m.dev, "sda2")+" / ext4 rw,noatime 0 0\n"))
+
+	// Content on the media partition of the source.
+	write(t, filepath.Join(m.media, "portapixel.toml"), []byte("[device]\nname = \"Lobby\"\n"))
+	write(t, filepath.Join(m.media, "default", "playlist.toml"), []byte("[[item]]\nfile = \"a.jpg\"\n"))
+	write(t, filepath.Join(m.media, "default", "a.jpg"), randomBody(t, 1024))
+
+	m.inst = New(Options{
+		SysRoot: m.sys, ProcRoot: m.proc, DevRoot: m.dev,
+		MediaRoot: m.media, MountRoot: m.mount, Arch: "amd64", Run: m.run,
+	})
+	return m
+}
+
+// block writes the /sys/block entry of a disk.
+func (m *machine) block(name string, size int64, removable, readOnly bool, vendor, model string) {
+	dir := filepath.Join(m.sys, "block", name)
+	mkdir(m.t, dir, filepath.Join(dir, "device"))
+	write(m.t, filepath.Join(dir, "size"), []byte(fmt.Sprint(size/sectorSize)))
+	write(m.t, filepath.Join(dir, "removable"), []byte(boolText(removable)))
+	write(m.t, filepath.Join(dir, "ro"), []byte(boolText(readOnly)))
+	write(m.t, filepath.Join(dir, "device", "vendor"), []byte(vendor+"\n"))
+	write(m.t, filepath.Join(dir, "device", "model"), []byte(model+"\n"))
+}
+
+// part writes the /sys/block entry of a partition.
+func (m *machine) part(disk, name string, size int64) {
+	dir := filepath.Join(m.sys, "block", disk, name)
+	mkdir(m.t, dir)
+	write(m.t, filepath.Join(dir, "size"), []byte(fmt.Sprint(size/sectorSize)))
+}
+
+func boolText(v bool) string {
+	if v {
+		return "1\n"
+	}
+	return "0\n"
+}
+
+func mkdir(t *testing.T, dirs ...string) {
+	t.Helper()
+	for _, d := range dirs {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func write(t *testing.T, path string, body []byte) {
+	t.Helper()
+	mkdir(t, filepath.Dir(path))
+	if err := os.WriteFile(path, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func randomBody(t *testing.T, n int64) []byte {
+	t.Helper()
+	body := make([]byte, n)
+	if _, err := rand.Read(body); err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+// ------------------------------------------------------------------ the tests
+
+// The disk list must leave out everything that can never be a target, and it must
+// never offer the disk that the system runs from.
+func TestDisks(t *testing.T) {
+	m := newMachine(t)
+	m.block("loop0", 100<<20, false, false, "", "")
+	m.block("zram0", 100<<20, false, false, "", "")
+	m.block("sr0", 700<<20, true, false, "", "DVD")
+	m.block("sdc", 16<<20, true, false, "Tiny", "Card") // too small
+	m.block("sdd", 2<<30, false, true, "Locked", "SSD") // read only
+
+	disks, err := m.inst.Disks()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, d := range disks {
+		names = append(names, filepath.Base(d.Device))
+	}
+	want := []string{"sdb", "sdc"}
+	if strings.Join(names, ",") != strings.Join(want, ",") {
+		t.Fatalf("disks = %v, want %v", names, want)
+	}
+	if disks[0].TooSmall {
+		t.Error("sdb is marked too small")
+	}
+	if !disks[1].TooSmall {
+		t.Error("sdc is not marked too small")
+	}
+	if disks[0].Model != "Samsung SSD 860 EVO" {
+		t.Errorf("model = %q", disks[0].Model)
+	}
+	if disks[0].SizeBytes != 2<<30 {
+		t.Errorf("size = %d", disks[0].SizeBytes)
+	}
+}
+
+// Every refusal of D54. There is no undo, so each one must answer before anything is
+// written.
+func TestCheckRefusals(t *testing.T) {
+	tests := []struct {
+		name     string
+		device   string
+		confirm  string
+		wantText string
+	}{
+		{name: "a good target", device: "sdb", confirm: "sdb"},
+		{name: "the boot disk", device: "sda", confirm: "sda", wantText: "runs from"},
+		{name: "no confirmation", device: "sdb", confirm: "", wantText: "type the name"},
+		{name: "the wrong name typed back", device: "sdb", confirm: "sdc", wantText: "type the name"},
+		{name: "a disk that is too small", device: "sdc", confirm: "sdc", wantText: "needs"},
+		{name: "a disk that is not there", device: "sdz", confirm: "sdz", wantText: "not a disk"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := newMachine(t)
+			m.block("sdc", 16<<20, true, false, "Tiny", "Card")
+
+			device := filepath.ToSlash(filepath.Join(m.dev, tt.device))
+			confirm := tt.confirm
+			if confirm != "" {
+				confirm = filepath.ToSlash(filepath.Join(m.dev, tt.confirm))
+			}
+
+			_, _, err := m.inst.Check(device, confirm)
+			if tt.wantText == "" {
+				if err != nil {
+					t.Fatalf("Check() = %v, want no error", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("Check() gave no error")
+			}
+			if !strings.Contains(err.Error(), tt.wantText) {
+				t.Errorf("Check() = %v, want a message with %q in it", err, tt.wantText)
+			}
+		})
+	}
+}
+
+// The destructive core. The partitions are files, so the test compares the bytes.
+// This is the test that says that the install copies and does not corrupt.
+func TestRunCopiesEverything(t *testing.T) {
+	m := newMachine(t)
+	target := filepath.ToSlash(filepath.Join(m.dev, "sdb"))
+
+	var events []Progress
+	var done Done
+	send := func(name string, data any) {
+		switch name {
+		case "progress":
+			events = append(events, data.(Progress))
+		case "done":
+			done = data.(Done)
+		}
+	}
+	m.inst.Run(context.Background(), target, target, send)
+
+	if !done.OK {
+		t.Fatalf("done = %+v", done)
+	}
+	if done.Instruction != FinalInstruction {
+		t.Errorf("instruction = %q", done.Instruction)
+	}
+
+	// The two block copies are byte for byte.
+	same(t, filepath.Join(m.dev, "sdb1"), m.bootBody)
+	same(t, filepath.Join(m.dev, "sdb2"), m.rootBody)
+
+	// The MBR boot code came across, and nothing past it.
+	head, err := os.ReadFile(filepath.Join(m.dev, "sdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(head[:mbrCodeBytes], m.mbrBody[:mbrCodeBytes]) {
+		t.Error("the boot code of the target is not the boot code of the source")
+	}
+	if bytes.Equal(head[mbrCodeBytes:512], m.mbrBody[mbrCodeBytes:512]) {
+		t.Error("the copy went past the boot code and into the partition table")
+	}
+
+	// The media files landed in the mount point.
+	for _, rel := range []string{"portapixel.toml", "default/playlist.toml", "default/a.jpg"} {
+		source := filepath.Join(m.media, filepath.FromSlash(rel))
+		body, err := os.ReadFile(source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		same(t, filepath.Join(m.mount, "install-media", filepath.FromSlash(rel)), body)
+	}
+
+	// The programs, in order, with the labels and the types of the image.
+	calls := m.run.joined()
+	for _, want := range []string{
+		"sgdisk --zap-all " + target,
+		"--attributes=1:set:2",
+		"-c 1:PPBOOT",
+		"-c 2:PPROOT",
+		"-c 3:PPMEDIA",
+		"-t 1:ef00",
+		"-t 2:8300",
+		"-t 3:0700",
+		"mkfs.exfat -L PPMEDIA " + target + "3",
+		"mount " + target + "3",
+		"umount ",
+	} {
+		if !strings.Contains(calls, want) {
+			t.Errorf("the program calls hold no %q:\n%s", want, calls)
+		}
+	}
+
+	// The progress never goes backwards and it ends at the top.
+	last := -1
+	for _, e := range events {
+		if e.Percent < last {
+			t.Fatalf("the progress went from %d back to %d at %q", last, e.Percent, e.Phase)
+		}
+		last = e.Percent
+	}
+	if last < 98 {
+		t.Errorf("the last progress event is %d per cent", last)
+	}
+}
+
+// A Raspberry Pi has no boot code outside its partitions, so the install must not
+// write over the head of the disk.
+func TestNoBootCodeOnARaspberryPi(t *testing.T) {
+	m := newMachine(t)
+	m.inst = New(Options{
+		SysRoot: m.sys, ProcRoot: m.proc, DevRoot: m.dev,
+		MediaRoot: m.media, MountRoot: m.mount, Arch: "arm64", Run: m.run,
+	})
+	target := filepath.ToSlash(filepath.Join(m.dev, "sdb"))
+	before, err := os.ReadFile(filepath.Join(m.dev, "sdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var done Done
+	m.inst.Run(context.Background(), target, target, func(name string, data any) {
+		if name == "done" {
+			done = data.(Done)
+		}
+	})
+	if !done.OK {
+		t.Fatalf("done = %+v", done)
+	}
+	after, err := os.ReadFile(filepath.Join(m.dev, "sdb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before[:mbrCodeBytes], after[:mbrCodeBytes]) {
+		t.Error("the install wrote boot code on an arm64 machine")
+	}
+	if strings.Contains(m.run.joined(), "--attributes") {
+		t.Error("the install set the legacy boot attribute on an arm64 machine")
+	}
+}
+
+// A program that fails must stop the install and say what failed, and the stream
+// must end with a done event that carries the reason.
+func TestAFailedProgramStopsTheInstall(t *testing.T) {
+	tests := []string{"sgdisk", "mkfs.exfat", "mount"}
+	for _, tool := range tests {
+		t.Run(tool+" fails", func(t *testing.T) {
+			m := newMachine(t)
+			m.run.fail[tool] = true
+			target := filepath.ToSlash(filepath.Join(m.dev, "sdb"))
+
+			var done Done
+			count := 0
+			m.inst.Run(context.Background(), target, target, func(name string, data any) {
+				if name == "done" {
+					done = data.(Done)
+					count++
+				}
+			})
+			if done.OK {
+				t.Fatal("done says the install worked")
+			}
+			if done.Error == "" {
+				t.Error("done carries no reason")
+			}
+			if count != 1 {
+				t.Errorf("%d done events, want 1", count)
+			}
+		})
+	}
+}
+
+// One install at a time. Two of them on one machine would write over each other.
+func TestOneInstallAtATime(t *testing.T) {
+	m := newMachine(t)
+	m.mu()
+	target := filepath.ToSlash(filepath.Join(m.dev, "sdb"))
+
+	var done Done
+	m.inst.Run(context.Background(), target, target, func(name string, data any) {
+		if name == "done" {
+			done = data.(Done)
+		}
+	})
+	if done.OK || !strings.Contains(done.Error, "runs already") {
+		t.Fatalf("done = %+v", done)
+	}
+}
+
+// mu marks the installer busy, the way a running install does.
+func (m *machine) mu() {
+	m.inst.mu.Lock()
+	m.inst.busy = true
+	m.inst.mu.Unlock()
+}
+
+// clone must refuse a source that is shorter than the size that the kernel
+// reported. A partition copy that stopped early would leave a filesystem that
+// nothing can mount.
+func TestCloneRefusesAShortSource(t *testing.T) {
+	dir := t.TempDir()
+	from := filepath.Join(dir, "from")
+	to := filepath.Join(dir, "to")
+	write(t, from, []byte("only a few bytes"))
+
+	err := clone(context.Background(), from, to, 1<<20, nil)
+	if err == nil {
+		t.Fatal("clone() gave no error")
+	}
+	if !strings.Contains(err.Error(), "ended after") {
+		t.Errorf("clone() = %v", err)
+	}
+}
+
+func TestPartitionName(t *testing.T) {
+	tests := []struct {
+		disk string
+		n    int
+		want string
+	}{
+		{"sda", 1, "sda1"},
+		{"sdb", 3, "sdb3"},
+		{"nvme0n1", 2, "nvme0n1p2"},
+		{"mmcblk0", 1, "mmcblk0p1"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.disk, func(t *testing.T) {
+			if got := partitionName(tt.disk, tt.n); got != tt.want {
+				t.Errorf("partitionName(%q, %d) = %q, want %q", tt.disk, tt.n, got, tt.want)
+			}
+		})
+	}
+}
+
+// same compares a file with the bytes that it must hold.
+func same(t *testing.T, path string, want []byte) {
+	t.Helper()
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("%s holds %d bytes, want %d", path, len(got), len(want))
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("%s does not hold the same bytes as the source", path)
+	}
+}
