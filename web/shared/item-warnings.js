@@ -134,14 +134,28 @@ function isUhd(item) {
   return /(4k|2160|uhd)/i.test(nameOf(item));
 }
 
-/** Sentences to show under one playlist item. Returns an array of strings;
-    an empty array means the item is fine.
+/* The lead-in of each warning. A warning about a codec and a warning about a
+   file that the player cannot read are not the same kind of problem, and one
+   shared prefix made the second one read as a performance note. */
+export const PREFIX = {
+  playback: 'Might not play smoothly here.',
+  skipped: 'This item gets skipped.',
+  timing: 'This item has no time on screen.',
+  size: 'Slower than it needs to be.',
+};
+
+/** Sentences to show under one playlist item. Returns an array of
+    {prefix, text}; an empty array means the item is fine.
       item: {kind, name|file|url, duration, width, height, size, codec}
       caps: the object from probeCapabilities()
       tier: "low" or "high" — the device performance tier
-      opts: {mixed} — true when the playlist holds more than a URL item */
+      opts: {mixed} — true when the playlist holds more than a URL item
+             {extra} — sentences that the host page found itself, for example a
+                       file that the device reports as missing. Each one is a
+                       string or a {prefix, text}. */
 export function warningsFor(item, caps, tier, opts = {}) {
   const out = [];
+  const push = (prefix, text) => out.push({ prefix, text });
   if (!item) return out;
   const kind = String(item.kind || '').toLowerCase();
   const machine = caps && caps.source === 'device' ? 'this box' : 'this browser';
@@ -156,37 +170,46 @@ export function warningsFor(item, caps, tier, opts = {}) {
     const r = raw === undefined ? null : fix(raw);
 
     if (uhd && effTier === 'low') {
-      out.push("It's a 4K file and this screen is set up as low-power. A 1080p copy will look identical here and play cleanly.");
+      push(PREFIX.playback, "It's a 4K file and this screen is set up as low-power. A 1080p copy will look identical here and play cleanly.");
     } else if (codec === 'hevc' && r && !r.supported) {
-      out.push(caps.source === 'device'
+      push(PREFIX.playback, caps.source === 'device'
         ? "It's in HEVC, which this box does not decode. An H.264 copy plays cleanly."
         : "It's in HEVC, which this browser cannot decode, so the screen probably cannot either. An H.264 copy is the safe choice.");
     } else if (r && r.supported && r.powerEfficient === false) {
-      out.push(`${uhd ? "It's a 4K file" : 'It is'} in a newer format than ${machine} decodes in hardware. A 1080p H.264 copy will look identical on this screen and play cleanly.`);
+      push(PREFIX.playback, `${uhd ? "It's a 4K file" : 'It is'} in a newer format than ${machine} decodes in hardware. A 1080p H.264 copy will look identical on this screen and play cleanly.`);
     } else if (uhd && r && !r.supported) {
-      out.push('It is a 4K file and nothing here reports that it can decode it. A 1080p copy is the safe choice.');
+      push(PREFIX.playback, 'It is a 4K file and nothing here reports that it can decode it. A 1080p copy is the safe choice.');
     }
   }
 
   if (kind === 'url' && opts.mixed && !Number(item.duration)) {
-    out.push('This web page has no time on screen. Give it one, or the loop stops on this page.');
+    push(PREFIX.timing, 'Give it a time on screen, or the loop stops on this page.');
   }
 
   if (kind === 'image') {
     const size = Number(item.size) || 0;
     const px = (Number(item.width) || 0) * (Number(item.height) || 0);
     if (size > 12 * 1024 * 1024 || px > 40e6) {
-      out.push('The image file is very large. It takes a moment to decode every time round the loop; a 1920x1080 copy shows the same thing.');
+      push(PREFIX.size, 'The image file is very large. It takes a moment to decode every time round the loop; a 1920x1080 copy shows the same thing.');
     }
   }
 
   if (kind !== 'url' && nameOf(item)) {
     const ext = extOf(item);
     if (!ext) {
-      out.push('This file has no extension, so PortaPixel cannot tell what it holds and skips it.');
+      push(PREFIX.skipped, 'This file has no extension, so PortaPixel cannot tell what it holds.');
     } else if (!KNOWN_EXT.has(ext)) {
-      out.push(`PortaPixel does not know the .${ext} format, so this item gets skipped.`);
+      push(PREFIX.skipped, `PortaPixel does not know the .${ext} format.`);
     }
+  }
+
+  /* What the host page found out for itself. The device reports a file that is
+     not on the stick and a kind that the player does not know, and only the
+     host page has that answer. */
+  for (const extra of opts.extra || []) {
+    if (!extra) continue;
+    if (typeof extra === 'string') push(PREFIX.skipped, extra);
+    else push(extra.prefix || PREFIX.skipped, extra.text || '');
   }
 
   return out;

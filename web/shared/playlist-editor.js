@@ -36,7 +36,13 @@ const ITEM_KEYS = ['file', 'sha256', 'url', 'name', 'kind', 'duration', 'mute',
                   upload() is the device path: it puts a file in the playlist.
     readOnly:     true shows the managed-by banner and disables everything.
     capabilities: {commentLossWarning, configFile, managedBy, folder, tier,
-                   decode, warnPrefix, warnAction, impact, saveLabel}
+                   decode, warnPrefix, warnAction, impact, saveLabel,
+                   itemWarnings(item), libraryLabel, libraryEmpty}
+                  itemWarnings(item) gives the warnings that only the host page
+                  knows, for example a file that the device reports as missing.
+                  Each one is a string or a {prefix, text}.
+                  warnPrefix replaces the lead-in of EVERY warning. Leave it out
+                  and each warning uses its own.
     onSave(playlist):          must return a promise.
     onUpload(file, onProgress): overrides mediaSource.upload.
     onDirty(dirty):            called whenever the dirty state changes.
@@ -99,7 +105,7 @@ export function mountPlaylistEditor(el, opts = {}) {
     if (uploader) addBtns.append(h('button', { type: 'button', class: 'pp-btn', onClick: pickFiles },
       icon('plus'), 'Upload files'));
     if (src.list) addBtns.append(h('button', { type: 'button', class: 'pp-btn', onClick: pickFromLibrary },
-      icon('plus'), 'Add from library'));
+      icon('plus'), libraryLabel()));
     addBtns.append(h('button', { type: 'button', class: 'pp-btn', onClick: addUrlItem },
       icon('plus'), 'Add a web page'));
   }
@@ -162,7 +168,7 @@ export function mountPlaylistEditor(el, opts = {}) {
           : 'Add media from the library or a web page. Screens keep playing what they have until this playlist is saved.'),
       ro ? null : h('div', { class: 'pp-empty__actions' },
         uploader ? h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'Upload files', onClick: pickFiles }) : null,
-        src.list ? h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'Add from library', onClick: pickFromLibrary }) : null,
+        src.list ? h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: libraryLabel(), onClick: pickFromLibrary }) : null,
         h('button', { type: 'button', class: 'pp-btn', text: 'Add a web page', onClick: addUrlItem })));
   }
 
@@ -236,16 +242,23 @@ export function mountPlaylistEditor(el, opts = {}) {
     return input;
   }
 
-  /* Sub-rows under one item: warnings, notes and the extra fields. */
+  /* Sub-rows under one item: warnings, notes and the extra fields.
+
+     Each warning carries its own lead-in. A note about a codec and a note about
+     a file that the player cannot read are not the same kind of problem, and one
+     shared prefix made the second one read as a performance note.
+     capabilities.warnPrefix still overrides all of them, which is what a fleet
+     page needs when it speaks for a group of screens. */
   function renderSub(item, sub) {
     const mixed = pl.items.length > 1;
-    const warns = warningsFor(item, caps.decode, caps.tier, { mixed });
+    const extra = caps.itemWarnings ? caps.itemWarnings(item) || [] : [];
+    const warns = warningsFor(item, caps.decode, caps.tier, { mixed, extra });
     const parts = [];
 
     for (const w of warns) {
       parts.push(h('div', { class: 'pp-pe__sub' },
         h('div', { class: 'pp-pe__warn' },
-          h('span', null, h('b', { text: `${caps.warnPrefix || 'Might not play smoothly here.'} ` }), w),
+          h('span', null, h('b', { text: `${caps.warnPrefix || w.prefix} ` }), w.text),
           caps.warnAction ? h('button', {
             type: 'button', class: 'pp-btn pp-btn--sm pp-btn--warn-outline', text: caps.warnAction.label,
             onClick: () => caps.warnAction.onClick(item),
@@ -410,6 +423,10 @@ export function mountPlaylistEditor(el, opts = {}) {
     }
   }
 
+  /* The words of the library picker. The server picks from a media library; the
+     device picks from the folder on the stick. The host page gives the words. */
+  function libraryLabel() { return caps.libraryLabel || 'Add from library'; }
+
   async function pickFromLibrary() {
     let library;
     try {
@@ -418,8 +435,13 @@ export function mountPlaylistEditor(el, opts = {}) {
       toast(err.message || 'The library did not answer', 'danger');
       return;
     }
+    // A file that the playlist already names goes last. The reason to open this
+    // dialog is a file that is not in the playlist yet.
+    const files = [...(library || [])].sort((a, b) => Number(!!a.inPlaylist) - Number(!!b.inPlaylist));
     const chosen = new Set();
-    const grid = h('div', { class: 'pp-grid' }, (library || []).map((m) => {
+    const grid = h('div', { class: 'pp-grid' }, files.map((m) => {
+      const meta = [m.size ? fmtBytes(m.size) : '', m.inPlaylist ? 'already in this playlist' : '']
+        .filter(Boolean).join(' · ');
       const tile = h('button', {
         type: 'button', class: 'pp-tile', 'aria-pressed': 'false',
         onClick: () => {
@@ -433,15 +455,19 @@ export function mountPlaylistEditor(el, opts = {}) {
           h('span', { class: 'pp-thumb__label' }, h('span', { class: 'pp-kind pp-kind--chip', text: KIND_LABEL[m.kind] || m.kind || '' }))),
         h('span', { class: 'pp-tile__body' },
           h('span', { class: 'pp-tile__name', text: m.name || m.sha256 || '' }),
-          h('span', { class: 'pp-tile__meta', text: m.size ? fmtBytes(m.size) : '' })));
+          h('span', { class: 'pp-tile__meta', text: meta })));
       return tile;
     }));
 
+    const fresh = files.filter((m) => !m.inPlaylist).length;
+    const help = fresh
+      ? `${fresh} ${fresh === 1 ? 'file is' : 'files are'} not in the playlist yet. Pick the ones to add to the end.`
+      : 'Every file here is in the playlist already. Pick one to add it a second time.';
     const ok = await modal({
-      title: 'Add from the library',
-      body: (library || []).length
-        ? h('div', null, h('div', { class: 'pp-help', style: { 'margin-bottom': '12px' } }, 'Pick the files to add to the end of this playlist.'), grid)
-        : h('div', { class: 'pp-help' }, 'The library is empty. Upload media on the Media page first.'),
+      title: libraryLabel(),
+      body: files.length
+        ? h('div', null, h('div', { class: 'pp-help', style: { 'margin-bottom': '12px' } }, help), grid)
+        : h('div', { class: 'pp-help' }, caps.libraryEmpty || 'The library is empty. Upload media on the Media page first.'),
       actions: [{ label: 'Cancel', value: false }, { label: 'Add', value: true, kind: 'primary' }],
       wide: true,
     });
