@@ -16,8 +16,8 @@ import (
 )
 
 // maxBundleEntries is the largest number of members that a bundle may hold. A
-// release bundle holds five files. An archive with thousands of members is not
-// one of ours.
+// release bundle holds five files. An archive with thousands of members is not one
+// of ours.
 const maxBundleEntries = 64
 
 // ErrBadBundle says that the upload is not a release bundle that we accept.
@@ -26,25 +26,35 @@ var ErrBadBundle = errors.New("this file is not a release bundle")
 // InstallBundle takes a release bundle that the admin uploaded and mirrors the
 // version from it. It is the path for a network that cannot reach GitHub (D28).
 //
-// The bundle is a .tar.gz or a .zip that holds the same files that the GitHub
-// release holds. The check after the extraction is the same check: signature and
-// checksum, or the version stays unmirrored.
+// The bundle is a .tar.gz or a .zip that holds the same files as the GitHub
+// release. The check after the extraction is the same check. The signature and the
+// checksum must both pass, or the version stays unmirrored.
 //
-// The names in an archive are input from outside. A name with a parent step in
-// it, an absolute name, or a name with a drive letter stops the whole upload:
-// somebody made that archive to write outside the release directory, and the
-// safe answer is to accept nothing from it.
+// The names in an archive are input from outside. A name with a parent step in it,
+// an absolute name, or a name with a drive letter stops the whole upload.
+// Somebody made that archive to write outside the release directory, and the safe
+// answer is to accept nothing from it.
+//
+// It takes the same working lock as the download and it stages in the same way. An
+// upload and a download of one version would otherwise write one directory
+// together, and the files that Verify then reads would be a mixture of the two.
 func (m *Mirror) InstallBundle(v string, body io.Reader, fileName string) error {
 	if !ValidVersion(v) {
 		return fmt.Errorf("%q is not a version name", v)
 	}
-	m.Report(v, stateWorking, "")
-	err := m.installBundle(v, body, fileName)
+	id, done, err := m.begin(v)
 	if err != nil {
-		m.Report(v, stateFailed, err.Error())
 		return err
 	}
-	m.Report(v, stateDone, "")
+	defer done()
+
+	m.report(id, v, MirrorWorking, "")
+	err = m.installBundle(v, body, fileName)
+	if err != nil {
+		m.report(id, v, MirrorFailed, err.Error())
+		return err
+	}
+	m.report(id, v, MirrorDone, "")
 	return nil
 }
 
@@ -52,18 +62,18 @@ func (m *Mirror) installBundle(v string, body io.Reader, fileName string) error 
 	if m.PublicKey == "" {
 		return ErrNoKey
 	}
-	dir := m.VersionDir(v)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("make %s: %w", dir, err)
+	staging, err := m.staging(v)
+	if err != nil {
+		return err
 	}
+	defer os.RemoveAll(staging)
 
 	lower := strings.ToLower(fileName)
-	var err error
 	switch {
 	case strings.HasSuffix(lower, ".zip"):
-		err = extractZip(body, dir)
+		err = extractZip(body, staging)
 	case strings.HasSuffix(lower, ".tar.gz"), strings.HasSuffix(lower, ".tgz"):
-		err = extractTarGz(body, dir)
+		err = extractTarGz(body, staging)
 	default:
 		return fmt.Errorf("%w: the name must end with .tar.gz, .tgz or .zip", ErrBadBundle)
 	}
@@ -71,11 +81,14 @@ func (m *Mirror) installBundle(v string, body io.Reader, fileName string) error 
 		return err
 	}
 	for _, name := range Files() {
-		if _, statErr := os.Stat(filepath.Join(dir, name)); statErr != nil {
+		if _, statErr := os.Stat(filepath.Join(staging, name)); statErr != nil {
 			return fmt.Errorf("%w: it holds no file %s", ErrBadBundle, name)
 		}
 	}
-	return Verify(dir, m.PublicKey)
+	if err := Verify(staging, m.PublicKey); err != nil {
+		return err
+	}
+	return m.commit(staging, v)
 }
 
 // extractTarGz writes the wanted members of a tar.gz into dir.
@@ -131,7 +144,7 @@ func extractZip(body io.Reader, dir string) error {
 	// The limit is the sum of the limits of the files, which is what a bundle of
 	// our own can hold.
 	limit := int64(maxSumsBytes + len(binaries)*(maxBinaryBytes+maxSigBytes))
-	n, err := io.Copy(tmp, io.LimitReader(body, limit+1))
+	n, err := io.Copy(tmp, limitReader(body, limit+1))
 	if err != nil {
 		return err
 	}
@@ -197,8 +210,9 @@ func memberName(raw string) (string, bool, error) {
 	return base, true, nil
 }
 
-// writeMember writes one member of an archive. It takes one byte more than the
-// limit, so a member that is too long is an error and not a file that got cut.
+// writeMember writes one file to dest through a temporary file. It takes one byte
+// more than the limit, so a body that is too long is an error and not a file that
+// got cut. The bundle extraction and the download both call it.
 func writeMember(dest string, src io.Reader, limit int64) error {
 	tmp, err := os.CreateTemp(filepath.Dir(dest), filepath.Base(dest)+".part*")
 	if err != nil {
@@ -213,12 +227,12 @@ func writeMember(dest string, src io.Reader, limit int64) error {
 		}
 	}()
 
-	n, err := io.Copy(tmp, io.LimitReader(src, limit+1))
+	n, err := io.Copy(tmp, limitReader(src, limit+1))
 	if err != nil {
 		return err
 	}
 	if n > limit {
-		return fmt.Errorf("%w: %s is longer than the limit of %d bytes", ErrBadBundle, filepath.Base(dest), limit)
+		return fmt.Errorf("%s is longer than the limit of %d bytes", filepath.Base(dest), limit)
 	}
 	if err := tmp.Sync(); err != nil {
 		return err
