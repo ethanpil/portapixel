@@ -7,9 +7,23 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
+
+// allowOrdinaryFiles lets a test write to the files that it made itself.
+//
+// The rule on a device is that the target of a partition copy is a block device
+// node (see openTarget). A test cannot make such a node: that needs root rights
+// and a real disk. So a test replaces the rule and nothing else, and
+// TestTheRealTargetCheck proves the real rule on Linux.
+func allowOrdinaryFiles(t *testing.T) {
+	t.Helper()
+	old := isBlockDevice
+	isBlockDevice = func(string, os.FileInfo) error { return nil }
+	t.Cleanup(func() { isBlockDevice = old })
+}
 
 // fakeRunner records every program call and can make one of them fail.
 //
@@ -61,6 +75,7 @@ const (
 // newMachine builds a stick (sda, 64 MB) and a disk (sdb, 2 GB).
 func newMachine(t *testing.T) *machine {
 	t.Helper()
+	allowOrdinaryFiles(t)
 	base := t.TempDir()
 	m := &machine{
 		t:     t,
@@ -430,6 +445,7 @@ func TestCloneRefusesAShortSource(t *testing.T) {
 	dir := t.TempDir()
 	from := filepath.Join(dir, "from")
 	to := filepath.Join(dir, "to")
+	allowOrdinaryFiles(t)
 	write(t, from, []byte("only a few bytes"))
 	// The target is there already: clone never makes it (see openTarget).
 	write(t, to, nil)
@@ -556,4 +572,39 @@ func (m *machine) install(t *testing.T) Done {
 		}
 	})
 	return done
+}
+
+// The REAL rule of openTarget, with no test double: on Linux the target of a write
+// must be a block device node.
+//
+// Two faults hide here. An ordinary file passes every step and the install then
+// reports success on a disk that it did not change. And a partition node that the
+// kernel has not made yet must be an error: with O_CREATE the copy made a file on
+// devtmpfs, which is memory, and the person was told to take the stick out of a
+// machine that cannot start.
+func TestTheRealTargetCheck(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the block device rule is a Linux rule: another system makes no device nodes")
+	}
+	dir := t.TempDir()
+
+	file := filepath.Join(dir, "sdb1")
+	write(t, file, []byte("this is not a disk"))
+	f, err := openTarget(file)
+	if err == nil {
+		f.Close()
+		t.Fatal("openTarget took an ordinary file")
+	}
+	if !strings.Contains(err.Error(), "is not a block device") {
+		t.Errorf("the refusal is %q and must name the reason", err)
+	}
+
+	missing := filepath.Join(dir, "sdb2")
+	if f, err := openTarget(missing); err == nil {
+		f.Close()
+		t.Fatal("openTarget took a path with nothing at it")
+	}
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Error("openTarget made a file where a partition node must be")
+	}
 }

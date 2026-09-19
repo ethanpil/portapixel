@@ -34,21 +34,37 @@ const reportEvery = 500 * time.Millisecond
 // memory. Every step after it worked, the UI said "Power the machine off", and the
 // disk held an empty partition table.
 //
-// On the device the target must be a block device as well. A test on another system
-// works on ordinary files that it made itself, so the node test is for Linux.
+// On the device the target must be a block device as well. See isBlockDevice.
 func openTarget(to string) (*os.File, error) {
 	info, err := os.Stat(to)
 	if err != nil {
 		return nil, fmt.Errorf("%s is not there: %w", to, err)
 	}
-	if runtime.GOOS == "linux" && info.Mode()&os.ModeDevice == 0 {
-		return nil, fmt.Errorf("%s is not a block device", to)
+	if err := isBlockDevice(to, info); err != nil {
+		return nil, err
 	}
 	out, err := os.OpenFile(to, os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", to, err)
 	}
 	return out, nil
+}
+
+// isBlockDevice holds the rule that the target of a write is a block device node.
+//
+// It is a variable for ONE reason: a test writes to ordinary files that it made
+// itself, and a real device node needs root rights and a real disk. A test
+// replaces this variable. The rule itself is never weakened, and
+// TestTheRealTargetCheck proves on Linux what the real rule refuses.
+var isBlockDevice = realIsBlockDevice
+
+// realIsBlockDevice is the rule that runs on a device. It is a Linux rule: another
+// system cannot make a device node, so there is nothing to test against there.
+func realIsBlockDevice(path string, info os.FileInfo) error {
+	if runtime.GOOS != "linux" || info.Mode()&os.ModeDevice != 0 {
+		return nil
+	}
+	return fmt.Errorf("%s is not a block device", path)
 }
 
 // clone copies size bytes from one device to another. It is the dd of this package.

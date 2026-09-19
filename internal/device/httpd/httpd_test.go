@@ -7,8 +7,10 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -931,7 +933,20 @@ func TestStaticAssets(t *testing.T) {
 
 func TestCleanRelative(t *testing.T) {
 	good := []string{"a.jpg", "default/a.jpg", "_fleet/media/aa-b.mp4"}
-	bad := []string{"", "/etc/shadow", "../x", "default/../../x", `default\x`, "C:/x", "a\x00b"}
+	bad := []string{"", "/etc/shadow", "../x", "default/../../x", "a\x00b"}
+	// A backslash and a colon depend on the system. On Linux, which is what a
+	// device runs, both are ordinary characters in a file name: a file that
+	// somebody sideloaded can carry them, and the library scan calls such a file
+	// healthy. A 400 from /media/ would mean that the file can never play and that
+	// nothing says why. os.OpenRoot in serveMedia is what holds a request inside
+	// the media root, not a test on characters. On Windows the same two characters
+	// are a path separator and a drive letter, so there they are refused.
+	bySystem := []string{`default\x`, "C:/x"}
+	if runtime.GOOS == "windows" {
+		bad = append(bad, bySystem...)
+	} else {
+		good = append(good, bySystem...)
+	}
 	for _, in := range good {
 		if _, ok := cleanRelative(in); !ok {
 			t.Errorf("cleanRelative(%q) refused a good path", in)
@@ -940,6 +955,47 @@ func TestCleanRelative(t *testing.T) {
 	for _, in := range bad {
 		if _, ok := cleanRelative(in); ok {
 			t.Errorf("cleanRelative(%q) accepted a bad path", in)
+		}
+	}
+}
+
+// The other half of the rule above, on the system that a device runs. A file name
+// with a colon and a backslash in it PLAYS, and it still cannot name anything
+// outside the media root.
+func TestMediaServesAnOddNameAndStaysInsideTheRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a colon and a backslash are not legal in a Windows file name")
+	}
+	f := newFx(t)
+	if err := os.MkdirAll(filepath.Join(f.media, "lobby"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The name that a person sideloaded, for example from a camera or a download.
+	odd := `clip:2026-01-02\a.jpg`
+	if err := os.WriteFile(filepath.Join(f.media, "lobby", odd), []byte("picture"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if w := f.do(http.MethodGet, "/media/lobby/"+url.PathEscape(odd), nil); w.Code != http.StatusOK {
+		t.Errorf("a file whose name holds a colon gave %d: %s", w.Code, w.Body)
+	}
+
+	// The same characters must not become a way out of the root. A link with such a
+	// name to a file outside the media root is not content. os.OpenRoot refuses it.
+	secret := filepath.Join(f.state, "secret.jpg")
+	if err := os.WriteFile(secret, []byte("the root password hash"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := `out:of\root.jpg`
+	if err := os.Symlink(secret, filepath.Join(f.media, "lobby", out)); err != nil {
+		t.Skipf("this machine cannot make a symbolic link: %v", err)
+	}
+	if w := f.do(http.MethodGet, "/media/lobby/"+url.PathEscape(out), nil); w.Code == http.StatusOK {
+		t.Errorf("a link out of the media root was served: %s", w.Body)
+	}
+	// And the path steps are still refused, whatever characters come with them.
+	for _, path := range []string{`/media/..\..\secret`, "/media/lobby/../../etc/shadow"} {
+		if w := f.do(http.MethodGet, path, nil); w.Code == http.StatusOK {
+			t.Errorf("%s gave 200: %s", path, w.Body)
 		}
 	}
 }
