@@ -140,12 +140,90 @@ func TestBadRuleTimesMatchNothing(t *testing.T) {
 	cfg.Schedule = []config.Rule{
 		{Playlist: "broken", Start: "8am", End: "noon"},
 		{Playlist: "empty", Start: "10:00", End: "10:00"},
-		{Playlist: "missing"},
+		{Playlist: "half", Start: "10:00"},
 	}
 	f := newFake(t, cfg)
 	f.at(time.Monday, 10, 0)
 	if got := f.s.Evaluate(); got != cfg.Playback.DefaultPlaylist {
 		t.Fatalf("got %q, want the default playlist", got)
+	}
+}
+
+// A rule with no times at all is the whole day. A rule of "weekends: this
+// playlist" needs no hours, and such a rule matched nothing before: ParseClock
+// refused the empty value, so the rule was silently dead and the person saw the
+// default playlist with no word about why.
+func TestAllDayRule(t *testing.T) {
+	tests := []struct {
+		name  string
+		rules []config.Rule
+		day   time.Weekday
+		hour  int
+		want  string
+	}{
+		{
+			name:  "the whole day, every day",
+			rules: []config.Rule{{Playlist: "always"}},
+			day:   time.Wednesday, hour: 3, want: "always",
+		},
+		{
+			name:  "the whole day at midnight",
+			rules: []config.Rule{{Playlist: "always"}},
+			day:   time.Wednesday, hour: 0, want: "always",
+		},
+		{
+			name:  "the whole day on the days of the rule",
+			rules: []config.Rule{{Playlist: "weekend", Days: []string{"sat", "sun"}}},
+			day:   time.Saturday, hour: 14, want: "weekend",
+		},
+		{
+			name:  "another day gets the default",
+			rules: []config.Rule{{Playlist: "weekend", Days: []string{"sat", "sun"}}},
+			day:   time.Tuesday, hour: 14, want: "default",
+		},
+		{
+			name: "an hour rule before an all-day rule wins",
+			rules: []config.Rule{
+				{Playlist: "lunch", Start: "12:00", End: "13:00"},
+				{Playlist: "weekend", Days: []string{"sat", "sun"}},
+			},
+			day: time.Saturday, hour: 12, want: "lunch",
+		},
+		{
+			name: "outside the hour rule the all-day rule takes over",
+			rules: []config.Rule{
+				{Playlist: "lunch", Start: "12:00", End: "13:00"},
+				{Playlist: "weekend", Days: []string{"sat", "sun"}},
+			},
+			day: time.Saturday, hour: 15, want: "weekend",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Schedule = tt.rules
+			f := newFake(t, cfg)
+			f.at(tt.day, tt.hour, 0)
+			if got := f.s.Evaluate(); got != tt.want {
+				t.Errorf("Evaluate() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// A screen schedule still needs both times. An empty screen schedule means that the
+// screen is always on, which is not the same rule as an all-day playlist.
+func TestAnEmptyScreenScheduleIsNotAllDay(t *testing.T) {
+	cfg := config.Default()
+	f := newFake(t, cfg)
+	if f.s.HasScreenSchedule() {
+		t.Error("HasScreenSchedule() is true with no times set")
+	}
+	if !f.s.ScreenShouldBeOn(f.now) {
+		t.Error("ScreenShouldBeOn() is false with no times set")
+	}
+	if f.s.ScreenOffCovers(f.now) {
+		t.Error("ScreenOffCovers() is true with no times set")
 	}
 }
 

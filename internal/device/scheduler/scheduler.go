@@ -316,10 +316,19 @@ func (s *Scheduler) log(event, details string) {
 // inWindow reports if now is inside the window from start to end on a permitted
 // day.
 //
+// Both times empty means the whole day. A rule of "weekends: this playlist" needs
+// no hours, and a rule that named the days and no hours matched nothing at all
+// before: config.ParseClock refused the empty value and the rule was silently
+// dead. The two times are both-or-neither everywhere (config.Validate holds the
+// same rule).
+//
 // An end before the start goes past midnight. The day list then names the day on
 // which the window starts: a Friday night rule that ends at 02:00 still plays at
 // 01:00 on Saturday morning.
 func inWindow(start, end string, now time.Time, days []string) bool {
+	if start == "" && end == "" {
+		return dayPermitted(days, now.Weekday())
+	}
 	// config.ParseClock is the one clock format of the product. The scheduler had
 	// a parser of its own, and it took values that the validator refused.
 	s, ok := config.ParseClock(start)
