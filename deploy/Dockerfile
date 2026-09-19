@@ -5,8 +5,15 @@
 #
 # The build stage makes a static binary. CGO is off, so the SQLite driver is the
 # pure-Go one and the result needs no libc (D7).
+#
+# "--platform=$BUILDPLATFORM" is NOT optional. Without it buildx runs the whole
+# build stage on the TARGET platform. The arm64 build then compiles Go under
+# qemu-user emulation, which was most of a CI job of 7.5 minutes, and the ARG
+# TARGETARCH below did nothing at all. With it the compiler runs on the machine of
+# the runner and cross-compiles. A Go build with CGO off needs no file of the
+# target platform.
 
-FROM golang:1.25-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS build
 
 # git is not needed: the build has no dependency that comes from a repository.
 WORKDIR /src
@@ -15,9 +22,12 @@ RUN go mod download
 
 COPY . .
 ARG VERSION=dev
-ARG TARGETARCH
-ENV CGO_ENABLED=0 GOOS=linux
-RUN GOARCH=${TARGETARCH:-amd64} go build \
+# buildx sets these two for each platform of the build. The defaults are for a
+# plain "docker build", which sets neither.
+ARG TARGETOS=linux
+ARG TARGETARCH=amd64
+ENV CGO_ENABLED=0
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -trimpath \
         -ldflags "-s -w -X github.com/ethanpil/portapixel/internal/version.Version=${VERSION}" \
         -o /out/portapixel-server ./cmd/portapixel-server

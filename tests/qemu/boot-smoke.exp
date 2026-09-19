@@ -97,14 +97,24 @@ expect {
 # Read the version back through a marker, not by printing the whole capture
 # buffer: the buffer holds the echo of our own command as well, so it is not a
 # clean value. "V""ER=" in the sent text echoes with the quotes in it and cannot
-# match the bare VER= that the shell prints. Keep the line short: the console is
-# 80 columns and a wrap puts a newline inside the value.
-send ". /etc/portapixel-release; echo \"V\"\"ER=\$PORTAPIXEL_VERSION\"\r"
+# match the bare VER= that the shell prints.
+#
+# TWO steps, and both are about the 80 column console. A typed line that is longer
+# than the console leaves the cursor in the middle of a line, and the answer of the
+# shell then starts there and wraps INSIDE the value: the test read the version
+# "0.0.0-dev" as "0". So make the console wide first, and then keep the line that
+# prints the value short.
+send "stty cols 200; . /etc/portapixel-release; echo ST\"TY-OK\"\r"
+expect {
+	"STTY-OK" { }
+	timeout   { die "the shell did not read /etc/portapixel-release" }
+}
+send "echo V\"ER=\"\$PORTAPIXEL_VERSION\r"
 expect {
 	-re {VER=(\S+)} {
 		send_user "\n==> image version [strip_ansi $expect_out(1,string)]\n"
 	}
-	timeout { die "no /etc/portapixel-release" }
+	timeout { die "the shell printed no PORTAPIXEL_VERSION" }
 }
 
 # ------------------------------------------------------------- 4. the HTTP check
