@@ -83,7 +83,37 @@ checked with a screenshot of the virtual display or with the ops log.
   `--disable-sync` do not stop it. With the flags, an idle screen makes no DNS request
   in 185 s. Two TLS connections stay, to `www.google.com` and `accounts.google.com`,
   one time at each browser start. No flag stops them. Use a firewall if that matters.
-- `--disable-client-side-phishing-detection` does not exist in Chromium 149.
+- `--disable-client-side-phishing-detection` does not exist in Chromium 149. Nor do
+  `--disable-pdf-extension` and `--enable-oop-rasterization`. Chromium ignores a switch
+  that it does not know, with no message. Check a new switch against the binary with
+  `strings -a /usr/lib/chromium/chrome | grep -x -- '--name'` before you add it.
+- Chromium 149 keeps the page of a URL item in memory after the daemon goes back to the
+  player. Three URL items made three more renderer processes and about 380 MB more
+  RSS, and it never came back. The name `BackForwardCache` in `--disable-features`
+  stops it: the process count stays at 8 and the renderer goes back to 109 MB after
+  each item. Measured in QEMU on 2026-09-22 (BIOS, 1 GB, 2 CPUs). A 30 minute soak
+  with a URL item in each loop showed no growth. On a slide-only playlist the flag
+  shows nothing, so measure with URL items.
+- Flags measured on 2026-09-22 and refused. The noise of the measurement is 5 MB of
+  PSS and 0.2 points of CPU, from three baseline runs. Inside the noise:
+  `--renderer-process-limit=1`, `--disable-extensions`, `--disk-cache-size`,
+  `--disable-gpu-shader-disk-cache`, `--num-raster-threads=1` (Chromium already sets
+  it on 2 CPUs), `--force-device-scale-factor=1` and the group `--disable-notifications
+  --disable-speech-api --disable-print-preview --no-pings --disable-hang-monitor
+  --disable-prompt-on-repost`. `--enable-low-end-device-mode` saved 6.5 MB and cost
+  0.2 points of CPU: a hardware checklist item.
+- `--disable-dev-shm-usage` BREAKS the picture. It moves the shared memory of Chromium
+  from `/dev/shm` (483 MB) to `/tmp` (64 MB). The renderer dies again and again. Both
+  paths are RAM, so the flag saves nothing.
+- `--js-flags=--expose-gc` with a `window.gc()` call at each item COSTS memory: 589 MB
+  against 553 MB of PSS, a 211 MB against a 177 MB renderer, and 0.4 points more CPU.
+- `--js-flags=--max-old-space-size=256` makes a runaway page worse. V8 stops the
+  renderer in the middle of the item, CDP stops, the watchdog restarts the browser, and
+  four restarts started the reboot ladder. With no cap the dwell timer ends the item,
+  the memory goes back and the slides come back each time.
+- `boot-dev.sh shot` cannot show a URL item: the screendump gives the last player frame
+  for the whole dwell. Prove the page with the CDP target list, the ops log and the
+  CPU of the gpu process.
 - A DNS name in a packet dump is in label form. `strings | grep` does not find it. Parse
   the DNS questions.
 - The browser output is in `/var/cache/kiosk/browser.log` (tmpfs, 1 MiB limit). Read it

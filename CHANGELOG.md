@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Turn the back/forward cache of Chromium off: a URL item no longer leaves a renderer process behind (d36e3c9). Sixteen other flags were measured and refused; see CONTEXT.md section 4.
 - Select only fleet playlists while paired. Apply the audio settings (D11). Make the watchdog tunable (D30) (466ad4b to 3f0e44e).
 - Fix 15 findings of the final device review (19504ab to 699eb0a). The status for the LAN does not tell which passwords are the default. A fleet playlist named media cannot delete the object store. A standalone device writes nothing in its steady state. Each answer has security headers.
 - Fix 12 findings of the final OS, CI, web and document review (d855054 to e02d989). The container image and the release wait for each gate. The arm64 container holds an arm64 binary. The Activity page shows again.

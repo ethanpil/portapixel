@@ -93,8 +93,16 @@ release ready until each line above that depends on one of these has passed
 on real hardware.
 
 - [ ] Real GPU drivers under load, on each supported board.
-- [ ] VA-API hardware video decode on x86_64.
-- [ ] V4L2 hardware video decode on a Raspberry Pi.
+- [ ] VA-API hardware video decode on x86_64. Chromium 149 names the feature
+      `AcceleratedVideoDecodeLinuxGL` (also `AcceleratedVideoDecodeLinuxZeroCopyGL`).
+      The name `VaapiVideoDecodeLinuxGL` is not in the binary. Test with
+      `--enable-features=AcceleratedVideoDecodeLinuxGL` and, when the GPU is on the
+      block list, `--ignore-gpu-blocklist`. In QEMU the browser log shows
+      `vaInitialize failed`; on real hardware that line must be absent.
+- [ ] V4L2 hardware video decode on a Raspberry Pi. The feature is `V4L2VideoDecoder`.
+- [ ] `--enable-gpu-rasterization` on a real GPU. QEMU cannot show it.
+- [ ] `--enable-low-end-device-mode` on a 1 GB device. In QEMU it saved 6.5 MB and
+      cost 0.2 points of CPU. Decide with a measurement on the real machine.
 - [ ] CEC, on a real television, in a real `cage` session.
 - [ ] DPMS, on a real monitor, in a real `cage` session.
 - [ ] A display with a misleading EDID, and the `video_mode` override that
