@@ -5,7 +5,11 @@ set -eu
 
 printf 'bridge %s:\n' "$BRIDGE"
 ip -br addr show "$BRIDGE" 2>/dev/null || printf '  the bridge is missing\n'
-printf '  ports: %s\n' "$(ls /sys/class/net/"$BRIDGE"/brif 2>/dev/null | tr '\n' ' ')"
+# "find", not "ls": a name with a space in it makes "ls" give two words, and the
+# linter says so (SC2012). A bridge port name has no space today, and a check that
+# is correct for every name costs nothing.
+printf '  ports: %s\n' "$(find "/sys/class/net/$BRIDGE/brif" -mindepth 1 -maxdepth 1 \
+	-exec basename {} \; 2>/dev/null | tr '\n' ' ')"
 
 report() {
 	_name="$1"

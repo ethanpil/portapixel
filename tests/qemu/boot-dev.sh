@@ -17,7 +17,7 @@
 # Usage:
 #   boot-dev.sh start IMAGE(.img or .img.gz) [--uefi] [--mem MB] [--cpus N]
 #                                            [--http PORT] [--ssh PORT]
-#                                            [--netdump FILE.pcap]
+#                                            [--netdump FILE.pcap] [--no-net]
 #   boot-dev.sh shot FILE.png    write a screenshot of the display
 #   boot-dev.sh mon "COMMAND"    send one QEMU monitor command
 #   boot-dev.sh log [N]          show the last N lines of the serial log
@@ -26,6 +26,7 @@
 # PP_VM_DIR says where the run state goes. The default is ./ppvm.
 set -eu
 
+NONET=0
 WORK="${PP_VM_DIR:-$PWD/ppvm}"
 DISK="$WORK/disk.qcow2"
 SERIAL_SOCK="$WORK/serial.sock"
@@ -60,6 +61,10 @@ cmd_start() {
 		--http) HTTP_PORT="${2:?}"; shift 2 ;;
 		--ssh) SSH_PORT="${2:?}"; shift 2 ;;
 		--netdump) NETDUMP="${2:?}"; shift 2 ;;
+		# No card at all, which is a device on a bench with no cable. A device
+		# with no network must still reach its first picture: nothing about the
+		# network may stall the boot or the playback (plan 3.3).
+		--no-net) NONET=1; shift ;;
 		-*) die "unknown option: $1" ;;
 		*) IMAGE="$1"; shift ;;
 		esac
@@ -122,14 +127,21 @@ cmd_start() {
 	qemu-system-x86_64 -device help 2>&1 | grep -q '"virtio-vga"' ||
 		die "this QEMU has no virtio-vga; apk add qemu-hw-display-virtio-vga"
 
+	NET="-netdev user,id=n0,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22"
+	NET="$NET -device virtio-net-pci,netdev=n0"
+	if [ "$NONET" = 1 ]; then
+		[ -z "$DUMP" ] || die "--netdump needs a card, so it cannot go with --no-net"
+		NET="-nic none"
+		say "NO network card. The forwarded ports do not work in this run: use"
+		say "  boot-dev.sh shot and boot-dev.sh log to see the guest."
+	fi
 	say "start the guest (${MEM}M, $CPUS cpus, http $HTTP_PORT, ssh $SSH_PORT)"
-	# shellcheck disable=SC2086  # $BIOS and $DUMP are deliberate word lists
+	# shellcheck disable=SC2086  # $BIOS, $DUMP and $NET are deliberate word lists
 	qemu-system-x86_64 -accel kvm -cpu host -smp "$CPUS" -m "$MEM" $BIOS $DUMP \
 		-device virtio-vga \
 		-display none \
 		-drive "file=$DISK,format=qcow2,if=virtio" \
-		-netdev "user,id=n0,hostfwd=tcp:127.0.0.1:$HTTP_PORT-:80,hostfwd=tcp:127.0.0.1:$SSH_PORT-:22" \
-		-device virtio-net-pci,netdev=n0 \
+		$NET \
 		-chardev "socket,id=ser0,path=$SERIAL_SOCK,server=on,wait=off" \
 		-serial chardev:ser0 \
 		-monitor "unix:$MON_SOCK,server,nowait" \
