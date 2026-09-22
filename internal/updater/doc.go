@@ -14,30 +14,42 @@
 //	<root>/releases/1.5.0/portapixeld
 //	<root>/current   -> releases/1.5.0
 //	<root>/previous  -> releases/1.4.0
-//	<root>/health/               the markers of the health gate
+//	<root>/health/<version>.bad  a release that failed its gate
+//	<root>/health/gate-boots     how many starts the pending version got
 //	<root>/.swap-pending         the version that must prove itself
 //
-// The contract with os/overlay/usr/libexec/portapixel/health-gate.sh:
+// The health marker of a release is NOT here. It is in the run directory, which
+// is a tmpfs: <run>/health/<version>.ok, and MarkerPath is the one function that
+// names it. A marker answers "the release that runs NOW came up", so it is true
+// for one boot and the kernel must clear it. On the flash it needed a step that
+// removed a stale marker, a rule about which of two processes goes first, and a
+// loop in the daemon that wrote the file again every few seconds. That loop cost
+// about 17,000 flash writes a day while the gate stayed armed, against D2.
+//
+// The three files above stay on the flash, because each must survive a restart of
+// the service.
+//
+// The contract with os/overlay/usr/libexec/portapixel/health-gate.sh and
+// os/overlay/etc/init.d/portapixeld:
 //
 //   - Apply writes the new version into <root>/.swap-pending BEFORE it restarts
-//     the service. The gate does nothing at all without that file.
-//   - The gate runs "health-gate.sh arm" in start_pre, and the service waits for
-//     it. That step removes a stale <root>/health/<version>.ok of an earlier
-//     install, and it is the ONLY step that removes a marker. It happens before
-//     the daemon can write one.
-//   - The new daemon writes <root>/health/<version>.ok when it is up, and writes
-//     it again every few seconds while .swap-pending names its own version. The
-//     gate removes the pending file and stops, and the daemon then stops writing.
-//     Nothing goes to the flash in the steady state.
+//     the service. The gate does nothing at all without that file. The name in it
+//     is already in the normal form (NormalizeVersion), and the gate uses that
+//     name for both markers.
+//   - The init script clears <run>/health in start_pre. That covers a restart of
+//     the service with no restart of the machine. The daemon starts after it.
+//   - The new daemon writes <run>/health/<version>.ok ONE time, when it is up. The
+//     write is atomic, so the gate never reads a file of zero bytes.
+//   - The gate looks for that file every PP_HEALTH_POLL seconds. It then removes
+//     the pending file and stops. Nothing goes to the flash in the steady state.
 //   - Without a marker the gate points current back to the target of previous,
 //     writes <root>/health/<version>.bad, and restarts the service.
 //   - The daemon finds the .bad file at its next start. CheckRollback records the
 //     version in state.json, so the updater never offers that release again.
 //
-// The order of the daemon and the gate cannot decide the answer, and that is the
-// point of the two rules above. The gate removed the stale marker AFTER it
-// started before, so a daemon that was quick lost its marker. The gate then
-// waited the whole timeout and marked a release that works bad for ever.
+// The order of the daemon and the gate cannot decide the answer. That was once a
+// rule that both sides had to keep; now it is true by construction, because a
+// marker of an earlier boot cannot exist.
 //
 // Options.BinaryVersion reads the version of a staged release with
 // "version --json" (see BinaryInfo). The human line of that subcommand is for a

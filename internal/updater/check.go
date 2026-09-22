@@ -63,7 +63,7 @@ type Source struct {
 type Release struct {
 	Version string `json:"version"`
 	Notes   string `json:"notes,omitempty"`
-	// Source is "github", "fleet" or "sideload".
+	// Source is SourceGitHub, SourceFleet or SourceSideload.
 	Source string `json:"source"`
 	// BinaryURL, SigURL and SumsURL are the three files. A sideload leaves them
 	// empty and gives Dir instead.

@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -70,10 +71,19 @@ type world struct {
 }
 
 const (
-	testArch    = "arm64"
 	testBinary  = "portapixeld"
-	testAsset   = testBinary + "-" + testArch
 	testRunning = "1.4.0"
+	// otherArch is a processor that no test machine is. The arch refusal needs a
+	// value that cannot be the same as testArch by accident.
+	otherArch = "riscv64"
+)
+
+// testArch is the processor of this machine, because the release binary of the
+// production test (main_test.go) is this test binary. A fixed foreign value made
+// the real version reader disagree with the world around it.
+var (
+	testArch  = runtime.GOARCH
+	testAsset = testBinary + "-" + testArch
 )
 
 // newWorld makes a release root that looks like a device: releases/1.4.0 with the
@@ -151,8 +161,7 @@ type bundle struct {
 
 // newBundle makes a good bundle. The two switches make the two bundles that the
 // release gate must refuse.
-func (w *world) newBundle(body string, unsigned, wrongSum bool) bundle {
-	binary := []byte(body)
+func (w *world) newBundle(binary []byte, unsigned, wrongSum bool) bundle {
 	out := bundle{binary: binary}
 	if !unsigned {
 		out.sig = w.sign.sign(w.t, binary)
@@ -272,7 +281,7 @@ func TestApplyRefusesBeforeTheFlip(t *testing.T) {
 			if tt.badList != "" {
 				w.bad[tt.badList] = true
 			}
-			b := w.newBundle("the new binary", tt.unsigned, tt.wrongSum)
+			b := w.newBundle([]byte("the new binary"), tt.unsigned, tt.wrongSum)
 			_, rel := b.serve(t, tt.version)
 
 			err := w.man.Apply(context.Background(), rel)
@@ -332,7 +341,7 @@ func TestApplyRefusesBeforeTheFlip(t *testing.T) {
 // the health gate has nothing to go back to.
 func TestApplyMovesPrevious(t *testing.T) {
 	w := newWorld(t, nil)
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	_, rel := b.serve(t, "1.5.0")
 
 	if err := w.man.Apply(context.Background(), rel); err != nil {
@@ -350,7 +359,7 @@ func TestPrune(t *testing.T) {
 	mustWrite(t, filepath.Join(w.root, ReleasesDir, "1.0.0", testBinary), []byte("very old"))
 	mustWrite(t, filepath.Join(w.root, ReleasesDir, "1.2.0", testBinary), []byte("old"))
 
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	_, rel := b.serve(t, "1.5.0")
 	if err := w.man.Apply(context.Background(), rel); err != nil {
 		t.Fatal(err)
@@ -397,7 +406,7 @@ func TestSideload(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			w := newWorld(t, nil)
 			updateDir := filepath.Join(w.media, "_update")
-			b := w.newBundle("the new binary", tt.unsigned, tt.wrongSum)
+			b := w.newBundle([]byte("the new binary"), tt.unsigned, tt.wrongSum)
 
 			switch tt.shape {
 			case "loose":
@@ -450,7 +459,7 @@ func TestSideload(t *testing.T) {
 func TestSideloadRefusesABadRelease(t *testing.T) {
 	w := newWorld(t, nil)
 	w.bad["1.5.0"] = true
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	b.writeDir(t, filepath.Join(w.media, "_update"))
 
 	err := w.man.Sideload(context.Background())
@@ -467,14 +476,15 @@ func TestSideloadRefusesABadRelease(t *testing.T) {
 func TestSideloadIgnoresAnotherArchitecture(t *testing.T) {
 	w := newWorld(t, nil)
 	updateDir := filepath.Join(w.media, "_update")
-	mustWrite(t, filepath.Join(updateDir, "portapixeld-amd64"), []byte("x"))
-	mustWrite(t, filepath.Join(updateDir, "portapixeld-amd64"+SigSuffix), []byte("x"))
-	mustWrite(t, filepath.Join(updateDir, SumsName), []byte("x  portapixeld-amd64\n"))
+	asset := testBinary + "-" + otherArch
+	mustWrite(t, filepath.Join(updateDir, asset), []byte("x"))
+	mustWrite(t, filepath.Join(updateDir, asset+SigSuffix), []byte("x"))
+	mustWrite(t, filepath.Join(updateDir, SumsName), []byte("x  "+asset+"\n"))
 
 	if err := w.man.Sideload(context.Background()); err != nil {
 		t.Fatalf("Sideload() = %v, want no error", err)
 	}
-	if _, err := os.Stat(filepath.Join(updateDir, "portapixeld-amd64")); err != nil {
+	if _, err := os.Stat(filepath.Join(updateDir, asset)); err != nil {
 		t.Error("the bundle of the other architecture was removed")
 	}
 }
@@ -630,7 +640,7 @@ func TestApplyRefusesASecondUpdate(t *testing.T) {
 	if !w.man.take() {
 		t.Fatal("take() gave false on an idle manager")
 	}
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	_, rel := b.serve(t, "1.5.0")
 	if err := w.man.Apply(context.Background(), rel); !errors.Is(err, ErrBusy) {
 		t.Fatalf("Apply() = %v, want %v", err, ErrBusy)
@@ -837,7 +847,7 @@ func TestUnpackBundleRefusesABadArchive(t *testing.T) {
 func TestFleetReleaseSendsTheDeviceToken(t *testing.T) {
 	const token = "a-device-token"
 	w := newWorld(t, nil)
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 
 	var seen []string
 	mux := http.NewServeMux()
@@ -966,8 +976,8 @@ func TestBearerGoesToTheFleetHostOnly(t *testing.T) {
 	}
 }
 
-// A redirect that leaves the host must not carry the token with it. The rule lives
-// in internal/fleet now, because the sync client needs the same one.
+// A redirect that leaves the host is refused, and it never carries the token. The
+// rule lives in internal/fleet, because the sync client needs the same one.
 func TestRedirectDropsTheToken(t *testing.T) {
 	req, err := http.NewRequest(http.MethodGet, "https://cdn.example.net/file", nil)
 	if err != nil {
@@ -978,8 +988,8 @@ func TestRedirectDropsTheToken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := fleet.DropBearerOffHost(req, []*http.Request{first}); err != nil {
-		t.Fatal(err)
+	if err := fleet.DropBearerOffHost(req, []*http.Request{first}); err == nil {
+		t.Error("a release download followed a redirect off the server")
 	}
 	if req.Header.Get("Authorization") != "" {
 		t.Error("the token followed the redirect to another host")
@@ -1069,7 +1079,7 @@ func TestFleetReleaseNeedsAServerAddress(t *testing.T) {
 // gate rolled the bad release onto itself and the device looped.
 func TestApplyTwiceKeepsTheRunningRelease(t *testing.T) {
 	w := newWorld(t, nil)
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	_, rel := b.serve(t, "1.5.0")
 
 	if err := w.man.Apply(context.Background(), rel); err != nil {
@@ -1094,10 +1104,10 @@ func TestApplyTwiceKeepsTheRunningRelease(t *testing.T) {
 func TestApplyRefusesABinaryOfAnotherArch(t *testing.T) {
 	w := newWorld(t, func(o *Options) {
 		o.BinaryVersion = func(string) (BinaryInfo, error) {
-			return BinaryInfo{Name: testBinary, Version: "1.5.0", Arch: "amd64"}, nil
+			return BinaryInfo{Name: testBinary, Version: "1.5.0", Arch: otherArch}, nil
 		}
 	})
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	_, rel := b.serve(t, "1.5.0")
 
 	err := w.man.Apply(context.Background(), rel)
@@ -1115,7 +1125,7 @@ func TestApplyRefusesABinaryOfAnotherVersion(t *testing.T) {
 	w := newWorld(t, func(o *Options) {
 		o.BinaryVersion = func(string) (BinaryInfo, error) { return selfInfo("1.6.0"), nil }
 	})
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	_, rel := b.serve(t, "1.5.0")
 
 	err := w.man.Apply(context.Background(), rel)
@@ -1127,11 +1137,35 @@ func TestApplyRefusesABinaryOfAnotherVersion(t *testing.T) {
 	}
 }
 
+// The NAME that a binary reports must be the name of the program that this
+// install runs. One minisign key signs both binaries of the project, so a mirror
+// or a sideload bundle that serves portapixel-server under the name
+// portapixeld-<arch> passes the signature, the checksum, the version and the
+// processor. It would install, it has no "run" subcommand, it would never write a
+// health marker, and the gate would then mark a GOOD release bad for ever.
+func TestApplyRefusesABinaryOfTheOtherProgram(t *testing.T) {
+	w := newWorld(t, func(o *Options) {
+		o.BinaryVersion = func(string) (BinaryInfo, error) {
+			return BinaryInfo{Name: "portapixel-server", Version: "1.5.0", Arch: testArch}, nil
+		}
+	})
+	b := w.newBundle([]byte("the new binary"), false, false)
+	_, rel := b.serve(t, "1.5.0")
+
+	err := w.man.Apply(context.Background(), rel)
+	if err == nil || !strings.Contains(err.Error(), "this install runs") {
+		t.Fatalf("Apply() = %v, want the refusal of the other program", err)
+	}
+	if got := w.current(); got != ReleasesDir+"/"+testRunning {
+		t.Errorf("current = %q, want the release that runs", got)
+	}
+}
+
 // A Sideload that loses the race against another update must leave the bundle of
 // the person where it is. Before this it removed the bundle and installed nothing.
 func TestSideloadKeepsTheBundleWhenAnUpdateRuns(t *testing.T) {
 	w := newWorld(t, nil)
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	b.writeDir(t, filepath.Join(w.media, "_update"))
 
 	// Another update holds the manager.
@@ -1175,7 +1209,7 @@ func TestCheckRollbackClearsTheMarker(t *testing.T) {
 func TestApplyRefusesAReleaseOfAnotherSource(t *testing.T) {
 	kind := "github"
 	w := newWorld(t, func(o *Options) { o.SourceKind = func() string { return kind } })
-	b := w.newBundle("the new binary", false, false)
+	b := w.newBundle([]byte("the new binary"), false, false)
 	_, rel := b.serve(t, "1.5.0")
 
 	if _, err := w.man.Check(context.Background(), Source{Repo: "x/y", APIRoot: "http://127.0.0.1:1"}); err == nil {
@@ -1224,7 +1258,7 @@ func TestCheckWithNoSourceGivesNoRelease(t *testing.T) {
 func TestDownloadResumesAfterAFailedAttempt(t *testing.T) {
 	w := newWorld(t, nil)
 	body := strings.Repeat("x", 4096)
-	b := w.newBundle(body, false, false)
+	b := w.newBundle([]byte(body), false, false)
 
 	// The first attempt sends half the binary and drops the connection.
 	full := false
@@ -1267,5 +1301,41 @@ func TestDownloadResumesAfterAFailedAttempt(t *testing.T) {
 	}
 	if got, err := w.installed("1.5.0"); err != nil || got != body {
 		t.Errorf("the installed binary is %d bytes, %v", len(got), err)
+	}
+}
+
+// The bundle of a sideload goes away BEFORE the restart (D52).
+//
+// The removal was after the restart. supervise-daemon stops the process there, so
+// the line never ran. The bundle stayed on the card. The new daemon found it at its
+// start and staged the whole binary one more time before it refused it as a
+// downgrade. A rollback left the same bundle for the release that came back.
+func TestSideloadRemovesTheBundleBeforeTheRestart(t *testing.T) {
+	var atRestart []string
+	w := newWorld(t, nil)
+	w.man.opt.Restart = func() error {
+		entries, _ := os.ReadDir(filepath.Join(w.media, "_update"))
+		for _, e := range entries {
+			atRestart = append(atRestart, e.Name())
+		}
+		w.restarts++
+		return nil
+	}
+
+	b := w.newBundle([]byte("the new binary"), false, false)
+	b.writeDir(t, filepath.Join(w.media, "_update"))
+
+	if err := w.man.Sideload(context.Background()); err != nil {
+		t.Fatalf("Sideload() = %v", err)
+	}
+	if len(atRestart) != 0 {
+		t.Errorf("the bundle was still on the card at the restart: %v", atRestart)
+	}
+	if w.restarts != 1 {
+		t.Fatalf("the service restarted %d times", w.restarts)
+	}
+	// And the directory itself stays, so a person can drop the next bundle in.
+	if _, err := os.Stat(filepath.Join(w.media, "_update")); err != nil {
+		t.Errorf("the sideload directory is gone: %v", err)
 	}
 }

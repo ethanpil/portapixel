@@ -9,36 +9,15 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+
+	"github.com/ethanpil/portapixel/internal/version"
 )
 
-// BinaryInfo is what a binary of this project says about itself. The subcommand
-// "version --json" prints exactly this shape, and the updater reads it before it
-// installs a release.
-//
-// Why a machine-readable form exists: the human line is
-// "portapixeld 1.5.0 amd64", and the first reader took the LAST field of it. It
-// then compared the processor name with the release name and refused every real
-// release with "the release says it is amd64 and the source called it 1.5.0". A
-// position in a line for a person is not a contract. This struct is the contract,
-// and the writer and the reader are in one package so the two cannot disagree.
-type BinaryInfo struct {
-	Name    string `json:"name"`
-	Version string `json:"version"`
-	Arch    string `json:"arch"`
-}
-
-// JSON gives the one line that "version --json" prints, with the newline.
-//
-// The three fields are strings, so json.Marshal of this struct cannot fail. A
-// fault here would mean that the binary can say nothing about itself, and the
-// caller prints the error.
-func (i BinaryInfo) JSON() ([]byte, error) {
-	data, err := json.Marshal(i)
-	if err != nil {
-		return nil, err
-	}
-	return append(data, '\n'), nil
-}
+// BinaryInfo is what a binary of this project says about itself. It lives in
+// internal/version, which also holds the "version" subcommand that WRITES it, so
+// the writer and the reader can never disagree. This name is the one the updater
+// and its tests use.
+type BinaryInfo = version.BinaryInfo
 
 // maxVersionOutput is the most that a staged binary may print. The JSON line is
 // under 100 bytes. A binary that prints without end must not fill the memory of a
@@ -89,8 +68,11 @@ func readBinaryInfo(path string) (BinaryInfo, error) {
 		return BinaryInfo{}, fmt.Errorf("the binary answered %q and not the JSON of \"version --json\": %w",
 			shortText(data), err)
 	}
-	if info.Version == "" || info.Arch == "" {
-		return BinaryInfo{}, errors.New("the binary named no version and no processor")
+	// All three fields are the contract. A missing name is not a detail: verify
+	// refuses a binary whose name is not the one this install runs, and a name that
+	// the reader leaves empty would make that refusal pass by accident.
+	if info.Name == "" || info.Version == "" || info.Arch == "" {
+		return BinaryInfo{}, errors.New("the binary named no name, no version or no processor")
 	}
 	return info, nil
 }
@@ -200,17 +182,11 @@ func parseVersion(name string) (parts []int, rest string, ok bool) {
 // NormalizeVersion gives the release name that this device uses in a directory
 // name, in the pending marker and in the health marker.
 //
-// A tag can carry the letter that some projects put in front: the tag "v1.5.0"
-// builds a binary that says it is "1.5.0". Both names must become one name here.
-// Without that the release installs as releases/v1.5.0 and the gate waits for
-// health/v1.5.0.ok, while the daemon writes health/1.5.0.ok. The gate then rolls a
-// good release back and bans it for ever.
+// The rule itself lives in internal/version, which applies it to the build name
+// at the source. This name is the one the release gate of CI calls
+// (tests/ci/tagcheck), so both ends of the release read one function.
 func NormalizeVersion(name string) string {
-	text := strings.TrimSpace(name)
-	if len(text) > 1 && (text[0] == 'v' || text[0] == 'V') && text[1] >= '0' && text[1] <= '9' {
-		return text[1:]
-	}
-	return text
+	return version.Normalize(name)
 }
 
 // ValidVersion reports if a release name is safe as a directory name and in a

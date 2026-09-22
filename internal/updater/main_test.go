@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
+	"github.com/ethanpil/portapixel/internal/version"
 )
 
 // The test binary is also a release binary.
@@ -24,8 +26,11 @@ import (
 const (
 	selfName    = testBinary
 	selfVersion = "1.5.0"
-	selfArch    = testArch
 )
+
+// selfArch is the processor of this test binary, which is the release binary of
+// the production test below.
+var selfArch = testArch
 
 // selfInfo is the answer of a test double that stands for this binary: the name
 // and the processor of the fixture, with a version that the test chooses. A double
@@ -35,14 +40,16 @@ func selfInfo(version string) BinaryInfo {
 	return BinaryInfo{Name: selfName, Version: version, Arch: selfArch}
 }
 
+// TestMain answers "version" the way a real binary does: with the SAME function
+// that cmd/portapixeld and cmd/portapixel-server call. The fixture is therefore
+// the program under test and the two cannot drift apart.
 func TestMain(m *testing.M) {
-	if len(os.Args) == 3 && os.Args[1] == "version" && os.Args[2] == "--json" {
-		data, err := BinaryInfo{Name: selfName, Version: selfVersion, Arch: selfArch}.JSON()
-		if err != nil {
-			os.Exit(1)
-		}
-		os.Stdout.Write(data)
-		os.Exit(0)
+	if len(os.Args) > 1 && os.Args[1] == "version" {
+		saved := version.Version
+		version.Version = selfVersion
+		code := version.Command(selfName, os.Args[2:], os.Stdout, os.Stderr)
+		version.Version = saved
+		os.Exit(code)
 	}
 	os.Exit(m.Run())
 }
@@ -89,7 +96,7 @@ func TestApplyWithTheProductionVersionReader(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := newWorld(t, func(o *Options) { o.BinaryVersion = nil })
-	b := w.newBundle(string(self), false, false)
+	b := w.newBundle(self, false, false)
 	_, rel := b.serve(t, selfVersion)
 
 	if err := w.man.Apply(context.Background(), rel); err != nil {

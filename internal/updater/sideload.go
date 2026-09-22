@@ -58,7 +58,7 @@ func (m *Manager) Sideload(ctx context.Context) error {
 	}
 
 	m.opt.Log("update.sideload", "a release bundle is in "+m.opt.SideloadDir)
-	err := m.Apply(ctx, Release{Source: "sideload", Dir: dir})
+	err := m.Apply(ctx, Release{Source: SourceSideload, Dir: dir})
 	if errors.Is(err, ErrBusy) {
 		// Another update is running, so this bundle was not read at all. The bundle
 		// of the person stays where it is and the next pass tries it again.
@@ -67,6 +67,8 @@ func (m *Manager) Sideload(ctx context.Context) error {
 	if err != nil {
 		m.opt.Log("update.sideload.refused", err.Error()+"; the bundle is removed, so a reboot does not try it again")
 	}
+	// A run that worked already cleared the bundle before the restart. This call is
+	// for the refusal path, and it is safe twice: the directory is then empty.
 	m.clearSideload()
 	return err
 }

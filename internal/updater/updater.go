@@ -34,6 +34,15 @@ const (
 	BadSuffix = ".bad"
 )
 
+// The values of Release.Source. They are words that /api/status carries, and the
+// sideload path is the one that removes a bundle from the card, so the word is a
+// constant and not a literal in three files.
+const (
+	SourceGitHub   = "github"
+	SourceFleet    = "fleet"
+	SourceSideload = "sideload"
+)
+
 // spaceReserve is the free space that a release must leave behind. A release
 // binary is about 20 MB, and the partition also holds the ops log and the state
 // file. A device that a release filled is a device that can write nothing.
@@ -206,6 +215,26 @@ func (m *Manager) Offered() *Release {
 // AssetName is the name of the release asset of this build, for example
 // "portapixeld-arm64".
 func (m *Manager) AssetName() string { return m.opt.BinaryName + "-" + m.opt.Arch }
+
+// MarkerPath gives the ONE path of the health marker of a release:
+// <run dir>/health/<version>.ok.
+//
+// The marker goes in the run directory, which is a tmpfs, and not beside the
+// releases on the flash. It proves that the release which runs NOW came up, so
+// its life is one boot. A reboot must clear it, and a tmpfs does that by itself.
+// It also costs the flash nothing (D2).
+//
+// The name goes through the normal form, because the updater names the release
+// directory and the pending marker the same way. A build that carries the tag
+// "v1.5.0" would else write v1.5.0.ok while the gate waits for 1.5.0.ok, and the
+// gate would roll a good release back and ban it for ever.
+//
+// The daemon, the gate script and the tests all take the name from here.
+// health-gate.sh builds $PP_RUN/health/$VER.ok with the version that the updater
+// already wrote in the normal form into .swap-pending.
+func MarkerPath(runDir, name string) string {
+	return filepath.Join(runDir, HealthDir, version.Normalize(name)+OKSuffix)
+}
 
 // paths under the release root. DownloadDir holds the part file of a download that
 // did not finish, so an attempt that failed does not lose the bytes that arrived.

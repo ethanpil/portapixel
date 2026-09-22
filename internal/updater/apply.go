@@ -110,6 +110,17 @@ func (m *Manager) apply(ctx context.Context, rel Release) error {
 	}
 	m.prune(rel.Version)
 
+	// The bundle of a sideload goes away BEFORE the restart (D52). The release is on
+	// the system partition now, so the copy on the removable card has no more use.
+	//
+	// The removal was after the restart. supervise-daemon stops this process, so the
+	// line never ran. The bundle stayed on the card. The new daemon found it at its
+	// start and staged the whole binary one more time before it refused it as a
+	// downgrade. A rollback left the same bundle for the release that came back.
+	if rel.Source == SourceSideload {
+		m.clearSideload()
+	}
+
 	m.mu.Lock()
 	m.state.State = manifest.UpdateRestarting
 	m.state.Available = rel.Version
@@ -135,7 +146,7 @@ func (m *Manager) refuse(rel Release) error {
 	// A release of another source than the one that this device may use now. A
 	// check and an apply are minutes apart, and a device that paired between the
 	// two must install what its server approved and nothing else (D28).
-	if rel.Source != "sideload" && m.opt.SourceKind != nil && rel.Source != m.opt.SourceKind() {
+	if rel.Source != SourceSideload && m.opt.SourceKind != nil && rel.Source != m.opt.SourceKind() {
 		return fmt.Errorf("this device takes its releases from %s now, and %q came from %s: %w",
 			m.opt.SourceKind(), rel.Version, rel.Source, ErrNoRelease)
 	}
@@ -302,6 +313,15 @@ func (m *Manager) verify(staging string, rel Release) (string, error) {
 	info, err := m.opt.BinaryVersion(binary)
 	if err != nil {
 		return "", fmt.Errorf("the release does not say which version it is: %w", err)
+	}
+	// The name is a refusal of its own. One key signs both binaries of the project,
+	// so the server binary served under the name portapixeld-<arch> passes the
+	// signature, the checksum, the version and the processor. It installs, it has no
+	// "run" subcommand, it never writes a health marker, and the gate then marks a
+	// GOOD release bad for ever. A contract with three fields needs three checks.
+	if info.Name != m.opt.BinaryName {
+		return "", fmt.Errorf("this release holds %s and this install runs %s",
+			info.Name, m.opt.BinaryName)
 	}
 	// The processor is a refusal of its own, with a message of its own. A mirror
 	// that holds the asset of another architecture gives a file with a good
