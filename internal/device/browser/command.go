@@ -113,6 +113,10 @@ func (c CommandConfig) Endpoint() string {
 // them. --disable-client-side-phishing-detection is NOT in the list: that
 // switch is not in the Chromium 149 binary at all.
 //
+// About the flags that are NOT here. CONTEXT.md section 4 lists the switches
+// that we measured on 2026-09-22 and then refused. Each one stayed inside the
+// noise of the measurement, or it broke the picture.
+//
 // About --remote-allow-origins: Chromium 111 and later answer 403 to a DevTools
 // WebSocket that carries an Origin header which this flag does not name.
 // golang.org/x/net/websocket always sends an Origin and cannot leave it out, so
@@ -165,7 +169,13 @@ func (c CommandConfig) Build(url string) (*exec.Cmd, error) {
 		// optimizationguide-pa.googleapis.com every three minutes.
 		// NetworkTimeServiceQuerying: a call to clients2.google.com. chrony
 		// keeps the clock (D40).
-		"--disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying",
+		// BackForwardCache: Chromium keeps the previous page in memory after
+		// the daemon navigates away from a URL item. This screen never goes
+		// back, so that memory does no work. A measurement in QEMU on
+		// 2026-09-22 showed the cost: three URL items made three more renderer
+		// processes and added about 380 MB to the RSS sum. With this name in
+		// the list, the process count and the memory stay flat.
+		"--disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying,BackForwardCache",
 		"--password-store=basic",
 		// The owner of the screen decides what the device connects to. These
 		// flags stop the traffic that a desktop browser makes by itself.

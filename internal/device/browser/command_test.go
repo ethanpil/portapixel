@@ -38,7 +38,10 @@ func TestBuildDefaultCommand(t *testing.T) {
 		"--noerrdialogs",
 		"--disable-infobars",
 		"--disable-session-crashed-bubble",
-		"--disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying",
+		// BackForwardCache is in the list because the browser kept the page of
+		// each URL item in memory. Without the name, three URL items made three
+		// more renderer processes (QEMU, 2026-09-22).
+		"--disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying,BackForwardCache",
 		"--password-store=basic",
 		// An unattended appliance must not talk to a server that its owner did
 		// not name, and must not do the background work of a desktop browser.

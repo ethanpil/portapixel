@@ -358,7 +358,7 @@ cage -s -- chromium --kiosk --ozone-platform=wayland \
   --autoplay-policy=no-user-gesture-required \
   --user-data-dir=<tmpfs>/profile --disk-cache-dir=<tmpfs>/cache \
   --no-first-run --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
-  --disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying \
+  --disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying,BackForwardCache \
   --password-store=basic \
   --disable-background-networking --disable-component-update \
   --disable-domain-reliability --metrics-recording-only --disable-sync \
