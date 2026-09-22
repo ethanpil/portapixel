@@ -222,6 +222,95 @@ func TestFleetPlaylistsNeedPairing(t *testing.T) {
 	}
 }
 
+// While the device is paired, only a fleet playlist is eligible for selection
+// (plan section 13). The order of the two playlists in the snapshot must not
+// change the answer: the scan lists the local directories first, and that order
+// alone made a local playlist shadow the fleet playlist of the same name.
+func TestFindGivesOnlyFleetPlaylistsWhilePaired(t *testing.T) {
+	local := Playlist{Name: "lobby", Title: "the local one"}
+	fleet := Playlist{Name: "lobby", Title: "the fleet one", Fleet: true}
+
+	tests := []struct {
+		name  string
+		snap  Snapshot
+		find  string
+		found bool
+		title string
+	}{
+		{
+			name:  "paired, the local playlist is first",
+			snap:  Snapshot{Paired: true, Playlists: []Playlist{local, fleet}},
+			find:  "lobby",
+			found: true, title: "the fleet one",
+		},
+		{
+			name:  "paired, the fleet playlist is first",
+			snap:  Snapshot{Paired: true, Playlists: []Playlist{fleet, local}},
+			find:  "lobby",
+			found: true, title: "the fleet one",
+		},
+		{
+			name: "paired, only a local playlist holds the name",
+			snap: Snapshot{Paired: true, Playlists: []Playlist{local}},
+			find: "lobby",
+		},
+		{
+			name:  "unpaired, the local playlist plays",
+			snap:  Snapshot{Playlists: []Playlist{local}},
+			find:  "lobby",
+			found: true, title: "the local one",
+		},
+		{
+			name: "an empty name, which is a fleet default that names nothing",
+			snap: Snapshot{Paired: true, Playlists: []Playlist{fleet, local}},
+			find: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := tt.snap.Find(tt.find)
+			if ok != tt.found {
+				t.Fatalf("Find(%q) found = %v, want %v", tt.find, ok, tt.found)
+			}
+			if ok && got.Title != tt.title {
+				t.Fatalf("Find(%q) gave %q, want %q", tt.find, got.Title, tt.title)
+			}
+		})
+	}
+}
+
+// A local playlist of a paired device stays in the list, and it carries the mark
+// that says that it never plays (plan section 13).
+func TestPairedScanMarksLocalPlaylistsUnscheduled(t *testing.T) {
+	f := newFixture(t)
+	f.dir(t, "lobby", "[playlist]\nname = \"Local lobby\"\n[[item]]\nfile = \"a.jpg\"\n", "a.jpg")
+	f.dir(t, "_fleet/media", "", "aabbccdd-clip.mp4")
+	f.dir(t, "_fleet/lobby", "[playlist]\nname = \"Fleet lobby\"\n[[item]]\nfile = \"../media/aabbccdd-clip.mp4\"\n")
+
+	snap := f.lib.Rescan()
+	if snap.Paired {
+		t.Fatal("an unpaired snapshot reports a pairing")
+	}
+	if len(snap.Playlists) != 1 || snap.Playlists[0].Unscheduled {
+		t.Fatalf("an unpaired device must play its local playlist: %+v", snap.Playlists)
+	}
+
+	f.paired = true
+	snap = f.lib.Rescan()
+	if !snap.Paired || len(snap.Playlists) != 2 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	for _, p := range snap.Playlists {
+		if p.Fleet == p.Unscheduled {
+			t.Fatalf("the mark is wrong for %q: fleet=%v unscheduled=%v", p.Title, p.Fleet, p.Unscheduled)
+		}
+	}
+	if p, ok := snap.Find("lobby"); !ok || p.Title != "Fleet lobby" {
+		t.Fatalf("Find gave %+v %v, want the fleet playlist", p, ok)
+	}
+}
+
 func TestFleetRefIsRefusedInALocalPlaylist(t *testing.T) {
 	f := newFixture(t)
 	f.dir(t, "local", "[[item]]\nfile = \"../media/aabbccdd-clip.mp4\"\n")

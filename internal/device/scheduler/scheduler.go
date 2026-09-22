@@ -159,7 +159,7 @@ func (s *Scheduler) Evaluate() string {
 	switch {
 	case !synced && !s.gated:
 		s.gated = true
-		lines = append(lines, [2]string{"scheduler.clock.wait", "the clock is not synchronised yet; " + name + " plays"})
+		lines = append(lines, [2]string{"scheduler.clock.wait", "the clock is not synchronised yet; " + playlistText(name) + " plays"})
 	case synced && s.gated:
 		s.gated = false
 		lines = append(lines, [2]string{"scheduler.clock.ok", "the clock is synchronised; the schedule rules are live"})
@@ -167,7 +167,7 @@ func (s *Scheduler) Evaluate() string {
 	changed := name != s.active
 	s.active = name
 	if changed {
-		lines = append(lines, [2]string{"scheduler.playlist", name})
+		lines = append(lines, [2]string{"scheduler.playlist", playlistText(name)})
 		for _, ch := range s.subs {
 			// Never block: a subscriber that is busy reads the newest name.
 			select {
@@ -287,12 +287,18 @@ func (s *Scheduler) match(cfg config.Config, now time.Time) string {
 }
 
 // defaultPlaylist gives the playlist that plays when no rule matches.
+//
+// While the device is paired, the answer of the fleet server is the whole
+// answer, an empty name included (plan section 13). An empty fleet default with
+// no rule that matches means that there is no playable content, and the player
+// shows the fallback screen (D18). The local default must never take that place:
+// a paired screen shows what its server sends and nothing else.
 func (s *Scheduler) defaultPlaylist(cfg config.Config) string {
 	s.mu.Lock()
 	fleet, name := s.fleet, s.fleetDefault
 	s.mu.Unlock()
 
-	if fleet && name != "" {
+	if fleet {
 		return name
 	}
 	return cfg.Playback.DefaultPlaylist
@@ -354,6 +360,16 @@ func inWindow(start, end string, now time.Time, days []string) bool {
 		return dayPermitted(days, previousDay(now.Weekday()))
 	}
 	return false
+}
+
+// playlistText gives the name of a playlist for an ops log line. An empty name
+// is a paired device with no content from its server, and a log line that ends
+// after the event word says nothing to a person.
+func playlistText(name string) string {
+	if name == "" {
+		return "no playlist: the fleet server names none"
+	}
+	return name
 }
 
 // dayPermitted reports if a day is in the list. An empty list means every day.

@@ -67,6 +67,10 @@ type Playlist struct {
 	Items      []Item `json:"items"`
 	// Fleet is true for a playlist under _fleet. The local admin cannot edit it.
 	Fleet bool `json:"fleet"`
+	// Unscheduled is true for a local playlist while the device is paired. The
+	// admin UI still shows it, and the scheduler never selects it (plan section
+	// 13: sideloaded content stays visible but unscheduled).
+	Unscheduled bool `json:"unscheduled"`
 	// Kiosk is true for a playlist of exactly one URL item (D42).
 	Kiosk bool `json:"kiosk"`
 
@@ -90,14 +94,28 @@ type Snapshot struct {
 	ScannedAt time.Time  `json:"scanned_at"`
 	// Hashing is true while the background goroutine still has files to hash.
 	Hashing bool `json:"hashing"`
+	// Paired is true when the scan ran while the device had a fleet pairing. Find
+	// reads it, so one snapshot always answers with one rule.
+	Paired bool `json:"paired"`
 }
 
-// Find gives the playlist with this name.
+// Find gives the playlist that can play under this name.
+//
+// While the device is paired, only a fleet playlist is eligible (plan section
+// 13). Two rules come from that. A local playlist with the name of a fleet
+// playlist must not take its place: the local directory comes first in the list,
+// and it shadowed the fleet playlist before this test. A name that no fleet
+// playlist holds is not found at all, so the player shows the fallback screen
+// (D18) in place of local content.
 func (s Snapshot) Find(name string) (Playlist, bool) {
 	for _, p := range s.Playlists {
-		if p.Name == name {
-			return p, true
+		if p.Name != name {
+			continue
 		}
+		if s.Paired && !p.Fleet {
+			continue
+		}
+		return p, true
 	}
 	return Playlist{}, false
 }
@@ -248,6 +266,7 @@ func (l *Library) Snapshot() Snapshot {
 	out := Snapshot{
 		Problems:  snap.Problems,
 		ScannedAt: snap.ScannedAt,
+		Paired:    snap.Paired,
 		Playlists: make([]Playlist, len(snap.Playlists)),
 	}
 	pending := 0
@@ -316,7 +335,9 @@ func (l *Library) HashInBackground(done <-chan struct{}) {
 // scan reads the media root. It never returns an error: every fault is a
 // Problem, because one bad directory must not hide the good ones.
 func (l *Library) scan() Snapshot {
-	snap := Snapshot{ScannedAt: time.Now()}
+	// One answer of Paired for the whole scan. The fleet directory and the mark on
+	// a local playlist must agree with each other.
+	snap := Snapshot{ScannedAt: time.Now(), Paired: l.opt.Paired()}
 
 	entries, err := os.ReadDir(l.opt.MediaRoot)
 	if err != nil {
@@ -344,7 +365,7 @@ func (l *Library) scan() Snapshot {
 
 	// The fleet playlists play only while the device is paired. An unpaired
 	// device leaves the directory alone: the objects stay for the next pairing.
-	if l.opt.Paired() {
+	if snap.Paired {
 		fleetRoot := filepath.Join(l.opt.MediaRoot, FleetDir)
 		fleetEntries, err := os.ReadDir(fleetRoot)
 		if err == nil {
@@ -390,13 +411,14 @@ func (l *Library) readPlaylist(snap *Snapshot, name, dir string, fleet bool) {
 	}
 
 	out := Playlist{
-		Name:       name,
-		Title:      p.Meta.Name,
-		Transition: p.Meta.Transition,
-		Shuffle:    p.Meta.Shuffle,
-		Fleet:      fleet,
-		Kiosk:      p.IsKiosk(),
-		dir:        dir,
+		Name:        name,
+		Title:       p.Meta.Name,
+		Transition:  p.Meta.Transition,
+		Shuffle:     p.Meta.Shuffle,
+		Fleet:       fleet,
+		Unscheduled: snap.Paired && !fleet,
+		Kiosk:       p.IsKiosk(),
+		dir:         dir,
 	}
 	if out.Title == "" {
 		out.Title = name

@@ -287,6 +287,78 @@ func TestFleetRulesReplaceTheTOML(t *testing.T) {
 	}
 }
 
+// A paired device plays what its fleet server names, and nothing else (plan
+// section 13). A fleet default that names no playlist means that there is no
+// playable content: the answer is the empty name, and the player then shows the
+// fallback screen (D18). The local default playlist must never take that place.
+func TestAnEmptyFleetDefaultGivesNoPlaylist(t *testing.T) {
+	tests := []struct {
+		name       string
+		def        string
+		rules      []manifest.Rule
+		day        time.Weekday
+		h, m       int
+		synced     bool
+		wantActive string
+	}{
+		{
+			name: "no default and no rule", def: "", day: time.Monday, h: 9, synced: true,
+			wantActive: "",
+		},
+		{
+			name: "no default and a rule that matches", def: "",
+			rules: []manifest.Rule{{Playlist: "fleet-day", Days: []string{"mon"}, Start: "08:00", End: "17:00"}},
+			day:   time.Monday, h: 9, synced: true,
+			wantActive: "fleet-day",
+		},
+		{
+			name: "no default and a rule that does not match", def: "",
+			rules: []manifest.Rule{{Playlist: "fleet-day", Days: []string{"tue"}, Start: "08:00", End: "17:00"}},
+			day:   time.Monday, h: 9, synced: true,
+			wantActive: "",
+		},
+		{
+			name: "no default while the clock is not synchronised", def: "",
+			rules: []manifest.Rule{{Playlist: "fleet-day", Days: []string{"mon"}, Start: "08:00", End: "17:00"}},
+			day:   time.Monday, h: 9, synced: false,
+			wantActive: "",
+		},
+		{
+			name: "a default that names a playlist", def: "fleet-default", day: time.Monday, h: 9, synced: true,
+			wantActive: "fleet-default",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFake(t, weekdayRules())
+			f.at(tt.day, tt.h, tt.m)
+			f.synced = tt.synced
+			f.s.SetFleetRules(tt.def, tt.rules, nil)
+			if got := f.s.Evaluate(); got != tt.wantActive {
+				t.Fatalf("Evaluate gave %q, want %q", got, tt.wantActive)
+			}
+			if got := f.s.Active(); got != tt.wantActive {
+				t.Fatalf("Active gave %q, want %q", got, tt.wantActive)
+			}
+		})
+	}
+}
+
+// The unpair gives the local default playlist back.
+func TestClearFleetRulesGivesTheLocalDefaultBack(t *testing.T) {
+	f := newFake(t, weekdayRules())
+	f.at(time.Monday, 20, 0) // no local rule matches, so the default plays
+	f.s.SetFleetRules("", nil, nil)
+	if got := f.s.Active(); got != "" {
+		t.Fatalf("a paired device with no fleet default gave %q", got)
+	}
+	f.s.ClearFleetRules()
+	if got := f.s.Active(); got != "default" {
+		t.Fatalf("got %q after the unpair, want default", got)
+	}
+}
+
 func screenConfig(on, off string, days []string) config.Config {
 	cfg := config.Default()
 	cfg.Display.OnTime = on
