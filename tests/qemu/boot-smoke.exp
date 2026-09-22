@@ -110,19 +110,25 @@ expect {
 #    the line that prints the value short.
 # 2. The value needs an END mark. "(\S+)" matches as soon as the first character
 #    of the value has arrived, so expect returned "0." for "0.0.1-ci1" and the
-#    test read a version that the guest never said. Put the value in brackets and
-#    match up to the closing one: expect must then wait for the whole value.
-# 3. Read the value and COMPARE it. The first version of this test printed the
+#    test read a version that the guest never said. Put the value between "<" and
+#    ">" and match up to the ">": expect must then wait for the whole value.
+#    The marks are "<" and ">" and not brackets, because a "[" inside a string in
+#    double quotes is a command substitution to Tcl. The first attempt made expect
+#    stop with: invalid command name ""$PORTAPIXEL_VERSION"".
+# 3. The split-quote rule of the header applies to the marks as well. "V\"ER=<\""
+#    echoes with the quote inside it, so the echo of our own command can never
+#    make the string that the regular expression looks for.
+# 4. Read the value and COMPARE it. The first version of this test printed the
 #    value and checked nothing, so an image that named another version passed.
 send "stty cols 200; . /etc/portapixel-release; echo ST\"TY-OK\"\r"
 expect {
 	"STTY-OK" { }
 	timeout   { die "the shell did not read /etc/portapixel-release" }
 }
-send "echo V\"ER=[\"\$PORTAPIXEL_VERSION\"]\"\r"
+send "echo V\"ER=<\"\$PORTAPIXEL_VERSION\">\"\r"
 set got_version ""
 expect {
-	-re {VER=\[([^\]\r\n]*)\]} {
+	-re {VER=<([^>\r\n]*)>} {
 		set got_version [strip_ansi $expect_out(1,string)]
 		send_user "\n==> image version $got_version\n"
 	}
