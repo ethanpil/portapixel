@@ -623,7 +623,7 @@ export function renderShell({ brand = 'PortaPixel', brandSub, subtitle, tools, n
       h('span', { class: 'pp-brand__mark' }),
       h('span', { class: 'pp-brand__name', text: brand }),
       brandSub ? h('span', { class: 'pp-brand__sub', text: brandSub }) : null),
-    subtitle ? h('div', { class: 'pp-rule pp-hide-sm' }) : null,
+    subtitle ? h('div', { class: 'pp-vrule pp-hide-sm' }) : null,
     subtitle ? h('div', { class: 'pp-topbar__id pp-trunc' }, subtitle) : null,
     h('div', { class: 'pp-spacer' }),
     tools ? h('div', { class: 'pp-topbar__tools' }, tools) : null);

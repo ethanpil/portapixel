@@ -287,7 +287,11 @@ img, svg { display: block; max-width: 100%; }
 .pp-brand__mark { width: 11px; height: 11px; flex: none; border-radius: var(--pp-r-tile); background: var(--pp-brand); }
 .pp-brand__name { font-weight: 600; letter-spacing: -0.01em; }
 .pp-brand__sub { font-size: var(--pp-fs-sm); color: var(--pp-muted); }
-.pp-rule { width: 1px; height: 22px; flex: none; background: var(--pp-border); }
+/* A short upright line between two groups in the top bar. The name is "vrule",
+   not "rule": ".pp-rule" further down is the ROW of a time rule, and one name for
+   two things means the second block wins. This line then became a flex row with
+   padding and a border under it. */
+.pp-vrule { width: 1px; height: 22px; flex: none; background: var(--pp-border); }
 .pp-topbar__id { display: flex; align-items: baseline; gap: var(--pp-space-4); min-width: 0; }
 .pp-topbar__id > :first-child { font-weight: 500; }
 /* text-overflow never applies to a flex container, so the children carry it. */
