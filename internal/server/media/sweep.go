@@ -16,6 +16,12 @@ import (
 // An upload writes the blob first and the row after it, so a blob with no row can
 // be an upload that is still in flight. An hour is far longer than any upload, and
 // a blob that is younger than that is never touched.
+//
+// The grace period is what makes the known set safe although it is read before the
+// walk. Every path that gives a blob a row touches the file first: a new object
+// arrives with a new modification time, and an upload of bytes that the store
+// already holds gives the old file a new one (Put). So a blob that gains a row
+// during a sweep is always younger than the cutoff of that sweep.
 const orphanGrace = time.Hour
 
 // SweepResult says what one sweep removed.

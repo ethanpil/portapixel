@@ -11,6 +11,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
+	"time"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/playlist"
@@ -30,6 +32,13 @@ var ErrNoSpace = errors.New("there is not enough free space for this file")
 
 // ErrBadHash says that a value is not a SHA-256 in the form that the store uses.
 var ErrBadHash = errors.New("that is not a SHA-256 value of 64 lower case hex characters")
+
+// isNoSpace reports if err says that the filesystem is full.
+//
+// It reads the error of the standard library and not a string: the wording of a
+// write error belongs to the operating system. fs.ErrNoSpace does not exist, so the
+// test is against the syscall value that every system that we run on gives.
+func isNoSpace(err error) bool { return errors.Is(err, syscall.ENOSPC) }
 
 // tmpDirName is the directory of the part files of an upload, under the object
 // root. Every object lives under the same root, so the rename at the end of an
@@ -165,6 +174,12 @@ func (s *Store) Put(body io.Reader, origName string, declaredSize int64) (Result
 	}
 	size, err := io.Copy(io.MultiWriter(tmp, hash), reader)
 	if err != nil {
+		if isNoSpace(err) {
+			// The filesystem filled up while the bytes arrived. That is the same answer
+			// as a file that does not fit the reserve, and not "the body did not
+			// arrive": the admin must read "there is no room" and not "try it again".
+			return Result{}, fmt.Errorf("%w: the disk filled up while the file arrived", ErrNoSpace)
+		}
 		return Result{}, fmt.Errorf("read the upload: %w", err)
 	}
 	if known && size > room {
@@ -197,6 +212,12 @@ func (s *Store) Put(body io.Reader, origName string, declaredSize int64) (Result
 		res.Duplicate = true
 		os.Remove(tmpName)
 		committed = true
+		// The object is referenced again, so it gets a new modification time. The
+		// orphan sweep keeps a young file whatever the database said when the sweep
+		// started, and without this the sweep could remove the object between this
+		// upload and the row that the route writes for it.
+		now := time.Now()
+		os.Chtimes(dest, now, now)
 	} else {
 		if err := os.Rename(tmpName, dest); err != nil {
 			return Result{}, fmt.Errorf("rename the upload to %s: %w", dest, err)

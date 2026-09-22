@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/version"
 )
 
 // cacheLife is how long a release list stays good. The GitHub API limits an
@@ -70,10 +73,6 @@ type Lister struct {
 	failedAt time.Time
 	// forcedAt is when the last forced fetch ran. See forceGap.
 	forcedAt time.Time
-	// fresh is true after a fetch that really reached GitHub, until the next
-	// List. The releases route writes the table only then, so a page view that
-	// answers from the cache costs no write.
-	fresh bool
 }
 
 // NewLister makes a Lister for one repository.
@@ -98,10 +97,15 @@ func NewLister(repo string) *Lister {
 // ctx says when to give up. The caller passes a context of the life of the server
 // and not the context of its request: a page that the admin leaves would otherwise
 // write "context canceled" into the error text that every later page reads.
-func (l *Lister) List(ctx context.Context, force bool) ([]GitHubRelease, string) {
+//
+// The third answer, fresh, says that THIS call reached GitHub. It is a return value
+// and not a field of the Lister: a field is shared, and the route read it in a
+// second locked call, so a List of another request could clear the flag of the call
+// that did the work. The route then wrote nothing to the table, and the cache was
+// young, so nothing wrote for the next cacheLife either.
+func (l *Lister) List(ctx context.Context, force bool) (list []GitHubRelease, errText string, fresh bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.fresh = false
 
 	now := time.Now()
 	if force && !l.forcedAt.IsZero() && now.Sub(l.forcedAt) < forceGap {
@@ -111,39 +115,29 @@ func (l *Lister) List(ctx context.Context, force bool) ([]GitHubRelease, string)
 	young := !l.fetched.IsZero() && now.Sub(l.fetched) < cacheLife
 	recentFailure := !l.failedAt.IsZero() && now.Sub(l.failedAt) < failureMemo
 	if !force && (young || recentFailure) {
-		return l.cached, l.lastErr
+		return l.cached, l.lastErr, false
 	}
 	if force {
 		l.forcedAt = now
 	}
 
-	list, err := l.fetch(ctx)
+	fetched, err := l.fetch(ctx)
 	if err != nil {
 		l.lastErr = err.Error()
 		l.failedAt = time.Now()
 		// Keep the cache. A list that we had is better than no list.
-		return l.cached, l.lastErr
+		return l.cached, l.lastErr, false
 	}
-	l.cached = list
+	l.cached = fetched
 	l.fetched = time.Now()
 	l.failedAt = time.Time{}
 	l.lastErr = ""
-	l.fresh = true
-	return l.cached, ""
-}
-
-// Fresh reports if the last List really reached GitHub. The releases route writes
-// the table only then: a write for each of thirty releases on every page view would
-// fight every heartbeat of the fleet for the one write connection.
-func (l *Lister) Fresh() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.fresh
+	return l.cached, "", true
 }
 
 // Release gives one release of the list by its version.
 func (l *Lister) Release(ctx context.Context, version string) (GitHubRelease, error) {
-	list, errText := l.list(ctx)
+	list, errText, _ := l.List(ctx, false)
 	for _, r := range list {
 		if r.Version == version {
 			return r, nil
@@ -163,6 +157,10 @@ func (l *Lister) fetch(ctx context.Context) ([]GitHubRelease, error) {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	// GitHub asks every caller to name itself, and it answers some requests with a
+	// 403 when the header is missing.
+	req.Header.Set("User-Agent", "portapixel-server/"+version.Version)
 
 	resp, err := l.Client.Do(req)
 	if err != nil {
@@ -170,7 +168,9 @@ func (l *Lister) fetch(ctx context.Context) ([]GitHubRelease, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%s answered %s", url, resp.Status)
+		// The body holds the reason, for example "API rate limit exceeded". Without it
+		// the admin reads "403 Forbidden" and can act on nothing.
+		return nil, fmt.Errorf("%s answered %s%s", url, resp.Status, apiMessage(resp.Body))
 	}
 
 	var raw []apiRelease
@@ -198,16 +198,20 @@ func (l *Lister) fetch(ctx context.Context) ([]GitHubRelease, error) {
 	return out, nil
 }
 
-// list gives the release list with no force. It is here so that Release does not
-// clear the Fresh flag of a List that the route made just before it.
-func (l *Lister) list(ctx context.Context) ([]GitHubRelease, string) {
-	l.mu.Lock()
-	young := !l.fetched.IsZero() && time.Since(l.fetched) < cacheLife
-	if young {
-		out, errText := l.cached, l.lastErr
-		l.mu.Unlock()
-		return out, errText
+// apiMessage reads the "message" field of an error answer of the GitHub API. It
+// gives an empty string when there is none, so the caller can add it to a sentence.
+func apiMessage(body io.Reader) string {
+	var answer struct {
+		Message string `json:"message"`
 	}
-	l.mu.Unlock()
-	return l.List(ctx, false)
+	if err := json.NewDecoder(limitReader(body, maxErrorBytes)).Decode(&answer); err != nil {
+		return ""
+	}
+	if answer.Message == "" {
+		return ""
+	}
+	return ": " + answer.Message
 }
+
+// maxErrorBytes is how much of an error answer we read.
+const maxErrorBytes = 8 << 10

@@ -30,6 +30,12 @@ const maxPixels = 50_000_000
 // thumbQuality is the JPEG quality of a thumbnail.
 const thumbQuality = 82
 
+// ThumbTag names the thumbnail recipe. The ETag of a thumbnail holds it beside the
+// hash of the source, so a browser with a cache life of a year still sees a new
+// picture when the width, the quality or the scaler changes. Raise it with any such
+// change.
+const ThumbTag = "t1"
+
 // makeThumb writes the thumbnail of one object. It gives the size of the
 // original picture and reports if it made a thumbnail.
 //

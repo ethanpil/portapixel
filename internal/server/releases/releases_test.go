@@ -119,8 +119,9 @@ func newMirror(t *testing.T, s signer, version string, files map[string][]byte) 
 	m.PublicKey = s.public
 	m.Lister.BaseURL = srv.URL
 	// The stub answers on the loopback, so the host allowlist of the mirror takes
-	// that address for this test only.
+	// that address for this test only, and the stub has no certificate.
 	m.DownloadHosts = []string{"127.0.0.1", "localhost", "::1"}
+	m.AllowHTTP = true
 	m.Report = func(v, state, errText string) {
 		*reports = append(*reports, state)
 		if errText != "" {
@@ -445,7 +446,7 @@ func TestListerCachesAndToleratesFailure(t *testing.T) {
 	l := NewLister("owner/name")
 	l.BaseURL = srv.URL
 
-	list, errText := l.List(context.Background(), false)
+	list, errText, _ := l.List(context.Background(), false)
 	if errText != "" {
 		t.Fatalf("the first list gave %q", errText)
 	}
@@ -454,7 +455,7 @@ func TestListerCachesAndToleratesFailure(t *testing.T) {
 	}
 
 	// A second call inside the cache life asks nothing.
-	if _, errText := l.List(context.Background(), false); errText != "" {
+	if _, errText, _ := l.List(context.Background(), false); errText != "" {
 		t.Fatalf("the cached list gave %q", errText)
 	}
 	if calls.Load() != 1 {
@@ -462,7 +463,7 @@ func TestListerCachesAndToleratesFailure(t *testing.T) {
 	}
 
 	// A forced call fails, and the old list is still there.
-	list, errText = l.List(context.Background(), true)
+	list, errText, _ = l.List(context.Background(), true)
 	if errText == "" {
 		t.Fatal("the failed list reported no error")
 	}
@@ -642,10 +643,10 @@ func TestListerRemembersAFailure(t *testing.T) {
 	l := NewLister("owner/name")
 	l.BaseURL = srv.URL
 
-	if _, errText := l.List(context.Background(), false); errText == "" {
+	if _, errText, _ := l.List(context.Background(), false); errText == "" {
 		t.Fatal("the failed list reported no error")
 	}
-	if _, errText := l.List(context.Background(), false); errText == "" {
+	if _, errText, _ := l.List(context.Background(), false); errText == "" {
 		t.Fatal("the second list lost the error text")
 	}
 	if got := calls.Load(); got != 1 {
@@ -682,16 +683,18 @@ func TestFreshOnlyAfterARealFetch(t *testing.T) {
 	s := newSigner(t)
 	m, _ := newMirror(t, s, "1.5.0", s.releaseFiles(t))
 
-	if _, errText := m.Lister.List(context.Background(), false); errText != "" {
+	_, errText, fresh := m.Lister.List(context.Background(), false)
+	if errText != "" {
 		t.Fatalf("the first list gave %q", errText)
 	}
-	if !m.Lister.Fresh() {
+	if !fresh {
 		t.Fatal("a list that reached GitHub does not report that it was fresh")
 	}
-	if _, errText := m.Lister.List(context.Background(), false); errText != "" {
+	_, errText, fresh = m.Lister.List(context.Background(), false)
+	if errText != "" {
 		t.Fatalf("the cached list gave %q", errText)
 	}
-	if m.Lister.Fresh() {
+	if fresh {
 		t.Fatal("a list that came from the cache reports that it was fresh")
 	}
 }

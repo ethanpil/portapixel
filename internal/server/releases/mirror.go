@@ -81,6 +81,35 @@ var ErrNoKey = errors.New("this build has no release key, so it cannot verify a 
 // ErrBusy says that a mirror already runs.
 var ErrBusy = errors.New("a mirror already runs")
 
+// ErrNoSpace says that the data directory has not enough room for the work.
+var ErrNoSpace = errors.New("the disk has not enough room for this release")
+
+// spaceReserve is the room that a release job must leave. It is the reserve of the
+// media store, so that a mirror cannot fill the disk under the media library and
+// under the database.
+const spaceReserve = 512 << 20
+
+// needRoom refuses the work when the disk has not enough room for want bytes and
+// the reserve on top.
+//
+// fsutil.FreeBytes answers a large constant on a system that it cannot measure. The
+// check then always passes, which is the old behaviour and is correct: a guess must
+// not stop a job that would work.
+func (m *Mirror) needRoom(want int64) error {
+	if err := os.MkdirAll(m.Dir, 0o755); err != nil {
+		return fmt.Errorf("make %s: %w", m.Dir, err)
+	}
+	free, err := fsutil.FreeBytes(m.Dir)
+	if err != nil {
+		return nil
+	}
+	if int64(free) < want+spaceReserve {
+		return fmt.Errorf("%w: it needs %d MB and %d MB are free",
+			ErrNoSpace, (want+spaceReserve)>>20, free>>20)
+	}
+	return nil
+}
+
 // defaultDownloadHosts holds the hosts that a release file may come from.
 //
 // The URL of a file comes out of the GitHub API answer. That answer is input from
@@ -108,8 +137,15 @@ type Mirror struct {
 	// DownloadHosts names the hosts that a release file may come from. A test
 	// replaces it, because its stub GitHub answers on the loopback.
 	DownloadHosts []string
+	// AllowHTTP permits a release file over plain HTTP. Only a test sets it: its
+	// stub GitHub has no certificate. In the server it is always false, so the
+	// https rule below is a rule and not a comment.
+	AllowHTTP bool
 
 	mu sync.Mutex
+	// jobs counts the background runs, so that a shutdown can wait for the last
+	// report to reach the database.
+	jobs sync.WaitGroup
 	// working names the version that the mirror or a bundle install works on.
 	working string
 	// run counts the runs. A report of a run that finished after a later one
@@ -210,12 +246,19 @@ func (m *Mirror) Start(ctx context.Context, v string) error {
 		return err
 	}
 
+	m.jobs.Add(1)
 	go func() {
+		defer m.jobs.Done()
 		defer done()
 		m.run1(ctx, id, v)
 	}()
 	return nil
 }
+
+// Wait blocks until every background run has reported. The server calls it before
+// it closes the database: the last report of a cancelled run writes a row, and a
+// closed pool cannot take it.
+func (m *Mirror) Wait() { m.jobs.Wait() }
 
 // Run mirrors one version and reports what happened. It gives the error as well,
 // so a test and the selftest can read it.
@@ -229,14 +272,42 @@ func (m *Mirror) Run(ctx context.Context, v string) error {
 }
 
 func (m *Mirror) run1(ctx context.Context, id int64, v string) error {
-	m.report(id, v, MirrorWorking, "")
+	// The working state is not reported for a version that is already mirrored.
+	//
+	// Both device gates read that state: the manifest stops naming the release and
+	// the download route answers 404. A re-mirror of the version that runs would
+	// otherwise take the live release off the air before it fetched one byte, and a
+	// failure would leave it off the air although the verified files never moved.
+	// The UI learns that work runs from the "mirroring" field of the releases route.
+	if !m.haveVersion(v) {
+		m.report(id, v, MirrorWorking, "")
+	}
 	err := m.mirror(ctx, v)
 	if err != nil {
+		if m.haveVersion(v) {
+			// The verified files of the last run are still there, so the release stays
+			// on the air and the admin reads why the new attempt failed.
+			m.report(id, v, MirrorDone, err.Error())
+			return err
+		}
 		m.report(id, v, MirrorFailed, err.Error())
 		return err
 	}
 	m.report(id, v, MirrorDone, "")
 	return nil
+}
+
+// haveVersion reports if the directory of a version is there with its files.
+func (m *Mirror) haveVersion(v string) bool {
+	if !ValidVersion(v) {
+		return false
+	}
+	for _, name := range Files() {
+		if _, err := os.Stat(filepath.Join(m.VersionDir(v), name)); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 // The state words. They are the words of the mirror_state column of the releases
@@ -261,6 +332,12 @@ func (m *Mirror) mirror(ctx context.Context, v string) error {
 	}
 	if m.PublicKey == "" {
 		return ErrNoKey
+	}
+	// Two binaries at their limit, plus the reserve. The releases directory is on the
+	// same filesystem as the media store and the database, and the reserve of the
+	// media store does not cover this path.
+	if err := m.needRoom(int64(len(binaries)) * maxBinaryBytes); err != nil {
+		return err
 	}
 	rel, err := m.Lister.Release(ctx, v)
 	if err != nil {
@@ -320,7 +397,13 @@ func (m *Mirror) commit(staging, v string) error {
 	}
 	if err := os.Rename(staging, dest); err != nil {
 		if old != "" {
-			os.Rename(old, dest)
+			// The rollback error matters: when it fails, the only verified copy stays
+			// at <version>.old, and the admin must know that. CleanStaging brings such
+			// a copy back at the next start.
+			if back := os.Rename(old, dest); back != nil {
+				return fmt.Errorf("put %s in place: %w (and the copy stays at %s: %v)",
+					dest, err, filepath.Base(old), back)
+			}
 		}
 		return fmt.Errorf("put %s in place: %w", dest, err)
 	}
@@ -331,8 +414,14 @@ func (m *Mirror) commit(staging, v string) error {
 	return nil
 }
 
-// CleanStaging removes the staging directories and the part files that a stopped
-// process left. The server calls it at start.
+// CleanStaging tidies the release directory after a stopped process. The server
+// calls it at start.
+//
+// A staging directory holds files that Verify never passed, so it goes. A ".old"
+// directory is the OPPOSITE: it is the copy that Verify did pass, parked between
+// the two renames of commit. When the version directory is missing, that copy is
+// the only one there is, and on a closed network it came from a bundle that nobody
+// can fetch again. So it comes back instead of going away.
 func (m *Mirror) CleanStaging() {
 	entries, err := os.ReadDir(m.Dir)
 	if err != nil {
@@ -340,13 +429,39 @@ func (m *Mirror) CleanStaging() {
 	}
 	for _, entry := range entries {
 		name := entry.Name()
+		if !entry.IsDir() {
+			continue
+		}
 		switch {
-		case entry.IsDir() && (strings.HasPrefix(name, ".staging-") || strings.HasSuffix(name, ".old")):
+		case strings.HasPrefix(name, ".staging-"):
 			os.RemoveAll(filepath.Join(m.Dir, name))
-		case !entry.IsDir() && strings.Contains(name, ".part"):
-			os.Remove(filepath.Join(m.Dir, name))
+		case strings.HasSuffix(name, ".old"):
+			m.recoverOld(name)
 		}
 	}
+}
+
+// recoverOld answers one ".old" directory. See CleanStaging.
+func (m *Mirror) recoverOld(name string) {
+	path := filepath.Join(m.Dir, name)
+	base := strings.TrimSuffix(name, ".old")
+	if !ValidVersion(base) {
+		// Not the aside copy of a version that we could serve.
+		os.RemoveAll(path)
+		return
+	}
+	dest := m.VersionDir(base)
+	if _, err := os.Stat(dest); err == nil {
+		// The second rename of commit finished. The aside copy is the old one.
+		os.RemoveAll(path)
+		return
+	}
+	if err := os.Rename(path, dest); err != nil {
+		// Leave it where it is. A copy that we cannot move is still a copy, and the
+		// admin can mirror the version again.
+		return
+	}
+	fsutil.SyncDir(m.Dir)
 }
 
 // limitFor gives the size limit of one file of a release.
@@ -408,9 +523,6 @@ func (m *Mirror) allowedURL(rawURL string) error {
 		return fmt.Errorf("%q is not a URL: %w", rawURL, err)
 	}
 	hosts := m.DownloadHosts
-	if hosts == nil {
-		hosts = defaultDownloadHosts
-	}
 	host := strings.ToLower(u.Hostname())
 	for _, allowed := range hosts {
 		allowed = strings.ToLower(allowed)
@@ -427,14 +539,14 @@ func (m *Mirror) allowedURL(rawURL string) error {
 	return fmt.Errorf("a release file may not come from %s", u.Host)
 }
 
-// checkScheme refuses a URL that is not https. A test allowlist of loopback hosts
-// takes http as well, because a stub server has no certificate.
+// checkScheme refuses a URL that is not https.
+//
+// AllowHTTP is the one way past it, and only a test sets that field. The rule used
+// to read DownloadHosts instead, which NewMirror always fills, so the rule never
+// ran in the server: a GitHub answer that named a plain http URL, and a redirect
+// from https to http, were both followed.
 func (m *Mirror) checkScheme(u *url.URL, rawURL string) error {
-	if u.Scheme == "https" {
-		return nil
-	}
-	if m.DownloadHosts != nil {
-		// The allowlist is one that a test set. Then plain HTTP is the stub.
+	if u.Scheme == "https" || m.AllowHTTP {
 		return nil
 	}
 	return fmt.Errorf("a release file must come over https, and %s does not", rawURL)
