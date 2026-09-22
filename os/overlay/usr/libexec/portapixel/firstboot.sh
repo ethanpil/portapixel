@@ -16,12 +16,6 @@ M_RECREATED="$PP_STATE/.fb-p3-recreated"
 M_GROWN="$PP_STATE/.fb-p3-grown"
 M_HOSTKEYS="$PP_STATE/.fb-hostkeys"
 M_ROOTPW="$PP_STATE/.fb-rootpw"
-M_ZRAM="$PP_STATE/.fb-zram"
-
-# Memory under which this device gets zram swap, in kB. It is the same 1 GiB that
-# internal/device/health lowRAMBytes uses for the low tier, so one machine is
-# never "low tier with no swap".
-LOW_RAM_KB=1048576
 
 # The password the manual documents. The web UI nags until it changes (D23).
 DEFAULT_ROOT_PASSWORD="portapixel"
@@ -345,76 +339,7 @@ ssh_host_keys() {
 	return 0
 }
 
-# ------------------------------------------------------------ 3. zram swap
-# A machine with less than 1 GiB of memory cannot run Chromium with no swap.
-# Measured: 512 MB and no swap gives Chromium error code 4 and a restart loop.
-# 512 MB with 512 MB of zram works, and the fallback screen alone puts about
-# 190 MB in the swap. zram costs no flash wear, which a swap file on an SD card
-# would (D2).
-#
-# Why the first boot and not the daemon: the swap must be there before the browser
-# starts, and the browser is what the daemon starts. A machine does not change its
-# memory, so the answer is true for the life of the box.
-#
-# A host that already has swap keeps what its owner set. An on-box install must
-# never add a second swap device behind the back of the owner.
-zram_swap() {
-	[ -f "$M_ZRAM" ] && return 0
-
-	_kb="$(awk '/^MemTotal:/ { print $2; exit }' /proc/meminfo 2>/dev/null)"
-	case "$_kb" in ''|*[!0-9]*)
-		oplog firstboot.zram.skip "cannot read MemTotal"
-		mark "$M_ZRAM"
-		return 0
-		;;
-	esac
-	if [ "$_kb" -ge "$LOW_RAM_KB" ]; then
-		oplog firstboot.zram.skip "${_kb} kB of memory, so no swap is necessary"
-		mark "$M_ZRAM"
-		return 0
-	fi
-	# /proc/swaps always has a header line. More than one line means swap is on.
-	if [ "$(wc -l <"/proc/swaps" 2>/dev/null || echo 1)" -gt 1 ]; then
-		oplog firstboot.zram.skip "this machine already has swap"
-		mark "$M_ZRAM"
-		return 0
-	fi
-	if [ ! -f /etc/init.d/zram-init ]; then
-		oplog firstboot.zram.fail "zram-init is not installed and this machine needs swap"
-		mark "$M_ZRAM"
-		return 0
-	fi
-
-	# One device, as large as the memory. That is the pair that was measured.
-	# The file of the package makes TWO devices and mounts the second on /tmp,
-	# which PortaPixel already has as a tmpfs (D2), so write our own file.
-	_mb=$((_kb / 1024))
-	cat >/etc/conf.d/zram-init <<EOF
-# PortaPixel writes this file on the first boot of a machine with less than
-# 1 GiB of memory. Chromium cannot run on 512 MB with no swap.
-# ONE device, and it is swap. Do not add a second device on /tmp: /tmp is
-# already a size capped tmpfs (D2).
-load_on_start=yes
-unload_on_stop=yes
-num_devices=1
-type0=swap
-flag0=
-size0=$_mb
-mlim0=
-algo0=zstd
-labl0=zram_swap
-EOF
-	rc-update add zram-init boot >/dev/null 2>&1 || true
-	if ! rc-service zram-init start >/dev/null 2>&1; then
-		oplog firstboot.zram.fail "zram-init did not start; first boot runs again"
-		return 1
-	fi
-	mark "$M_ZRAM"
-	oplog firstboot.zram "${_mb} MB of zram swap for a machine with ${_kb} kB of memory"
-	return 0
-}
-
-# ------------------------------------------------------- 4. root password
+# ------------------------------------------------------- 3. root password
 root_password() {
 	[ -f "$M_ROOTPW" ] && return 0
 	# Report the failure to the caller. A silent "return 0" let the run finish,
@@ -438,13 +363,10 @@ root_password() {
 	return 0
 }
 
-# ----------------------------------------------------------------- 5. run it
+# ----------------------------------------------------------------- 4. run it
 rc=0
 grow_media || rc=1
 ssh_host_keys
-# The swap comes before "portapixeld provision" and before the daemon starts the
-# browser: a 512 MB machine with no swap cannot hold Chromium.
-zram_swap || rc=1
 root_password || rc=1
 
 # Steps 2, 4 and 5 of plan section 14 belong to the daemon: the device id, the

@@ -592,10 +592,16 @@ rc_add portapixeld default
 # shutdown: leave the file systems clean.
 for s in killprocs mount-ro savecache; do rc_add "$s" shutdown; done
 
-# zram-init is installed and NOT enabled here. The first boot enables it, and only
-# on a machine with less than 1 GiB of memory (plan section 4). The rule needs the
-# memory of the real machine, which a build host does not have, and firstboot.sh
-# skips a host that already has swap of its own.
+# zram swap for a machine with little memory (plan section 4). The service is in
+# the "boot" runlevel, so the swap is there before the daemon starts the browser,
+# ON THE FIRST BOOT TOO. Its conf.d below decides the size, and the size decides
+# whether the service does anything at all.
+#
+# NOT in the first boot script: firstboot.sh runs inside an OpenRC service, and a
+# "rc-service zram-init start" from there is a second rc inside the first one. It
+# answered "started" and left no swap. Measured on a 512 MB guest, which is the
+# one machine that must not miss this.
+rc_add zram-init boot
 
 # --------------------------------------------------------- 12. daemon settings
 say "write /etc/conf.d/portapixeld"
@@ -631,6 +637,46 @@ PP_KIOSK_RUNTIME="/run/user/$KIOSK_UID"
 PP_HEALTH_TIMEOUT=120
 # Seconds between two looks for that marker. A test of the gate lowers it.
 PP_HEALTH_POLL=2
+EOF
+
+# ------------------------------------------------------------- 12b. zram swap
+# THE SIZE IS COMPUTED AT EVERY BOOT, not here. OpenRC reads this file with the
+# shell, and the package's own file gives the same idiom. An installer cannot know
+# the memory of the machine that will run the image: one image goes on a 512 MB
+# Pi Zero 2 W and on an 8 GB thin client.
+#
+# The rule:
+#   less than 1 GiB of memory, and no swap yet  -> a device as large as the memory
+#   any other machine                           -> size 0
+# A size of 0 makes the init script pass over the device, so a machine with enough
+# memory pays nothing and a host that already has swap keeps what its owner set.
+# 1 GiB is the same number that internal/device/health uses for the low tier, so a
+# machine is never "low tier with no swap".
+#
+# Measured: 512 MB with no swap gives Chromium error code 4 and a restart loop.
+# 512 MB with 512 MB of zram works. zram costs no flash wear, which a swap file on
+# an SD card would (D2).
+say "write /etc/conf.d/zram-init"
+cat >"$ROOT/etc/conf.d/zram-init" <<'EOF'
+# PortaPixel writes this file. See os/install.sh, step 12b.
+# ONE device, and it is swap. Never a second device on /tmp: /tmp is already a
+# size capped tmpfs (D2).
+load_on_start=yes
+unload_on_stop=yes
+num_devices=1
+type0=swap
+flag0=
+mlim0=
+algo0=zstd
+labl0=zram_swap
+
+# The size in MB, computed at every boot. An empty or zero size makes the init
+# script pass over the device.
+size0="$(awk '/^MemTotal:/ { kb = $2 }
+	END { print (kb > 0 && kb < 1048576) ? int(kb / 1024) : 0 }' /proc/meminfo)"
+# This service needs "swap", so swapon has already run. More than the header line
+# in /proc/swaps means the machine has swap of its own.
+[ "$(wc -l </proc/swaps 2>/dev/null || echo 1)" -le 1 ] || size0=0
 EOF
 
 # ---------------------------------------------------- 13. identity of the image
