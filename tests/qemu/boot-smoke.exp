@@ -15,6 +15,9 @@ set scale  [lindex $argv 3]
 set accel  [lindex $argv 4]
 set bios   [lindex $argv 5]
 set gpu    [lindex $argv 6]
+# The version the caller expects from /etc/portapixel-release, or "" to read the
+# value and only print it.
+set want_version [lindex $argv 7]
 
 # Strip terminal escape sequences from captured output. Bracketed paste toggles
 # (\033[?2004h) land at the FRONT of the capture, so a plain trim does not
@@ -99,22 +102,37 @@ expect {
 # clean value. "V""ER=" in the sent text echoes with the quotes in it and cannot
 # match the bare VER= that the shell prints.
 #
-# TWO steps, and both are about the 80 column console. A typed line that is longer
-# than the console leaves the cursor in the middle of a line, and the answer of the
-# shell then starts there and wraps INSIDE the value: the test read the version
-# "0.0.0-dev" as "0". So make the console wide first, and then keep the line that
-# prints the value short.
+# THREE rules, and each one cost a measurement.
+#
+# 1. The 80 column console. A typed line that is longer than the console leaves
+#    the cursor in the middle of a line, and the answer of the shell then starts
+#    there and wraps INSIDE the value. So make the console wide first, and keep
+#    the line that prints the value short.
+# 2. The value needs an END mark. "(\S+)" matches as soon as the first character
+#    of the value has arrived, so expect returned "0." for "0.0.1-ci1" and the
+#    test read a version that the guest never said. Put the value in brackets and
+#    match up to the closing one: expect must then wait for the whole value.
+# 3. Read the value and COMPARE it. The first version of this test printed the
+#    value and checked nothing, so an image that named another version passed.
 send "stty cols 200; . /etc/portapixel-release; echo ST\"TY-OK\"\r"
 expect {
 	"STTY-OK" { }
 	timeout   { die "the shell did not read /etc/portapixel-release" }
 }
-send "echo V\"ER=\"\$PORTAPIXEL_VERSION\r"
+send "echo V\"ER=[\"\$PORTAPIXEL_VERSION\"]\"\r"
+set got_version ""
 expect {
-	-re {VER=(\S+)} {
-		send_user "\n==> image version [strip_ansi $expect_out(1,string)]\n"
+	-re {VER=\[([^\]\r\n]*)\]} {
+		set got_version [strip_ansi $expect_out(1,string)]
+		send_user "\n==> image version $got_version\n"
 	}
 	timeout { die "the shell printed no PORTAPIXEL_VERSION" }
+}
+if {$got_version eq ""} {
+	die "/etc/portapixel-release gives an empty PORTAPIXEL_VERSION"
+}
+if {$want_version ne "" && $got_version ne $want_version} {
+	die "the image says version \"$got_version\" and the caller expects \"$want_version\""
 }
 
 # ------------------------------------------------------------- 4. the HTTP check

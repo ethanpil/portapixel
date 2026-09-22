@@ -22,13 +22,20 @@ UEFI=0
 PORT=18080
 MEM=3072
 IMAGE=""
+# The version /etc/portapixel-release must name. Empty means "read it and print
+# it only", which is what a local run of an image of unknown age wants.
+EXPECT_VERSION=""
 
 die() { printf 'boot-smoke: %s\n' "$*" >&2; exit 1; }
 say() { printf '==> %s\n' "$*"; }
 
 usage() {
 	cat <<'EOF'
-Usage: boot-smoke.sh [--uefi] [--port N] [--mem MB] IMAGE(.img or .img.gz)
+Usage: boot-smoke.sh [--uefi] [--port N] [--mem MB] [--expect-version V]
+                     IMAGE(.img or .img.gz)
+
+  --expect-version V  fail unless /etc/portapixel-release names version V.
+                      Without it the test prints the version and accepts any.
 EOF
 }
 
@@ -37,6 +44,7 @@ while [ $# -gt 0 ]; do
 	--uefi) UEFI=1; shift ;;
 	--port) PORT="${2:?}"; shift 2 ;;
 	--mem) MEM="${2:?}"; shift 2 ;;
+	--expect-version) EXPECT_VERSION="${2:?}"; shift 2 ;;
 	-h|--help) usage; exit 0 ;;
 	-*) usage >&2; die "unknown option: $1" ;;
 	*) IMAGE="$1"; shift ;;
