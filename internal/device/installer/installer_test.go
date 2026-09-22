@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -606,5 +607,32 @@ func TestTheRealTargetCheck(t *testing.T) {
 	}
 	if _, err := os.Stat(missing); !os.IsNotExist(err) {
 		t.Error("openTarget made a file where a partition node must be")
+	}
+
+	// A CHARACTER device is not a block device. Go sets os.ModeDevice for both, so
+	// a rule that tests only that bit writes the whole system partition into
+	// /dev/null and reports success.
+	for _, path := range []string{"/dev/null", "/dev/zero"} {
+		if _, err := os.Stat(path); err != nil {
+			continue
+		}
+		f, err := openTarget(path)
+		if err == nil {
+			f.Close()
+			t.Errorf("openTarget took %s, which is a character device", path)
+			continue
+		}
+		if !strings.Contains(err.Error(), "is not a block device") {
+			t.Errorf("the refusal of %s is %q and must name the reason", path, err)
+		}
+	}
+}
+
+// The rule must be the real rule when the package starts. A test replaces the
+// variable and puts it back, and a test that forgot to put it back would leave
+// every later test with no rule at all. This test fails in that case.
+func TestTheBlockDeviceRuleIsTheRealOneByDefault(t *testing.T) {
+	if reflect.ValueOf(isBlockDevice).Pointer() != reflect.ValueOf(realIsBlockDevice).Pointer() {
+		t.Fatal("isBlockDevice is not realIsBlockDevice; a test left its own rule in place")
 	}
 }

@@ -60,8 +60,18 @@ var isBlockDevice = realIsBlockDevice
 
 // realIsBlockDevice is the rule that runs on a device. It is a Linux rule: another
 // system cannot make a device node, so there is nothing to test against there.
+//
+// Go sets os.ModeDevice for a BLOCK node and for a CHARACTER node. A test of that
+// bit alone therefore takes /dev/null and /dev/zero: the clone would write a whole
+// partition into a sink, Sync would answer nothing, and the install would report
+// success on a target that holds nothing. A block device has ModeDevice set and
+// ModeCharDevice clear.
 func realIsBlockDevice(path string, info os.FileInfo) error {
-	if runtime.GOOS != "linux" || info.Mode()&os.ModeDevice != 0 {
+	if runtime.GOOS != "linux" {
+		return nil
+	}
+	mode := info.Mode()
+	if mode&os.ModeDevice != 0 && mode&os.ModeCharDevice == 0 {
 		return nil
 	}
 	return fmt.Errorf("%s is not a block device", path)

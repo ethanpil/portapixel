@@ -61,6 +61,46 @@ type State struct {
 	// BadReleases are the releases that failed their health gate. The updater
 	// never tries them again.
 	BadReleases []string `json:"bad_releases,omitempty"`
+
+	// Reboots are the times of the last reboots that the watchdog ladder asked for
+	// (plan 3.3 rung 4). A reboot clears everything in RAM, so the count of a loop
+	// has to survive one.
+	Reboots []time.Time `json:"reboots,omitempty"`
+}
+
+// The reboot loop guard of rung 4 (plan 3.3). MaxReboots is how many watchdog
+// reboots inside RebootWindow make a loop, and MaxRebootLog is how many times the
+// state file keeps.
+//
+// Four browser restarts in an hour give one reboot, so three reboots in an hour is
+// a device that comes up and fails again. It stops asking for anything automatic
+// and shows its state, which is what a person needs to see.
+const (
+	MaxReboots   = 3
+	RebootWindow = time.Hour
+	MaxRebootLog = 10
+)
+
+// MarkReboot records a reboot that the watchdog ladder asked for. It keeps the
+// newest MaxRebootLog times.
+func (s *State) MarkReboot(now time.Time) {
+	s.Reboots = append(s.Reboots, now.UTC())
+	if len(s.Reboots) > MaxRebootLog {
+		s.Reboots = s.Reboots[len(s.Reboots)-MaxRebootLog:]
+	}
+}
+
+// RebootLoop reports if this device rebooted too often to trust an automatic
+// action, and gives the number of reboots inside the window.
+func (s State) RebootLoop(now time.Time) (int, bool) {
+	cut := now.Add(-RebootWindow)
+	n := 0
+	for _, t := range s.Reboots {
+		if t.After(cut) {
+			n++
+		}
+	}
+	return n, n >= MaxReboots
 }
 
 // MaxCommands is how many executed command IDs the state keeps. The server stops

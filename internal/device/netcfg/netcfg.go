@@ -150,13 +150,20 @@ func Slug(name string) string {
 // name.
 func MDNSName(cfg config.Config, deviceID string) string {
 	if strings.TrimSpace(cfg.Device.Name) == DefaultName {
-		last4 := deviceID
-		if len(last4) > 4 {
-			last4 = last4[len(last4)-4:]
-		}
-		return "portapixel-" + strings.ToLower(last4) + ".local"
+		return FactoryMDNSName(deviceID)
 	}
 	return Slug(cfg.Device.Name) + ".local"
+}
+
+// FactoryMDNSName is portapixel-<last4 of the device ID>.local. It is unique by
+// construction, so it is the fallback when another device on the network already
+// answers for the chosen name (D20).
+func FactoryMDNSName(deviceID string) string {
+	last4 := deviceID
+	if len(last4) > 4 {
+		last4 = last4[len(last4)-4:]
+	}
+	return "portapixel-" + strings.ToLower(last4) + ".local"
 }
 
 // Write puts every rendered file under root. root is "" or "/" on a device and a
