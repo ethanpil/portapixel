@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ethanpil/portapixel/internal/updater"
 	"github.com/ethanpil/portapixel/internal/version"
 )
 
@@ -68,7 +67,7 @@ func main() {
 	case "install-to-disk":
 		os.Exit(installToDiskCommand(args))
 	case "version":
-		os.Exit(versionCommand(args))
+		os.Exit(version.Command("portapixeld", args, os.Stdout, os.Stderr))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -79,29 +78,9 @@ func main() {
 	}
 }
 
-// versionCommand prints the build identity.
-//
-// The line with no flag is for a person and its shape never changes:
-// "portapixeld <version> <arch>". "--json" prints the machine-readable form that
-// internal/updater reads before it installs a release. A program must never take
-// a field of the human line by its position: the first updater took the last
-// field and compared the processor name with the release name.
-func versionCommand(args []string) int {
-	if len(args) == 1 && args[0] == "--json" {
-		info := updater.BinaryInfo{Name: "portapixeld", Version: version.Version, Arch: version.Arch()}
-		data, err := info.JSON()
-		if err != nil {
-			return fail("cannot say which version this build is: %v", err)
-		}
-		os.Stdout.Write(data)
-		return 0
-	}
-	if len(args) > 0 {
-		return fail("version takes no argument but --json")
-	}
-	fmt.Printf("portapixeld %s %s\n", version.Version, version.Arch())
-	return 0
-}
+// versionCommand prints the build identity. internal/version owns both forms of
+// the answer, and internal/updater reads the machine-readable one, so the writer
+// and the reader cannot drift apart. The same function serves portapixel-server.
 
 func usage() {
 	fmt.Fprint(os.Stderr, `portapixeld -- the PortaPixel device daemon

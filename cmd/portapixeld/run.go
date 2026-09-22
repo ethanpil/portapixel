@@ -37,6 +37,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/power"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
+	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
@@ -132,8 +133,6 @@ type daemon struct {
 	hostList []string
 	// clockOK is the last answer of the clock probe.
 	clockOK bool
-	// markerDone is true after the health marker of this release was written.
-	markerDone bool
 }
 
 // runCommand is the "run" subcommand: the daemon.
@@ -167,7 +166,15 @@ func runCommand(args []string) int {
 // something that the network or the media partition does: a device must come up
 // and report its own faults (D38, plan 3.3).
 func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot string) (*daemon, error) {
-	for _, dir := range []string{p.state, p.run, filepath.Join(p.releases, "health")} {
+	// The health directory under the run directory holds the marker of this boot.
+	// The one under the release root holds the .bad markers of the gate, which must
+	// survive a reboot (see internal/updater/doc.go).
+	for _, dir := range []string{
+		p.state,
+		p.run,
+		filepath.Join(p.run, updater.HealthDir),
+		filepath.Join(p.releases, updater.HealthDir),
+	} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("make %s: %w", dir, err)
 		}
@@ -279,9 +286,12 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 	// 9. The mDNS announcement (D20). It needs the port, so it comes after it.
 	d.announce = mdns.New(mdns.Options{
 		Name: func() string { return netcfg.MDNSName(d.config(), d.id.DeviceID) },
-		IPs:  health.LocalIPs,
-		Port: d.port,
-		Log:  d.log,
+		// The factory name is unique by construction, so it is the fallback when
+		// another device on the network already answers for the chosen name (D20).
+		Fallback: func() string { return netcfg.FactoryMDNSName(d.id.DeviceID) },
+		IPs:      health.LocalIPs,
+		Port:     d.port,
+		Log:      d.log,
 	})
 
 	// 10. The updater. CheckRollback runs now, before anything serves: the health
@@ -296,9 +306,17 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		Restart:        restartService,
 		Log:            updater.Logger(d.log),
 		Now:            d.localNow,
-		Auto:           func() bool { return d.config().Updates.Auto },
-		ApplyMinute:    d.applyMinute,
-		SourceKind:     d.updateSourceKind,
+		// A device in a reboot loop stops every automatic action (plan 3.3, rung 4).
+		// An update that installs itself on a box that cannot come up would take the
+		// one release that works away from it.
+		Auto: func() bool {
+			if _, loop := d.deviceState().RebootLoop(time.Now()); loop {
+				return false
+			}
+			return d.config().Updates.Auto
+		},
+		ApplyMinute: d.applyMinute,
+		SourceKind:  d.updateSourceKind,
 	})
 	d.update.CheckRollback()
 
@@ -325,7 +343,10 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		State:      d.deviceState,
 		SaveState:  d.updateState,
 		SaveServer: d.saveServer,
-		Status:     func() manifest.Status { return d.status(false) },
+		// The fleet server holds a device token and its dashboard shows the whole
+		// report, so a heartbeat is trusted. It is not loopback, so it never carries
+		// the pairing code.
+		Status: func() manifest.Status { return d.status(false, true) },
 		// Closures and not bound method values. A bound method value takes the
 		// receiver now. A block that moves above the one that makes d.sched would
 		// bind a nil pointer here, and the panic would come later, on a paired
@@ -387,7 +408,13 @@ func (d *daemon) saveServer(url, token string) error {
 	}
 	next.Server.URL = url
 	next.Server.Token = token
-	_, err := d.saveConfig(next)
+	// fromPairing. The two pairing fields are locked while the device is paired, and
+	// this IS the write of the pairing. POST /api/pair enrolls first and saves after,
+	// so the device was already paired when it reached this line and it refused its
+	// own write: the UI showed a failure for a pairing that worked, and the address
+	// and the token never reached portapixel.toml. A device that lost its token could
+	// then not enroll again by itself. DELETE /api/pair has the same shape.
+	_, err := d.writeConfig(next, true)
 	return err
 }
 
@@ -626,6 +653,10 @@ func (d *daemon) startInstall(device, confirm string) error {
 	if _, _, err := d.install.Check(device, confirm); err != nil {
 		return err
 	}
+	// The hub replays its last event to a new subscriber, and the admin UI opens the
+	// stream AFTER this call answers. Without this line the first event of install
+	// number two is the "done" of install number one.
+	d.installHub.Reset()
 	go d.install.Run(context.Background(), device, confirm, d.installHub.Send)
 	return nil
 }
@@ -766,9 +797,13 @@ func (d *daemon) displaySettings() browser.DisplaySettings {
 	return browser.DisplaySettings{Rotation: cfg.Display.Rotation, VideoMode: cfg.Display.VideoMode}
 }
 
-// status builds the health report. The pairing code goes to the device itself
-// only (D46).
-func (d *daemon) status(loopback bool) manifest.Status {
+// status builds the health report.
+//
+// loopback is the device itself, and it is the ONE caller that may see the
+// pairing code: the fallback screen shows it (D46). trusted is wider: the device
+// itself, an admin with a session, or the fleet server on a heartbeat. An
+// untrusted caller gets the report with the secrets taken out (health.redact).
+func (d *daemon) status(loopback, trusted bool) manifest.Status {
 	cfg := d.config()
 	state := d.deviceState()
 	browserState := d.sup.State()
@@ -814,6 +849,11 @@ func (d *daemon) status(loopback bool) manifest.Status {
 		ClockSynced:    d.clockSynced(),
 		Problems:       problems,
 		Update:         d.update.State(),
+		Trusted:        trusted,
+		MDNSNameTaken:  d.announce.NameTaken(),
+	}
+	if n, loop := state.RebootLoop(time.Now()); loop {
+		in.RebootLoops = n
 	}
 	if loopback {
 		in.PairingCode = state.PairingCode
@@ -920,6 +960,13 @@ func (d *daemon) watchSchedule(done <-chan struct{}) {
 
 // saveConfig checks, writes and applies a configuration from the API.
 func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
+	return d.writeConfig(incoming, false)
+}
+
+// writeConfig is the one write of the configuration. fromPairing says that the
+// caller is /api/pair itself, which is the ONLY caller that may change
+// server.url and server.token while the device is paired.
+func (d *daemon) writeConfig(incoming config.Config, fromPairing bool) (httpd.Applied, error) {
 	old := d.config()
 	next := config.MergeMasked(old, incoming)
 	// The identity comes from the hardware. An edit of device.id does nothing
@@ -939,7 +986,10 @@ func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
 	changes := config.ChangeClass(old, next)
 	if name, paired := d.sync.Managed(); paired {
 		for _, c := range changes {
-			if syncer.ManagedField(c.Field) || pairingField(c.Field) {
+			if syncer.ManagedField(c.Field) {
+				return httpd.Applied{}, httpd.ErrManaged{Server: name, Field: c.Field}
+			}
+			if pairingField(c.Field) && !fromPairing {
 				return httpd.Applied{}, httpd.ErrManaged{Server: name, Field: c.Field}
 			}
 		}
@@ -956,10 +1006,13 @@ func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
 	return httpd.Applied{Applied: highestClass(changes), Changes: changes}, nil
 }
 
-// pairingField reports if a configuration field belongs to the pairing. The two
-// values are written together by POST /api/pair and cleared together by DELETE
-// /api/pair, and nothing else may take them apart: a token beside the address of
-// another server is a token that the device sends to a stranger.
+// pairingField reports if a configuration field belongs to the pairing.
+//
+// The two values are written together by POST /api/pair and cleared together by
+// DELETE /api/pair, and nothing else may take them apart: a token beside the
+// address of another server is a token that the device sends to a stranger. The
+// lock is on PUT /api/config; the pairing route writes them through writeConfig
+// with fromPairing set.
 func pairingField(field string) bool {
 	return field == "server.url" || field == "server.token"
 }
@@ -1259,6 +1312,12 @@ func (d *daemon) rescan() library.Snapshot {
 // reboot reboots the device. The watchdog ladder and the admin UI both call it.
 func (d *daemon) reboot(reason string) {
 	d.log.Log("device.reboot", reason)
+	// Record the reboot BEFORE it happens. Everything in RAM goes away, so the count
+	// of a loop must be on the disk (plan 3.3, rung 4). This is not a steady state
+	// write: a device that reboots is not in its steady state.
+	if err := d.updateState(func(st *identity.State) { st.MarkReboot(time.Now()) }); err != nil {
+		d.log.Log("identity.state.write.fail", err.Error())
+	}
 	if runtime.GOOS != "linux" {
 		slog.Warn("a reboot was asked for, and this system is not the device", "reason", reason)
 		return
@@ -1276,6 +1335,14 @@ func setRootPassword(stateDir, password string) error {
 	if runtime.GOOS != "linux" {
 		return errors.New("this system is not the device; the root password cannot be changed here")
 	}
+	// chpasswd reads LINES of "user:password". A newline in the value therefore sets
+	// the password of a SECOND account. A value that carried a newline and then
+	// "kiosk:letmein" gave a login to the account that runs the browser, which is
+	// the one isolation boundary of the device (D43). A colon would cut the value at
+	// the wrong place.
+	if strings.IndexFunc(password, isControlOrColon) >= 0 {
+		return errors.New("the root password must hold no control character and no colon")
+	}
 	cmd := exec.Command("chpasswd")
 	cmd.Stdin = strings.NewReader("root:" + password + "\n")
 	out, err := cmd.CombinedOutput()
@@ -1286,38 +1353,37 @@ func setRootPassword(stateDir, password string) error {
 	return nil
 }
 
-// markerReassert is how often the daemon writes the health marker again while an
-// update waits for its answer. It is not one second: the marker goes to the flash,
-// and the gate looks for it every two seconds.
-//
-// It is a var so that a test can lower it.
-var markerReassert = 5 * time.Second
+// isControlOrColon reports the characters that chpasswd reads as structure and not
+// as part of a password.
+func isControlOrColon(r rune) bool {
+	return r < 0x20 || r == 0x7f || r == ':'
+}
 
-// writeHealthMarker writes <releases>/health/<version>.ok when the device is up.
-// The update gate watches for this file and rolls back without it (plan section
-// 15).
+// writeHealthMarker writes <run>/health/<version>.ok one time, when the device is
+// up. The update gate watches for this file and rolls back without it (plan
+// section 15). updater.MarkerPath names the file, so the daemon, the gate and the
+// tests cannot spell it three ways.
 //
 // "Up" is the HTTP server and the browser. A device that waits for a display is
 // up: a headless boot with the television off must not roll an update back.
 //
-// A write that fails is tried again at the next tick. One try was wrong. A moment
-// of no space, or a partition that is still read-only, leaves no marker. The
-// update gate then rolls back a release that works.
+// The marker lives in the run directory, which is a tmpfs. What it proves is
+// "the release that runs NOW came up", so its life is one boot, and a reboot
+// clears it by construction. A marker beside the releases on the flash had to be
+// removed again by somebody, and it cost the flash a write on a device that in
+// its steady state writes nothing at all (D2).
 //
-// The daemon then writes the marker AGAIN every few seconds, for as long as
-// .swap-pending names this release. One write was a race that rolled a good
-// release back: the gate cleared a stale marker after it started, so a daemon
-// that was quick lost its marker and the gate then waited for a file that nobody
-// would write again. health-gate.sh clears the stale marker in start_pre now,
-// before the daemon starts, and this loop is the second lock on the same door.
+// A write that fails is tried again at the next tick. One try was wrong: a moment
+// of no space leaves no marker, and the gate then rolls back a release that works.
+// The write is atomic, so the gate never reads a file of zero bytes.
 //
-// The loop ends when the pending marker goes away, which is what the gate does
-// when it passes. A device in its steady state writes nothing to the flash (D2).
+// Nothing rewrites the marker. The one stale case is a restart of the service with
+// no reboot, and the init script removes the file in start_pre, before this daemon
+// starts.
 func (d *daemon) writeHealthMarker(done <-chan struct{}) {
-	path := filepath.Join(d.paths.releases, updater.HealthDir, version.Version+updater.OKSuffix)
-	// The content names the run that wrote the marker. A marker of an earlier boot
-	// then reads differently from this one, so an operator who looks at the file can
-	// tell the two apart.
+	path := updater.MarkerPath(d.paths.run, version.Version)
+	// The content names the run that wrote the marker. An operator and the gate can
+	// then tell one run from another, and the gate puts the line in the ops log.
 	body := []byte(fmt.Sprintf("version=%s pid=%d start=%s\n",
 		version.Version, os.Getpid(), time.Now().UTC().Format(time.RFC3339)))
 
@@ -1325,17 +1391,15 @@ func (d *daemon) writeHealthMarker(done <-chan struct{}) {
 	defer t.Stop()
 
 	said := false
-	written := false
 	for {
 		select {
 		case <-done:
 			return
 		case <-t.C:
-			if !written && !d.sup.Started() {
+			if !d.sup.Started() {
 				continue
 			}
-			err := os.WriteFile(path, body, 0o644)
-			if err != nil {
+			if err := fsutil.WriteFileAtomic(path, body, 0o644); err != nil {
 				if !said {
 					// Once. A line at every second for an hour would empty the log.
 					said = true
@@ -1343,29 +1407,9 @@ func (d *daemon) writeHealthMarker(done <-chan struct{}) {
 				}
 				continue
 			}
-			if !written {
-				written = true
-				d.mu.Lock()
-				d.markerDone = true
-				d.mu.Unlock()
-				t.Reset(markerReassert)
-			}
-			if !d.swapPending() {
-				return
-			}
+			return
 		}
 	}
-}
-
-// swapPending reports if <releases>/.swap-pending names this release. It is the
-// one test that says if an update still waits for the health marker of this
-// daemon.
-func (d *daemon) swapPending() bool {
-	data, err := os.ReadFile(filepath.Join(d.paths.releases, updater.PendingFile))
-	if err != nil {
-		return false
-	}
-	return strings.TrimSpace(string(data)) == version.Version
 }
 
 // runtimeDir gives XDG_RUNTIME_DIR of the browser account. cage and Wayland need

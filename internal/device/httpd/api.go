@@ -28,7 +28,11 @@ const defaultOpslogLines = 200
 // No session: the fallback screen on the device and a person with a browser both
 // read it. The pairing code goes to the device itself only (D46).
 func (d Deps) getStatus(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, d.Status(httpguard.IsLoopback(r.RemoteAddr)))
+	// This route needs no session: the fallback screen and the login page read it
+	// (D46). An admin with a session still gets the whole report, so the change-me
+	// warnings and the fleet fields stay on the dashboard.
+	loopback := httpguard.IsLoopback(r.RemoteAddr)
+	writeJSON(w, http.StatusOK, d.Status(loopback, loopback || d.Sessions.Valid(r)))
 }
 
 // POST /api/login {"password": "..."}

@@ -115,10 +115,15 @@ func (f *fx) rebuild() {
 		PlayerSecret: secret,
 		Hosts:        func() []string { return []string{"localhost", "127.0.0.1", "lobby.local"} },
 		Password:     func() string { return f.cfg.Web.Password },
-		Status: func(loopback bool) manifest.Status {
+		Status: func(loopback, trusted bool) manifest.Status {
 			st := manifest.Status{DeviceID: "px-1a2b3c4d", Name: f.cfg.Device.Name}
 			if loopback {
 				st.PairingCode = "H7K2QX"
+			}
+			if trusted {
+				// The fixture stands in for health.redact: the whole report goes only
+				// to a caller that may see it.
+				st.ServerURL = "https://fleet.example.com"
 			}
 			return st
 		},
@@ -1324,6 +1329,43 @@ func TestInstallEventsReplayTheLastEvent(t *testing.T) {
 
 	if !strings.Contains(w.Body.String(), "event: done") {
 		t.Errorf("the stream did not replay the last event: %q", w.Body.String())
+	}
+}
+
+// Reset takes the last event away, so a SECOND run of the work does not open with
+// the answer of the first one.
+//
+// The done handler of the admin UI closes the stream and prints "The disk is ready.
+// Power the machine off and take the stick out". Replayed at the start of install
+// number two, that sentence tells a person to pull the stick while the device is
+// writing a partition table.
+func TestInstallEventsDoNotReplayTheRunBefore(t *testing.T) {
+	hub := NewReplayHub()
+	hub.Send("done", map[string]any{"ok": true})
+	hub.Reset()
+
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodGet, "/api/install-to-disk/events", nil)
+	ctx, cancel := context.WithCancel(r.Context())
+	cancel()
+	hub.serve(w, r.WithContext(ctx))
+
+	if strings.Contains(w.Body.String(), "event: done") {
+		t.Errorf("the stream replayed the done event of the run before: %q", w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), ": connected") {
+		t.Errorf("the stream did not open: %q", w.Body.String())
+	}
+
+	// The next real event still reaches a subscriber and is replayed.
+	hub.Send("progress", map[string]any{"percent": 3})
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodGet, "/api/install-to-disk/events", nil)
+	ctx, cancel = context.WithCancel(r.Context())
+	cancel()
+	hub.serve(w, r.WithContext(ctx))
+	if !strings.Contains(w.Body.String(), "event: progress") {
+		t.Errorf("the stream did not replay the new event: %q", w.Body.String())
 	}
 }
 

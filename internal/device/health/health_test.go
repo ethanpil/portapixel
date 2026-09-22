@@ -136,6 +136,9 @@ func TestWarnings(t *testing.T) {
 		ConfigFromShadow: true,
 		ClockSynced:      false,
 		Problems:         []string{`The playlist "bad" is skipped: bad playlist file`},
+		// The whole list goes to the device itself, to an admin with a session and to
+		// the fleet server. TestUntrustedReportHoldsNoSecret covers the other caller.
+		Trusted: true,
 	})
 
 	// The codes are the contract with the two admin UIs. The words are for a
@@ -285,5 +288,165 @@ func TestHosts(t *testing.T) {
 	factory := Hosts(config.Default(), "px-1a2b3c4d", 80)
 	if !strings.Contains(strings.Join(factory, " "), "portapixel-3c4d.local") {
 		t.Errorf("the allowlist has no mDNS name: %v", factory)
+	}
+}
+
+// /api/status needs no session, so an untrusted caller must not read a secret
+// from it.
+//
+// Two faults hid here. The two change-me warnings told a port sweep which box on
+// the LAN still answers to the password that the manual prints, so every hit was a
+// confirmed root shell and a confirmed admin session. And the URL of the item that
+// plays now went out whole, and a signage dashboard link very often carries a
+// share token in its query.
+func TestUntrustedReportHoldsNoSecret(t *testing.T) {
+	f := newRoots(t)
+	// The default root password: the same hash in both files.
+	f.write(t, filepath.Join(f.src.EtcRoot, "shadow"), "root:$6$abc$hash:19000:0:::::\nkiosk:!::0:::::\n")
+	f.write(t, filepath.Join(f.src.StateDir, RootHashFile), "$6$abc$hash\n")
+
+	in := Inputs{
+		Config:    config.Default(), // the default web password
+		DeviceID:  "px-1a2b3c4d",
+		Paired:    true,
+		ServerURL: "https://fleet.example.com/pp",
+		SyncError: "dial tcp 10.1.2.3:443: connect: no route to host",
+		NowPlaying: &manifest.NowPlaying{
+			Playlist: "lobby", Index: 2, Kind: "url",
+			Item: "https://dash.example.com/board?token=s3cr3t-share-token",
+		},
+	}
+
+	// The trusted view keeps everything. The dashboard and the fleet need it.
+	full := New(f.src).Status(withTrust(in, true))
+	if full.ServerURL == "" || full.SyncError == "" {
+		t.Fatal("the trusted report lost the fleet fields")
+	}
+	if !strings.Contains(full.NowPlaying.Item, "s3cr3t") {
+		t.Fatal("the trusted report lost the URL of the item")
+	}
+	if !hasCode(full.Warnings, manifest.WarnWebPassword) || !hasCode(full.Warnings, manifest.WarnRootPassword) {
+		t.Fatal("the trusted report lost a change-me warning")
+	}
+
+	got := New(f.src).Status(withTrust(in, false))
+	if got.ServerURL != "" {
+		t.Errorf("server_url = %q", got.ServerURL)
+	}
+	if got.SyncError != "" {
+		t.Errorf("sync_error = %q", got.SyncError)
+	}
+	if hasCode(got.Warnings, manifest.WarnWebPassword) {
+		t.Error("the report names a device whose web password is the default one")
+	}
+	if hasCode(got.Warnings, manifest.WarnRootPassword) {
+		t.Error("the report names a device whose root password is the default one")
+	}
+	if got.NowPlaying == nil {
+		t.Fatal("the report holds no now playing at all; the playlist and the kind may go out")
+	}
+	if got.NowPlaying.Item != "https://dash.example.com" {
+		t.Errorf("the item is %q, want the scheme and the host only", got.NowPlaying.Item)
+	}
+	// The trusted report must not have changed: redact works on a copy.
+	if !strings.Contains(in.NowPlaying.Item, "s3cr3t") {
+		t.Error("redact changed the value that the caller gave it")
+	}
+	// The warnings that name no secret stay, so a monitor still sees a real fault.
+	if !hasCode(got.Warnings, manifest.WarnTimezoneUTC) {
+		t.Error("an untrusted caller lost the warnings that hold no secret")
+	}
+	// The facts that a login page and a monitor need stay.
+	if got.DeviceID == "" || got.MDNSName == "" {
+		t.Error("the report lost the identity of the device")
+	}
+	if !got.Paired {
+		t.Error("the report no longer says that the device is paired")
+	}
+}
+
+// An item name that is not an address must never go out whole: we cannot tell what
+// is in it.
+func TestUntrustedReportHidesAnItemThatIsNotAnAddress(t *testing.T) {
+	f := newRoots(t)
+	in := Inputs{
+		Config:     config.Default(),
+		DeviceID:   "px-1a2b3c4d",
+		NowPlaying: &manifest.NowPlaying{Kind: "url", Item: "not an address at all"},
+	}
+	if got := New(f.src).Status(in).NowPlaying.Item; got != "url" {
+		t.Errorf("the item is %q, want %q", got, "url")
+	}
+	// A picture keeps its file name: the names of the slides are not a secret, and
+	// the dashboard of the fleet shows them.
+	in.NowPlaying = &manifest.NowPlaying{Kind: "image", Item: "welcome.jpg"}
+	if got := New(f.src).Status(in).NowPlaying.Item; got != "welcome.jpg" {
+		t.Errorf("the item is %q, want the file name", got)
+	}
+}
+
+func withTrust(in Inputs, trusted bool) Inputs {
+	in.Trusted = trusted
+	return in
+}
+
+func hasCode(list []manifest.Warning, code string) bool {
+	for _, w := range list {
+		if w.Code == code {
+			return true
+		}
+	}
+	return false
+}
+
+// A low tier device with no zram swap gets a warning (final review 20).
+//
+// Chromium needs more memory than the engine of the first design. CONTEXT.md
+// measured 512 MB with no swap as a restart loop, and 512 MB with zram as usable.
+// The operating system switches zram on; the daemon only reports the state, so a
+// person and the fleet dashboard can see a device that will not hold.
+func TestZramWarning(t *testing.T) {
+	tests := []struct {
+		name  string
+		ram   string
+		swaps string
+		want  bool
+	}{
+		{
+			name:  "low tier and no swap at all",
+			ram:   "MemTotal:         512000 kB\nMemAvailable:     200000 kB\n",
+			swaps: "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n",
+			want:  true,
+		},
+		{
+			name:  "low tier with zram",
+			ram:   "MemTotal:         512000 kB\nMemAvailable:     200000 kB\n",
+			swaps: "Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n/dev/zram0\tpartition\t524284\t0\t100\n",
+			want:  false,
+		},
+		{
+			name:  "low tier with swap on a disk, which is not zram",
+			ram:   "MemTotal:         512000 kB\nMemAvailable:     200000 kB\n",
+			swaps: "Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n/dev/sda4\tpartition\t524284\t0\t-2\n",
+			want:  true,
+		},
+		{
+			name:  "high tier needs no zram",
+			ram:   "MemTotal:        4014520 kB\nMemAvailable:    3012345 kB\n",
+			swaps: "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n",
+			want:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newRoots(t)
+			f.proc(t, "meminfo", tt.ram)
+			f.proc(t, "swaps", tt.swaps)
+
+			got := New(f.src).Status(Inputs{Config: config.Default(), DeviceID: "px-1a2b3c4d", Trusted: true})
+			if has := hasCode(got.Warnings, manifest.WarnZramOff); has != tt.want {
+				t.Errorf("the zram warning is %v, want %v (tier %q)", has, tt.want, got.Tier)
+			}
+		})
 	}
 }

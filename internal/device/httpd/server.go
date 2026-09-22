@@ -65,8 +65,10 @@ type Deps struct {
 	// Password gives the admin password of the configuration.
 	Password func() string
 	// Status builds the health report. loopback says if the caller is the device
-	// itself, which is the only caller that may see the pairing code.
-	Status func(loopback bool) manifest.Status
+	// itself, which is the only caller that may see the pairing code. trusted says
+	// if the caller may see the whole report: the device itself or an admin with a
+	// session. An untrusted caller gets it with the secrets taken out.
+	Status func(loopback, trusted bool) manifest.Status
 	// Config gives the masked configuration.
 	Config func() ConfigView
 	// SaveConfig checks, writes and applies a configuration.
@@ -250,6 +252,8 @@ func New(d Deps) http.Handler {
 	var h http.Handler = mux
 	h = httpguard.RequireHeader(h)
 	h = httpguard.HostAllowlist(d.Hosts)(h)
+	// Outermost, so that a refusal of the two guards above carries the headers too.
+	h = securityHeaders(h)
 	return h
 }
 

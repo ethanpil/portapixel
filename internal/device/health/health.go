@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -80,6 +81,26 @@ type Inputs struct {
 	// sentence for a person.
 	Problems []string
 	Update   manifest.UpdateState
+
+	// MDNSNameTaken is the name that another device on the network already answers
+	// for, or "". internal/device/mdns finds it with a probe before it announces
+	// (D20).
+	MDNSNameTaken string
+
+	// RebootLoops is how many times the watchdog ladder rebooted this device in the
+	// last hour, and 0 when that is under the limit. The device then stops every
+	// automatic action and shows the state (plan 3.3, rung 4).
+	RebootLoops int
+
+	// Trusted says that the caller has a right to the whole report: the device
+	// itself, an admin with a session, or the fleet server on a heartbeat.
+	//
+	// /api/status needs no session, because the fallback screen and the login page
+	// read it (D46). A few of its fields are therefore a gift to anybody on the
+	// LAN. The two change-me warnings name a box whose password is in the manual.
+	// The URL of the item that plays now is very often a dashboard link with a share
+	// token in it. redact takes those out for an untrusted caller.
+	Trusted bool
 }
 
 // The codec names and the picture heights that a codec report may hold. A report
@@ -207,7 +228,57 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 		out.LastSyncResult = "never"
 	}
 	out.Warnings = r.warnings(in)
+	if !in.Trusted {
+		redact(&out)
+	}
 	return out
+}
+
+// redact takes the fields that only a trusted caller may read out of the report.
+//
+// What stays: the name, the device ID, the addresses, the health numbers, the
+// state of the browser and of the screen, the playlist that plays and the
+// warnings that name no secret. That is what the login page and a monitor need.
+//
+// What goes:
+//   - the two change-me warnings. They tell a port sweep exactly which box still
+//     answers to the password that the manual prints (D22, D23).
+//   - the address of the fleet server and the text of a sync fault. The two draw
+//     the map of the site and name its internal hosts.
+//   - the URL of a url item. A signage dashboard link very often carries a share
+//     token in its query, and the whole value would go to any caller while the
+//     item is on the screen. The scheme and the host stay, so a person can still
+//     see which site is up.
+func redact(out *manifest.Status) {
+	kept := out.Warnings[:0]
+	for _, w := range out.Warnings {
+		if w.Code == manifest.WarnWebPassword || w.Code == manifest.WarnRootPassword {
+			continue
+		}
+		kept = append(kept, w)
+	}
+	out.Warnings = kept
+
+	out.ServerURL = ""
+	out.SyncError = ""
+
+	if out.NowPlaying != nil && out.NowPlaying.Kind == "url" {
+		short := *out.NowPlaying
+		short.Item = urlOrigin(short.Item)
+		out.NowPlaying = &short
+	}
+}
+
+// urlOrigin gives the scheme and the host of an address and drops the path and
+// the query, which is where a share token lives. A value that is not an address
+// becomes the one word "url", because a name that we cannot read may hold
+// anything.
+func urlOrigin(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return "url"
+	}
+	return u.Scheme + "://" + u.Host
 }
 
 // warnings gives the loud messages of the dashboard and the fallback screen.
@@ -247,6 +318,21 @@ func (r *Reporter) warnings(in Inputs) []manifest.Warning {
 	if in.ServerInsecure {
 		add(manifest.WarnServerInsecure, "The server address starts with http:// and it is not on this network. The device token goes over the internet in clear text. Use https://.")
 	}
+	if in.RebootLoops > 0 {
+		add(manifest.WarnRebootLoop, "This device rebooted "+strconv.Itoa(in.RebootLoops)+
+			" times in the last hour and did not come up. Automatic updates are off until it does. Look at the event log.")
+	}
+	if in.MDNSNameTaken != "" {
+		add(manifest.WarnMDNSNameTaken, "Another device on this network already answers for "+
+			in.MDNSNameTaken+". This device announces its factory name instead. Give the two devices different names.")
+	}
+	// A low tier device needs zram swap. Chromium uses more memory than the engine of
+	// the first design, and a low tier device with no swap restarts the browser again
+	// and again. The OS layer switches zram on; this is the report of it.
+	if r.Tier(in.Config) == "low" && !r.zramActive() {
+		add(manifest.WarnZramOff, "This device has less than 1 GB of memory and no zram swap. "+
+			"The browser may restart again and again. Switch zram on in the operating system.")
+	}
 	if in.Update.State == manifest.UpdateRolledBack {
 		add(manifest.WarnUpdateRolledBack, "An update did not come up and the device went back to "+in.Update.Current+". It never tries that release again.")
 	}
@@ -254,6 +340,22 @@ func (r *Reporter) warnings(in Inputs) []manifest.Warning {
 		add(manifest.WarnPlaylistProblem, p)
 	}
 	return out
+}
+
+// zramActive reports if a zram device gives this machine swap space.
+//
+// /proc/swaps names every swap area that the kernel uses. A device that is not
+// there gives no swap, whatever /sys/block holds: the zram-init package can be
+// installed and its service switched off. A machine with no /proc/swaps at all is a
+// development machine, and that answers false, so the warning appears only where the
+// tier is low.
+func (r *Reporter) zramActive() bool {
+	for _, line := range strings.Split(readFile(filepath.Join(r.src.ProcRoot, "swaps")), "\n") {
+		if strings.HasPrefix(line, "/dev/zram") {
+			return true
+		}
+	}
+	return false
 }
 
 // rootPasswordIsDefault compares the hash in /etc/shadow with the hash that the

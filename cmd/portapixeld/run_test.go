@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -327,28 +328,31 @@ func TestPairingFields(t *testing.T) {
 
 // The daemon side of the health gate protocol (plan section 15).
 //
-// One write of the marker was a race that rolled a GOOD release back: the gate
-// removed a stale marker after both had started, so a daemon that was quick lost
-// its marker and nothing wrote it again. health-gate.sh removes a stale marker in
-// start_pre now, and the daemon writes the marker again every few seconds for as
-// long as .swap-pending names its release.
-func TestHealthMarkerComesBackWhileASwapIsPending(t *testing.T) {
-	old := markerReassert
-	markerReassert = 50 * time.Millisecond
-	defer func() { markerReassert = old }()
-
-	releases, state := t.TempDir(), t.TempDir()
-	if err := os.MkdirAll(filepath.Join(releases, updater.HealthDir), 0o755); err != nil {
-		t.Fatal(err)
+// The marker goes into the RUN directory, which is a tmpfs, and the daemon writes
+// it ONE time. What it proves is "the release that runs now came up", so its life
+// is one boot. A marker beside the releases cost the flash a write every few
+// seconds for as long as .swap-pending stayed, and health-gate.sh has exits that
+// leave that file in place for ever.
+func TestHealthMarkerGoesToTheRunDirectoryOneTime(t *testing.T) {
+	releases, state, run := t.TempDir(), t.TempDir(), t.TempDir()
+	for _, dir := range []string{
+		filepath.Join(releases, updater.HealthDir),
+		filepath.Join(run, updater.HealthDir),
+	} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
+	// A pending swap: the gate waits for the marker of this release. Even then the
+	// daemon writes one time and stops.
 	pending := filepath.Join(releases, updater.PendingFile)
-	marker := filepath.Join(releases, updater.HealthDir, version.Version+updater.OKSuffix)
 	if err := os.WriteFile(pending, []byte(version.Version+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	marker := updater.MarkerPath(run, version.Version)
 
 	d := &daemon{
-		paths: paths{releases: releases, state: state},
+		paths: paths{releases: releases, state: state, run: run},
 		log:   opslog.New(filepath.Join(state, opsLogName)),
 	}
 	// A daemon with no browser counts as up, which is what --browser-cmd none does.
@@ -362,49 +366,50 @@ func TestHealthMarkerComesBackWhileASwapIsPending(t *testing.T) {
 	go func() { d.writeHealthMarker(done); close(stopped) }()
 	defer close(done)
 
-	body := waitForMarker(t, marker, "the first health marker")
-	// The content names the run that wrote it, so a marker of an earlier boot can
-	// be told apart from this one.
+	body := waitForMarker(t, marker, "the health marker in the run directory")
+	// The content names the run that wrote it, so the gate can put the line in the
+	// ops log and an operator can tell one run from another.
 	for _, want := range []string{"version=" + version.Version, "pid=", "start="} {
 		if !strings.Contains(body, want) {
 			t.Errorf("the marker holds %q and must name %s", body, want)
 		}
 	}
 
-	// Anything at all takes the marker away. It must come back.
-	removeMarker(t, marker)
-	waitForMarker(t, marker, "the health marker again")
-
-	// The pending marker goes away, which is what the gate does when it passes.
-	// The daemon then stops writing: a device in its steady state writes nothing
-	// to the flash (D2).
-	if err := os.Remove(pending); err != nil {
-		t.Fatal(err)
-	}
+	// One write, and then the goroutine is finished. Nothing waits for the pending
+	// marker and nothing writes again.
 	select {
 	case <-stopped:
 	case <-time.After(10 * time.Second):
-		t.Fatal("the daemon still writes the health marker with no pending update")
+		t.Fatal("the daemon did not stop after it wrote the health marker")
 	}
-	removeMarker(t, marker)
-	time.Sleep(10 * markerReassert)
-	if _, err := os.Stat(marker); err == nil {
-		t.Error("the daemon wrote the health marker again after the update passed")
+
+	// Nothing of the daemon goes under the release root. The .bad marker of the gate
+	// is the only file there, and the gate writes it.
+	entries, err := os.ReadDir(filepath.Join(releases, updater.HealthDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Errorf("the daemon wrote %v under the release root, which is the flash", names)
 	}
 }
 
-// removeMarker takes the health marker away. It tries again for a moment: on
-// Windows a file that the daemon writes at this instant cannot be removed.
-func removeMarker(t *testing.T, path string) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		if err := os.Remove(path); err == nil {
-			return
-		} else if time.Now().After(deadline) {
-			t.Fatalf("cannot remove %s: %v", path, err)
+// The name of the marker comes from ONE function, and that function makes the
+// version normal. A build that carries the tag "v1.5.0" must write 1.5.0.ok,
+// because the updater names the release directory and .swap-pending that way. Two
+// names would roll a good release back and ban it for ever (final review 19).
+func TestHealthMarkerNameIsNormal(t *testing.T) {
+	run := filepath.Join("run")
+	for _, name := range []string{"1.5.0", "v1.5.0", "V1.5.0", " v1.5.0 "} {
+		got := updater.MarkerPath(run, name)
+		want := filepath.Join(run, updater.HealthDir, "1.5.0"+updater.OKSuffix)
+		if got != want {
+			t.Errorf("MarkerPath(%q) = %q, want %q", name, got, want)
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -420,4 +425,114 @@ func waitForMarker(t *testing.T, path, what string) string {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 	return ""
+}
+
+// chpasswd reads lines of "user:password", so a newline in the value sets the
+// password of a SECOND account.
+//
+// A value that carried a newline and then "kiosk:letmein" gave a login to the
+// account that runs the browser, which is the one isolation boundary of the device
+// (D43). The route needs an admin session, so this is an escalation inside a
+// privileged role; the local admin is still not meant to be able to set any system
+// account.
+func TestSetRootPasswordRefusesAControlCharacter(t *testing.T) {
+	for _, bad := range []string{
+		"good\nkiosk:attacker1",
+		"good\rkiosk:attacker1",
+		"root:two",
+		"tab\there",
+		"null\x00byte",
+	} {
+		err := setRootPassword(t.TempDir(), bad)
+		if err == nil {
+			t.Errorf("setRootPassword took %q", bad)
+			continue
+		}
+		if !strings.Contains(err.Error(), "control character") {
+			// On a machine that is not the device the first refusal wins, and that is
+			// correct: the value never reaches chpasswd either way.
+			if !strings.Contains(err.Error(), "not the device") {
+				t.Errorf("the refusal of %q is %q", bad, err)
+			}
+		}
+	}
+	// A password with an odd but harmless character is not refused by this rule.
+	if err := setRootPassword(t.TempDir(), "a good one: with spaces"); err != nil {
+		if !strings.Contains(err.Error(), "not the device") && !strings.Contains(err.Error(), "colon") {
+			t.Errorf("a good password was refused: %v", err)
+		}
+	}
+}
+
+// The pairing route writes its own two fields, and nothing else may.
+//
+// POST /api/pair enrolls first and saves after, so the device is already paired
+// when the save runs. The save then tripped the very guard that protects those two
+// fields: the route answered a fault for a pairing that WORKED, and [server] url
+// and token never reached portapixel.toml. A device that lost its token could not
+// enroll again by itself. DELETE /api/pair has the same shape.
+func TestThePairingWriteIsNotRefusedByItsOwnGuard(t *testing.T) {
+	media, state := t.TempDir(), t.TempDir()
+	start := config.Default()
+	if err := config.Save(media, state, start); err != nil {
+		t.Fatal(err)
+	}
+
+	d := &daemon{
+		paths: paths{media: media, state: state},
+		log:   opslog.New(filepath.Join(state, opsLogName)),
+		cfg:   start,
+		hub:   httpd.NewHub(),
+	}
+	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
+	d.sup = browser.New(browser.Options{
+		Command: browser.CommandConfig{Override: browser.DisableCommand},
+		Log:     d.log,
+	})
+	// A device that IS paired. This is the state at the moment that Pair saves.
+	d.sync = syncer.New(syncer.Options{
+		Config: d.config,
+		State: func() identity.State {
+			return identity.State{DeviceToken: "the device token", ServerURL: "https://fleet.example.com"}
+		},
+	})
+
+	if err := d.saveServer("https://fleet.example.com", "the enrollment token"); err != nil {
+		t.Fatalf("the pairing could not write its own fields: %v", err)
+	}
+	if got := d.config().Server.URL; got != "https://fleet.example.com" {
+		t.Errorf("the running configuration holds the address %q", got)
+	}
+	data, err := os.ReadFile(config.MediaPath(media))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "https://fleet.example.com") {
+		t.Errorf("portapixel.toml does not hold the server address:\n%s", data)
+	}
+	if !strings.Contains(string(data), "the enrollment token") {
+		t.Errorf("portapixel.toml does not hold the token:\n%s", data)
+	}
+
+	// A settings save is still refused for the same two fields.
+	next := d.config()
+	next.Server.URL = "https://somebody-else.example.com"
+	if _, err := d.saveConfig(next); err == nil {
+		t.Fatal("PUT /api/config changed the server address of a paired device")
+	}
+	var managed httpd.ErrManaged
+	if _, err := d.saveConfig(next); !errors.As(err, &managed) {
+		t.Fatalf("the refusal is %v, want ErrManaged", err)
+	}
+	if managed.Field != "server.url" {
+		t.Errorf("the refusal names the field %q", managed.Field)
+	}
+
+	// And an unpair, which writes the two empty values from the same path, works.
+	if err := d.saveServer("", ""); err != nil {
+		t.Fatalf("the unpair could not clear its own fields: %v", err)
+	}
+	if got := d.config().Server.URL; got != "" {
+		t.Errorf("the server address is still %q after an unpair", got)
+	}
 }

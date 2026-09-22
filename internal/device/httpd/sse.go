@@ -84,6 +84,21 @@ func (h *Hub) Close() {
 	close(h.closed)
 }
 
+// Reset forgets the event that a replay hub holds. A caller that starts a new run
+// of work calls it BEFORE the work starts.
+//
+// Without it the "done" event of the install before was the first thing that a new
+// subscriber received. The admin UI sends the POST, then opens the stream, and its
+// done handler closes the stream and prints "The disk is ready. Power the machine
+// off and take the stick out" — while the second install was writing the partition
+// table. A person who acts on that message pulls the stick in the middle of a real
+// write.
+func (h *Hub) Reset() {
+	h.mu.Lock()
+	h.last = sseEvent{}
+	h.mu.Unlock()
+}
+
 // Send gives one event to every player that listens. data may be nil.
 func (h *Hub) Send(name string, data any) {
 	payload := []byte("{}")

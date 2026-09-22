@@ -24,19 +24,19 @@ func (d Deps) postUpdateCheck(w http.ResponseWriter, r *http.Request) {
 	rel, err := d.CheckUpdate(r.Context())
 	switch {
 	case errors.Is(err, updater.ErrNoRelease):
-		writeJSON(w, http.StatusOK, map[string]any{"current": d.Status(true).Version})
+		writeJSON(w, http.StatusOK, map[string]any{"current": d.Status(true, true).Version})
 	case errors.Is(err, updater.ErrNoKey):
 		// A development build. It is not a fault of the request, so the answer is a
 		// sentence and not a 500.
 		writeJSON(w, http.StatusOK, map[string]any{
-			"current": d.Status(true).Version,
+			"current": d.Status(true, true).Version,
 			"blocked": err.Error(),
 		})
 	case err != nil:
 		writeError(w, http.StatusBadGateway, err.Error())
 	default:
 		writeJSON(w, http.StatusOK, map[string]any{
-			"current":   d.Status(true).Version,
+			"current":   d.Status(true, true).Version,
 			"available": rel.Version,
 			"source":    rel.Source,
 			"notes":     rel.Notes,

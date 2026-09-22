@@ -4,6 +4,11 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="color-scheme" content="dark">
+<!-- The address of this page carries the player secret in ?k=. A referrer would
+     give that secret to the page of a URL item. The daemon sends the header
+     Referrer-Policy: no-referrer on every answer; this line makes the page carry
+     the same rule itself (D46). -->
+<meta name="referrer" content="no-referrer">
 <title>PortaPixel player</title>
 <!-- The design tokens and the local IBM Plex fonts come from the one shared
      stylesheet. player.css comes after it and pins the player look. -->
