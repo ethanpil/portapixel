@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix 13 findings of the final server review (d2faa1d to ec84667). A waiting enrollment is keyed on the hardware ID too. Command IDs never come back. Each answer has security headers, and a stored object is inert. Note: 7e2494d also holds the media store files and ec84667 holds the server tests; the two titles are wrong.
 - Fix the faults that the first CI run found (760ef9d to 872455a). An update reads the version from `version --json`. The health gate cannot remove a good marker. The on-box installer adds no kernel. The tree does not build at commit a0fa2fc: it uses a type that the next commit, ff36380, adds. Skip a0fa2fc in a bisect.
 - Add the lint and release workflows for GitHub Actions and `docs/RELEASING.md` (43d3553, f983b59, c09fe86). The aarch64 image and the Docker image build for the first time.
 - Read the list of fleet fields from the daemon in the device admin UI (b4c17ea).
