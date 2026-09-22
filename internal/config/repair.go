@@ -82,6 +82,15 @@ func Repair(cfg Config) (Config, Errors) {
 		case field == "playback.nightly_restart":
 			out.Playback.NightlyRestart = def.Playback.NightlyRestart
 
+		// Each watchdog value stands alone. A bad timeout must not cost the reboot
+		// step beside it: half of the ladder is still a ladder.
+		case field == "watchdog.heartbeat_timeout":
+			out.Watchdog.HeartbeatTimeout = def.Watchdog.HeartbeatTimeout
+		case field == "watchdog.restarts_before_reboot":
+			out.Watchdog.RestartsBeforeReboot = def.Watchdog.RestartsBeforeReboot
+		case field == "watchdog.restart_window":
+			out.Watchdog.RestartWindow = def.Watchdog.RestartWindow
+
 		case strings.HasPrefix(field, "schedule["):
 			if i, ok := ruleIndex(field); ok {
 				dropRule[i] = true

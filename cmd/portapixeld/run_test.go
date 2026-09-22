@@ -10,8 +10,10 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/browser"
+	"github.com/ethanpil/portapixel/internal/device/health"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
 	"github.com/ethanpil/portapixel/internal/device/identity"
+	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/opslog"
@@ -195,6 +197,91 @@ func TestReloadConfigKeepsTheRunningSettings(t *testing.T) {
 	}
 	if w := d.configView().Warning; w != "" {
 		t.Errorf("a good file left the warning %q", w)
+	}
+}
+
+// A paired device plays only what its fleet server sends (plan section 13).
+//
+// Two faults meet in this one path. A local playlist with the name of a fleet
+// playlist came first in the scan, so it shadowed the fleet playlist and the
+// screen showed the local content. And a fleet manifest with no default playlist
+// fell back to playback.default_playlist, so an empty fleet default showed local
+// content as well. The answer now is the fallback screen (D18).
+func TestPairedDeviceShowsOnlyFleetContent(t *testing.T) {
+	tests := []struct {
+		name string
+		// paired says if the device has a fleet pairing.
+		paired bool
+		// fleetDefault is the default playlist of the manifest.
+		fleetDefault string
+		wantFallback bool
+		wantTitle    string
+	}{
+		{name: "unpaired: the local playlist plays", wantTitle: "Local lobby"},
+		{name: "paired: the fleet playlist of the name plays", paired: true, fleetDefault: "lobby", wantTitle: "Fleet lobby"},
+		{name: "paired with no fleet default: nothing plays", paired: true, fleetDefault: "", wantFallback: true},
+		{name: "paired with a fleet default that is not there", paired: true, fleetDefault: "gone", wantFallback: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			media, state := t.TempDir(), t.TempDir()
+			writePlaylistDir(t, media, "lobby", "Local lobby", "local.jpg")
+			writePlaylistDir(t, media, filepath.Join("_fleet", "lobby"), "Fleet lobby", "fleet.jpg")
+
+			cfg := config.Default()
+			cfg.Playback.DefaultPlaylist = "lobby"
+			d := &daemon{
+				paths:    paths{media: media, state: state},
+				log:      opslog.New(filepath.Join(state, opsLogName)),
+				cfg:      cfg,
+				hub:      httpd.NewHub(),
+				reporter: health.New(health.Sources{MediaRoot: media, StateDir: state}),
+			}
+			d.lib = library.New(library.Options{
+				MediaRoot: media,
+				StateDir:  state,
+				Log:       d.log,
+				Paired:    func() bool { return tt.paired },
+			})
+			d.lib.Rescan()
+			d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
+			if tt.paired {
+				d.sched.SetFleetRules(tt.fleetDefault, nil, nil)
+			} else {
+				d.sched.Evaluate()
+			}
+
+			m := d.playerManifest()
+			if m.Fallback != tt.wantFallback {
+				t.Fatalf("fallback = %v, want %v (active %q)", m.Fallback, tt.wantFallback, d.sched.Active())
+			}
+			if tt.wantFallback {
+				if m.Playlist != nil {
+					t.Fatalf("the fallback manifest holds a playlist: %+v", m.Playlist)
+				}
+				return
+			}
+			if m.Playlist.Title != tt.wantTitle {
+				t.Fatalf("the player got %q, want %q", m.Playlist.Title, tt.wantTitle)
+			}
+		})
+	}
+}
+
+// writePlaylistDir makes one playlist directory with one image in it.
+func writePlaylistDir(t *testing.T, media, dir, title, file string) {
+	t.Helper()
+	full := filepath.Join(media, dir)
+	if err := os.MkdirAll(full, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	toml := "[playlist]\nname = \"" + title + "\"\n[[item]]\nfile = \"" + file + "\"\n"
+	if err := os.WriteFile(filepath.Join(full, "playlist.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(full, file), []byte("an image"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

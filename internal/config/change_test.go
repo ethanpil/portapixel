@@ -61,6 +61,25 @@ func TestChangeClass(t *testing.T) {
 			wantField: "schedule", wantClass: Live,
 		},
 
+		// The supervisor reads the watchdog values at each check, so every one of
+		// them is live (D30).
+		{name: "watchdog off", change: func(c *Config) { c.Watchdog.Enabled = false }, wantField: "watchdog.enabled", wantClass: Live},
+		{
+			name:      "heartbeat timeout",
+			change:    func(c *Config) { c.Watchdog.HeartbeatTimeout = 60 },
+			wantField: "watchdog.heartbeat_timeout", wantClass: Live,
+		},
+		{
+			name:      "restarts before a reboot",
+			change:    func(c *Config) { c.Watchdog.RestartsBeforeReboot = 0 },
+			wantField: "watchdog.restarts_before_reboot", wantClass: Live,
+		},
+		{
+			name:      "restart window",
+			change:    func(c *Config) { c.Watchdog.RestartWindow = 30 },
+			wantField: "watchdog.restart_window", wantClass: Live,
+		},
+
 		{name: "server url", change: func(c *Config) { c.Server.URL = "https://a" }, wantField: "server.url", wantClass: Live},
 		{name: "server token", change: func(c *Config) { c.Server.Token = "t" }, wantField: "server.token", wantClass: Live},
 		{name: "poll seconds", change: func(c *Config) { c.Server.PollSeconds = 30 }, wantField: "server.poll_seconds", wantClass: Live},

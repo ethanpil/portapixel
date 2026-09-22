@@ -70,8 +70,20 @@ night.
 
 | Key | Default | Values | What it does | Takes effect |
 |---|---|---|---|---|
-| `output` | `"auto"` | `auto`, `hdmi`, `analog`, `usb` | Which audio output the browser uses. `auto` tries HDMI first. | browser |
+| `output` | `"auto"` | `auto`, `hdmi`, `analog`, `usb` | Which sound card ALSA uses. `auto` leaves the choice to ALSA. | browser |
 | `volume` | `100` | `0` to `100` | The output volume. | live |
+
+The device picks the card by a name pattern in `/proc/asound/cards`: `hdmi`
+takes the first card whose name holds HDMI, `usb` the first that holds USB,
+and `analog` the first that holds neither. It writes the number of that card
+into `/etc/asound.conf`. `auto` writes no file, and ALSA then uses card 0.
+
+The browser reads the default card when it starts, so a change of `output`
+restarts the browser. The volume goes to the ALSA mixer at once.
+
+**Not proven on hardware.** No real sound card has answered this yet. When
+the mixer refuses the volume, the status carries the warning
+`audio-apply-failed` and the event log names the control that refused.
 
 ## `[playback]`
 
@@ -83,6 +95,25 @@ night.
 | `image_duration` | `10` | `1` or more | Seconds that an image with no duration of its own stays on the screen. | live |
 | `shuffle` | `false` | `true`, `false` | Plays each playlist's items in a new order each time it starts. | live |
 | `nightly_restart` | `"03:30"` | `HH:MM`, or empty to turn it off | The daily browser restart, which clears memory that a long-running browser has collected. | live |
+
+## `[watchdog]`
+
+The recovery ladder of the browser (D30). The player reports in every 5
+seconds. Silence means that the page is dead, so the device restarts the
+browser. Restarts that repeat mean that a restart is not the answer, so the
+device reboots.
+
+| Key | Default | Values | What it does | Takes effect |
+|---|---|---|---|---|
+| `enabled` | `true` | `true`, `false` | `false` stops the whole ladder: a frozen page then stays on the screen until a person acts. A browser that dies still starts again. | live |
+| `heartbeat_timeout` | `30` | `10` to `600` seconds | The silence from the player that restarts the browser. | live |
+| `restarts_before_reboot` | `4` | `0` to `20` | How many browser restarts inside `restart_window` reboot the device. `0` means that the device never reboots on its own. | live |
+| `restart_window` | `60` | `1` to `1440` minutes | The length of that window. | live |
+
+The daily browser restart is not here: it is `playback.nightly_restart`,
+because it is a time of day and not a threshold. A restart that a person or
+the daily job asks for never counts toward the reboot step, and neither does
+a display that is not plugged in (D44).
 
 ## `[[schedule]]`
 

@@ -204,6 +204,14 @@ export function mount(main, ctx) {
   const cShuffle = toggle('Shuffle the items', 'A new order each time the playlist starts.');
   const cNightly = clock();
 
+  // Watchdog. The device watches the player and the browser, and it restarts or
+  // reboots when they stop (D30).
+  const cWatchdog = toggle('Watch the screen and recover on its own',
+    'Off means that a frozen page stays on the screen until somebody looks at it. Leave it on.');
+  const cHeartbeat = number({ min: '10', max: '600', step: '5' });
+  const cRestarts = number({ min: '0', max: '20', step: '1' });
+  const cWindow = number({ min: '1', max: '1440', step: '5' });
+
   // Server.
   const cPoll = number({ min: '10', max: '3600', step: '5' });
   const pairSlot = h('div');
@@ -340,6 +348,18 @@ export function mount(main, ctx) {
         ],
       }),
       card({
+        title: 'Watchdog',
+        body: [
+          cWatchdog,
+          field('watchdog.heartbeat_timeout', 'Restart the browser after this much silence (seconds)', cHeartbeat,
+            'The page reports in every 5 seconds. 30 seconds is six missed reports. 10 to 600.'),
+          h('div', { class: 'pp-fields' },
+            field('watchdog.restarts_before_reboot', 'Reboot after this many restarts', cRestarts),
+            field('watchdog.restart_window', 'Counted inside (minutes)', cWindow)),
+          h('div', { class: 'pp-help', text: 'When a browser restart does not help, the device reboots itself. Set the number of restarts to 0 and it never reboots on its own.' }),
+        ],
+      }),
+      card({
         title: 'Control server',
         body: [pairSlot, field('server.poll_seconds', 'Check in every (seconds) — used when the server names none', cPoll,
           'How often the device asks the server for work. The server usually names the interval, and its number wins; this one is the fallback. Ten seconds is the shortest it takes.')],
@@ -412,6 +432,12 @@ export function mount(main, ctx) {
     cShuffle.input.checked = !!cfg.playback.shuffle;
     cNightly.value = cfg.playback.nightly_restart || '';
 
+    const watchdog = cfg.watchdog || {};
+    cWatchdog.input.checked = watchdog.enabled !== false;
+    cHeartbeat.value = String(watchdog.heartbeat_timeout ?? 30);
+    cRestarts.value = String(watchdog.restarts_before_reboot ?? 4);
+    cWindow.value = String(watchdog.restart_window ?? 60);
+
     cPoll.value = String(cfg.server.poll_seconds ?? 60);
 
     cPort.value = String(cfg.web.port ?? 80);
@@ -466,6 +492,14 @@ export function mount(main, ctx) {
     next.playback.image_duration = Number(cImageDuration.value) || 0;
     next.playback.shuffle = cShuffle.input.checked;
     next.playback.nightly_restart = cNightly.value;
+
+    /* A daemon that is older than this page sends no [watchdog] table, and the
+       copy above then has no object to write into. */
+    next.watchdog = next.watchdog || {};
+    next.watchdog.enabled = cWatchdog.input.checked;
+    next.watchdog.heartbeat_timeout = Number(cHeartbeat.value) || 0;
+    next.watchdog.restarts_before_reboot = Number(cRestarts.value) || 0;
+    next.watchdog.restart_window = Number(cWindow.value) || 0;
 
     next.server.poll_seconds = Number(cPoll.value) || 0;
 

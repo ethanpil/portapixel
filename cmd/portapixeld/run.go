@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/config"
+	"github.com/ethanpil/portapixel/internal/device/audio"
 	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/health"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
@@ -99,6 +100,7 @@ type daemon struct {
 	sched    *scheduler.Scheduler
 	sup      *browser.Supervisor
 	screen   *power.Controller
+	audio    *audio.Applier
 	announce *mdns.Announcer
 	update   *updater.Manager
 	install  *installer.Installer
@@ -256,6 +258,7 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		Reboot:          d.reboot,
 		Grace:           func() { d.hub.Send(httpd.EventGrace, nil) },
 		NightlyRestart:  func() string { return d.config().Playback.NightlyRestart },
+		Watchdog:        d.watchdogSettings,
 		ScreenOffCovers: d.sched.ScreenOffCovers,
 		DRMRoot:         drmRoot,
 	})
@@ -270,6 +273,10 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		Browser:    d.sup,
 		Log:        d.log,
 	})
+
+	// 7a. The sound (D11). amixer talks to the mixer of the kernel, which belongs
+	// to root, and the ALSA file is in /etc. Both are the account of the daemon.
+	d.audio = audio.New(audio.Options{Run: rootRunner{}, Log: d.log})
 
 	// 8. The listen port. The flag wins, so that a development machine can use a
 	// port that needs no rights.
@@ -503,6 +510,10 @@ func (d *daemon) serve(listen string) int {
 	start(func() { d.screen.Run(done) })
 	// Nothing below may hold up the start. A device with no network plays what it
 	// has (plan 3.3).
+	//
+	// The sound is in this group as well: amixer runs a program, and a mixer that
+	// does not answer must not keep the first picture waiting (D11).
+	start(func() { d.audio.Apply(d.config().Audio) })
 	start(func() { d.announce.Run(done) })
 	// RunSource and not Run: a paired device follows the release that its server
 	// approves, and that value changes while the daemon runs (D28).
@@ -792,6 +803,19 @@ func (d *daemon) playerURL(resume int) string {
 	return url
 }
 
+// watchdogSettings gives the live thresholds of the recovery ladder (D30). The
+// supervisor asks at each check, so a save or a hand edit of [watchdog] takes
+// effect with no restart.
+func (d *daemon) watchdogSettings() browser.WatchdogSettings {
+	w := d.config().Watchdog
+	return browser.WatchdogSettings{
+		Enabled:              w.Enabled,
+		HeartbeatTimeout:     time.Duration(w.HeartbeatTimeout) * time.Second,
+		RestartWindow:        time.Duration(w.RestartWindow) * time.Minute,
+		RestartsBeforeReboot: w.RestartsBeforeReboot,
+	}
+}
+
 func (d *daemon) displaySettings() browser.DisplaySettings {
 	cfg := d.config()
 	return browser.DisplaySettings{Rotation: cfg.Display.Rotation, VideoMode: cfg.Display.VideoMode}
@@ -851,6 +875,9 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 		Update:         d.update.State(),
 		Trusted:        trusted,
 		MDNSNameTaken:  d.announce.NameTaken(),
+	}
+	if d.audio != nil {
+		in.AudioError = d.audio.Error()
 	}
 	if n, loop := state.RebootLoop(time.Now()); loop {
 		in.RebootLoops = n
@@ -1175,7 +1202,11 @@ func (d *daemon) adopt(cfg config.Config, fromShadow bool, warning, code string)
 func (d *daemon) applyChanges(changes []config.Change) {
 	browserRestart := false
 	tellPlayer := false
+	sound := false
 	for _, c := range changes {
+		if strings.HasPrefix(c.Field, "audio.") {
+			sound = true
+		}
 		switch c.Class {
 		case config.Browser:
 			browserRestart = true
@@ -1190,6 +1221,13 @@ func (d *daemon) applyChanges(changes []config.Change) {
 	d.sched.Evaluate()
 	if tellPlayer {
 		d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": d.sched.Active()})
+	}
+	// The sound comes before the browser restart. Chromium reads the default ALSA
+	// device when it starts, so /etc/asound.conf must hold the new card before the
+	// new process runs (D11). Apply writes that file first and sets the mixer
+	// after it.
+	if sound && d.audio != nil {
+		d.audio.Apply(d.config().Audio)
 	}
 	if browserRestart {
 		d.sup.DisplayChanged()

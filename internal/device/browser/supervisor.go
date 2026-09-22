@@ -139,6 +139,10 @@ type Options struct {
 	Grace func()
 	// NightlyRestart gives the time of the daily restart as "HH:MM", or "".
 	NightlyRestart func() string
+	// Watchdog gives the live thresholds of the ladder, from the [watchdog] table
+	// of portapixel.toml (D30). The loop asks at each check, so a save takes effect
+	// at once. A nil function uses DefaultWatchdog.
+	Watchdog func() WatchdogSettings
 	// ScreenOffCovers reports that the screen schedule has the screen off at t.
 	// The nightly restart is then pointless and is skipped (plan 3.3).
 	ScreenOffCovers func(t time.Time) bool
@@ -274,6 +278,9 @@ func New(opt Options) *Supervisor {
 	if opt.PlayerURL == nil {
 		opt.PlayerURL = func(int) string { return "http://127.0.0.1/player" }
 	}
+	if opt.Watchdog == nil {
+		opt.Watchdog = DefaultWatchdog
+	}
 	s := &Supervisor{
 		opt:         opt,
 		proc:        newLauncher(opt.Command, opt.Log),
@@ -390,7 +397,7 @@ func (s *Supervisor) Heartbeat(hb Heartbeat) {
 	}
 	copyOf := hb
 	s.lastBeat = &copyOf
-	reason := s.wd.heartbeat(now, hb.Frames)
+	reason := s.wd.heartbeat(now, hb.Frames, s.opt.Watchdog())
 	note := strings.TrimSpace(hb.Note)
 	logNote := note != "" && s.rememberNote(note, now)
 	s.mu.Unlock()
@@ -767,11 +774,13 @@ func (s *Supervisor) restart(reason string, counted bool) {
 	}
 }
 
-// countRestart records a restart and asks for a reboot at the fourth one in an
-// hour. It gives true when it asked for the reboot.
+// countRestart records a restart and asks for a reboot at the limit of the
+// [watchdog] table. It gives true when it asked for the reboot.
 func (s *Supervisor) countRestart(now time.Time, reason string) bool {
+	set := s.opt.Watchdog()
+
 	s.mu.Lock()
-	count, reboot := s.wd.restarted(now)
+	count, reboot := s.wd.restarted(now, set)
 	s.restarts = count
 	if reboot {
 		// The window starts again, so State never reports more restarts than the
@@ -784,7 +793,7 @@ func (s *Supervisor) countRestart(now time.Time, reason string) bool {
 	if !reboot {
 		return false
 	}
-	text := fmt.Sprintf("%d browser restarts in one hour; the last reason was: %s", count, reason)
+	text := fmt.Sprintf("%d browser restarts in %s; the last reason was: %s", count, set.RestartWindow, reason)
 	s.log("browser.reboot", text)
 	s.opt.Reboot(text)
 	return true
@@ -979,9 +988,10 @@ func (s *Supervisor) serviceWindow(now time.Time) {
 // checkWatchdog looks for silence from the player.
 func (s *Supervisor) checkWatchdog(now time.Time) {
 	inWindow := s.window != nil || (s.kiosk != nil && !s.kiosk.fallback)
+	set := s.opt.Watchdog()
 
 	s.mu.Lock()
-	reason := s.wd.idle(now, inWindow)
+	reason := s.wd.idle(now, inWindow, set)
 	s.mu.Unlock()
 
 	if reason != "" {

@@ -152,6 +152,20 @@ func (c Config) Validate() Errors {
 	}
 	clockTime("playback.nightly_restart", c.Playback.NightlyRestart)
 
+	// [watchdog]. The lower bound of the timeout is six heartbeats; under that, a
+	// device on a slow card would restart the browser while it still draws. The
+	// upper bounds keep a typed value from making the ladder inert without saying
+	// so: 20 restarts and a window of one day are both far outside any real use.
+	if c.Watchdog.HeartbeatTimeout < 10 || c.Watchdog.HeartbeatTimeout > 600 {
+		add("watchdog.heartbeat_timeout", "must be from 10 to 600 seconds")
+	}
+	if c.Watchdog.RestartsBeforeReboot < 0 || c.Watchdog.RestartsBeforeReboot > 20 {
+		add("watchdog.restarts_before_reboot", "must be from 0 to 20. 0 means that the device never reboots by itself")
+	}
+	if c.Watchdog.RestartWindow < 1 || c.Watchdog.RestartWindow > 1440 {
+		add("watchdog.restart_window", "must be from 1 to 1440 minutes")
+	}
+
 	// [[schedule]]
 	for i, r := range c.Schedule {
 		field := fmt.Sprintf("schedule[%d]", i)

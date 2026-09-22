@@ -295,6 +295,45 @@ var validateCases = []validateCase{
 		wantField: "schedule[1].end",
 	},
 
+	// [watchdog]. Every step of the ladder is tunable (D30), and each value has a
+	// range: a threshold from outside it makes the ladder inert or makes it act
+	// while the screen still draws.
+	{
+		name:      "a heartbeat timeout under six heartbeats",
+		change:    func(c *Config) { c.Watchdog.HeartbeatTimeout = 9 },
+		wantField: "watchdog.heartbeat_timeout",
+	},
+	{name: "a heartbeat timeout of ten seconds is good", change: func(c *Config) { c.Watchdog.HeartbeatTimeout = 10 }},
+	{name: "a heartbeat timeout of ten minutes is good", change: func(c *Config) { c.Watchdog.HeartbeatTimeout = 600 }},
+	{
+		name:      "a heartbeat timeout over ten minutes",
+		change:    func(c *Config) { c.Watchdog.HeartbeatTimeout = 601 },
+		wantField: "watchdog.heartbeat_timeout",
+	},
+	{name: "no reboot step is good", change: func(c *Config) { c.Watchdog.RestartsBeforeReboot = 0 }},
+	{
+		name:      "a negative reboot step",
+		change:    func(c *Config) { c.Watchdog.RestartsBeforeReboot = -1 },
+		wantField: "watchdog.restarts_before_reboot",
+	},
+	{
+		name:      "more than twenty restarts",
+		change:    func(c *Config) { c.Watchdog.RestartsBeforeReboot = 21 },
+		wantField: "watchdog.restarts_before_reboot",
+	},
+	{name: "a window of one minute is good", change: func(c *Config) { c.Watchdog.RestartWindow = 1 }},
+	{
+		name:      "a window of no length",
+		change:    func(c *Config) { c.Watchdog.RestartWindow = 0 },
+		wantField: "watchdog.restart_window",
+	},
+	{
+		name:      "a window longer than a day",
+		change:    func(c *Config) { c.Watchdog.RestartWindow = 1441 },
+		wantField: "watchdog.restart_window",
+	},
+	{name: "a watchdog that is off is good", change: func(c *Config) { c.Watchdog.Enabled = false }},
+
 	{name: "poll too fast", change: func(c *Config) { c.Server.PollSeconds = 9 }, wantField: "server.poll_seconds"},
 	{name: "poll of ten seconds is good", change: func(c *Config) { c.Server.PollSeconds = 10 }},
 

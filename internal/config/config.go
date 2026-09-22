@@ -23,6 +23,7 @@ type Config struct {
 	Display  Display  `toml:"display" json:"display"`
 	Audio    Audio    `toml:"audio" json:"audio"`
 	Playback Playback `toml:"playback" json:"playback"`
+	Watchdog Watchdog `toml:"watchdog" json:"watchdog"`
 	Schedule []Rule   `toml:"schedule" json:"schedule"`
 	Server   Server   `toml:"server" json:"server"`
 	Web      Web      `toml:"web" json:"web"`
@@ -84,6 +85,27 @@ type Playback struct {
 	// NightlyRestart is the time of the daily browser restart. An empty value
 	// stops it (D30).
 	NightlyRestart string `toml:"nightly_restart" json:"nightly_restart"`
+}
+
+// Watchdog is the [watchdog] table: the recovery ladder of the browser (D30,
+// plan 3.3). Every step of the ladder is tunable here, and the whole ladder can
+// be switched off.
+//
+// The nightly browser restart is the fourth step, and it is not here: it is
+// playback.nightly_restart, because it is a time of day and not a threshold.
+type Watchdog struct {
+	// Enabled switches the whole ladder off when it is false. The browser still
+	// starts again when it dies, and a page that stops sending heartbeats then
+	// stays on the screen.
+	Enabled bool `toml:"enabled" json:"enabled"`
+	// HeartbeatTimeout is the silence of the player, in seconds, that means "the
+	// page is dead". The player sends a heartbeat every 5 seconds.
+	HeartbeatTimeout int `toml:"heartbeat_timeout" json:"heartbeat_timeout"`
+	// RestartsBeforeReboot is how many browser restarts inside RestartWindow make
+	// the device reboot. 0 means that the device never reboots by itself.
+	RestartsBeforeReboot int `toml:"restarts_before_reboot" json:"restarts_before_reboot"`
+	// RestartWindow is the length of that window, in minutes.
+	RestartWindow int `toml:"restart_window" json:"restart_window"`
 }
 
 // Rule is one [[schedule]] table. The first rule that matches wins (D17).
@@ -159,6 +181,12 @@ func Default() Config {
 			ImageDuration:   10,
 			Shuffle:         false,
 			NightlyRestart:  "03:30",
+		},
+		Watchdog: Watchdog{
+			Enabled:              true,
+			HeartbeatTimeout:     30,
+			RestartsBeforeReboot: 4,
+			RestartWindow:        60,
 		},
 		Server: Server{
 			PollSeconds: 60,

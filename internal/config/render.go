@@ -67,6 +67,15 @@ func Render(cfg Config) []byte {
 	line(&b, "shuffle", boolText(cfg.Playback.Shuffle), "")
 	line(&b, "nightly_restart", Quote(cfg.Playback.NightlyRestart), "The daily browser restart. \"\" stops it.")
 
+	b.WriteString("\n# The recovery ladder of the browser. The player sends a heartbeat every\n")
+	b.WriteString("# 5 seconds. No heartbeat for heartbeat_timeout restarts the browser, and\n")
+	b.WriteString("# restarts_before_reboot restarts inside restart_window reboot the device.\n")
+	b.WriteString("[watchdog]\n")
+	line(&b, "enabled", boolText(cfg.Watchdog.Enabled), "false stops the whole ladder. Keep it true.")
+	line(&b, "heartbeat_timeout", strconv.Itoa(cfg.Watchdog.HeartbeatTimeout), "Seconds of silence. 10 to 600.")
+	line(&b, "restarts_before_reboot", strconv.Itoa(cfg.Watchdog.RestartsBeforeReboot), "0 to 20. 0 never reboots.")
+	line(&b, "restart_window", strconv.Itoa(cfg.Watchdog.RestartWindow), "Minutes. 1 to 1440.")
+
 	b.WriteString("\n# Playlist schedule rules. The first rule that matches wins. If no rule\n")
 	b.WriteString("# matches, default_playlist plays. A rule with no days matches every day.\n")
 	b.WriteString("# Omit start and end for the whole day, for example a weekend rule. Set\n")

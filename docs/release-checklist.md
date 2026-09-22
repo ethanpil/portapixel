@@ -100,6 +100,11 @@ on real hardware.
 - [ ] A display with a misleading EDID, and the `video_mode` override that
       corrects it.
 - [ ] HDMI audio output, end to end, on both architectures.
+- [ ] The card that `audio.output` selects. `internal/device/audio` reads
+      `/proc/asound/cards` and matches a name pattern: `hdmi` takes the first
+      card whose text holds HDMI, `usb` the first that holds USB, and `analog`
+      the first that holds neither. No real sound card has answered that match
+      yet. Set each of the four values on each architecture, and listen.
 - [ ] WiFi, end to end, on both architectures.
 - [ ] The aarch64 image, on every named Raspberry Pi model. No model has
       started this image yet.

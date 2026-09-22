@@ -34,6 +34,10 @@ func full() Config {
 	cfg.Playback.ImageDuration = 20
 	cfg.Playback.Shuffle = true
 	cfg.Playback.NightlyRestart = "04:15"
+	cfg.Watchdog.Enabled = false
+	cfg.Watchdog.HeartbeatTimeout = 45
+	cfg.Watchdog.RestartsBeforeReboot = 0
+	cfg.Watchdog.RestartWindow = 120
 	cfg.Schedule = []Rule{
 		{Playlist: "weekday", Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "08:00", End: "18:00"},
 		{Playlist: "weekend", Start: "09:00", End: "17:00"},
@@ -144,13 +148,14 @@ func TestRenderHoldsEveryKey(t *testing.T) {
 		"rotation", "video_mode", "power_method", "on_time", "off_time", "power_days",
 		"output", "volume",
 		"default_playlist", "transition", "transition_ms", "image_duration", "shuffle", "nightly_restart",
+		"heartbeat_timeout", "restarts_before_reboot", "restart_window",
 		"playlist", "days", "start", "end",
 		"url", "token", "poll_seconds",
 		"port", "password",
 		"enabled", "auto", "persist",
 	}
 	tables := []string{
-		"[device]", "[network]", "[display]", "[audio]", "[playback]",
+		"[device]", "[network]", "[display]", "[audio]", "[playback]", "[watchdog]",
 		"[[schedule]]", "[server]", "[web]", "[ssh]", "[updates]", "[logging]",
 	}
 	out := string(Render(Default()))

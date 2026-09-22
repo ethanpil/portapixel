@@ -74,6 +74,11 @@ transition_ms = 250
 image_duration = 20
 shuffle = true
 nightly_restart = ""
+[watchdog]
+enabled = false
+heartbeat_timeout = 45
+restarts_before_reboot = 0
+restart_window = 120
 [[schedule]]
 playlist = "weekday"
 days = ["mon", "fri"]
@@ -114,6 +119,10 @@ persist = true
 				}
 				if cfg.Playback.NightlyRestart != "" {
 					t.Errorf("nightly_restart = %q, want the empty value", cfg.Playback.NightlyRestart)
+				}
+				if cfg.Watchdog.Enabled || cfg.Watchdog.HeartbeatTimeout != 45 ||
+					cfg.Watchdog.RestartsBeforeReboot != 0 || cfg.Watchdog.RestartWindow != 120 {
+					t.Errorf("watchdog = %+v", cfg.Watchdog)
 				}
 			},
 		},

@@ -163,6 +163,23 @@ func TestRepairUnits(t *testing.T) {
 			},
 		},
 		{
+			// Each watchdog value stands alone: half of the ladder is still a ladder.
+			name: "a bad heartbeat timeout keeps the reboot step",
+			make: func(c *Config) {
+				c.Watchdog.HeartbeatTimeout = 2
+				c.Watchdog.RestartsBeforeReboot = 0
+				c.Watchdog.RestartWindow = 30
+			},
+			check: func(t *testing.T, out Config) {
+				if out.Watchdog.HeartbeatTimeout != Default().Watchdog.HeartbeatTimeout {
+					t.Errorf("heartbeat_timeout = %d, want the default", out.Watchdog.HeartbeatTimeout)
+				}
+				if out.Watchdog.RestartsBeforeReboot != 0 || out.Watchdog.RestartWindow != 30 {
+					t.Errorf("the repair changed another watchdog value: %+v", out.Watchdog)
+				}
+			},
+		},
+		{
 			name: "an empty password takes the default password",
 			make: func(c *Config) { c.Web.Password = "" },
 			check: func(t *testing.T, out Config) {

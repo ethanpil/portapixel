@@ -457,6 +457,39 @@ func TestSupervisorRebootsAfterFourRestarts(t *testing.T) {
 	}
 }
 
+// A watchdog that a person switched off in portapixel.toml must do nothing at
+// all: no restart from a frame stall and no reboot from the restart count (D30).
+func TestSupervisorWatchdogOffHoldsTheLadder(t *testing.T) {
+	h := newHarness(t, func(o *Options, h *harness) {
+		o.Watchdog = func() WatchdogSettings {
+			return WatchdogSettings{HeartbeatTimeout: 30 * time.Second, RestartWindow: time.Hour, RestartsBeforeReboot: 4}
+		}
+	})
+	waitFor(t, "the browser to run", func() bool { return h.sup.State().Browser == StateRunning })
+	before := len(h.stub.starts(t))
+
+	for i := 0; i < frameStalls+2; i++ {
+		h.sup.Heartbeat(Heartbeat{Playlist: "default", Frames: 500})
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := len(h.stub.starts(t)); got != before {
+		t.Fatalf("the browser restarted %d times with the watchdog off:\n%s", got-before, h.events())
+	}
+
+	// A restart that a person asks for still happens, and it counts no step.
+	for i := 0; i < 4; i++ {
+		h.sup.Restart("a test restart")
+		waitFor(t, "the restart to finish", func() bool { return h.sup.State().Browser == StateRunning })
+	}
+	time.Sleep(50 * time.Millisecond)
+	h.mu.Lock()
+	reboots := len(h.reboots)
+	h.mu.Unlock()
+	if reboots != 0 {
+		t.Fatalf("the device rebooted with the watchdog off:\n%s", h.events())
+	}
+}
+
 func TestSupervisorLogsPlayerNotes(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
 	h := newHarness(t, func(o *Options, h *harness) {
@@ -621,7 +654,7 @@ func TestSupervisorRestartResetsTheSilenceTimer(t *testing.T) {
 
 	// The pass of step() that follows must find no silence at all.
 	s.mu.Lock()
-	reason := s.wd.idle(now, false)
+	reason := s.wd.idle(now, false, DefaultWatchdog())
 	s.mu.Unlock()
 	if reason != "" {
 		t.Fatalf("the tick after the restart would restart again: %q", reason)
