@@ -82,6 +82,10 @@ type Inputs struct {
 	Problems []string
 	Update   manifest.UpdateState
 
+	// AudioError is the sentence of internal/device/audio when the ALSA mixer
+	// refused the volume, or "" (D11).
+	AudioError string
+
 	// MDNSNameTaken is the name that another device on the network already answers
 	// for, or "". internal/device/mdns finds it with a probe before it announces
 	// (D20).
@@ -332,6 +336,9 @@ func (r *Reporter) warnings(in Inputs) []manifest.Warning {
 	if r.Tier(in.Config) == "low" && !r.zramActive() {
 		add(manifest.WarnZramOff, "This device has less than 1 GB of memory and no zram swap. "+
 			"The browser may restart again and again. Switch zram on in the operating system.")
+	}
+	if in.AudioError != "" {
+		add(manifest.WarnAudioApplyFailed, in.AudioError+" The picture is not affected.")
 	}
 	if in.Update.State == manifest.UpdateRolledBack {
 		add(manifest.WarnUpdateRolledBack, "An update did not come up and the device went back to "+in.Update.Current+". It never tries that release again.")

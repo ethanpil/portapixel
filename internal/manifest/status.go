@@ -103,6 +103,10 @@ const (
 	// device with no swap restarts the browser again and again (plan section 16, the
 	// low RAM row). The OS layer configures zram; the daemon only reports it.
 	WarnZramOff = "zram-off"
+	// WarnAudioApplyFailed says that the device could not put [audio] into effect:
+	// the ALSA mixer refused the volume. The picture is not affected, and the
+	// message names the control that refused (D11).
+	WarnAudioApplyFailed = "audio-apply-failed"
 	// WarnRebootLoop says that the watchdog ladder rebooted this device more than
 	// once in the last hour. The device stops every automatic action and shows this
 	// on the fallback screen, so a person sees the state instead of a box that

@@ -160,6 +160,33 @@ func TestWarnings(t *testing.T) {
 	}
 }
 
+// A mixer that refuses the volume is a warning and not a fault of the picture
+// (D11). No fault means no warning: the report of a healthy device must stay
+// short.
+func TestAudioWarning(t *testing.T) {
+	tests := []struct {
+		name  string
+		error string
+		want  bool
+	}{
+		{name: "the mixer answers", error: ""},
+		{name: "the mixer refused", error: "The volume is not set. amixer refused Master and PCM.", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newRoots(t)
+			got := New(f.src).Status(Inputs{
+				Config:      config.Default(),
+				ClockSynced: true,
+				AudioError:  tt.error,
+			})
+			if has := hasCode(got.Warnings, manifest.WarnAudioApplyFailed); has != tt.want {
+				t.Fatalf("the warning is %v, want %v: %+v", has, tt.want, got.Warnings)
+			}
+		})
+	}
+}
+
 // The code of the configuration warning says which fault it is, so the dashboard
 // can tell a repaired value from a hand edit that the daemon refused.
 func TestConfigWarningCode(t *testing.T) {

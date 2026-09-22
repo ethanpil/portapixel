@@ -66,8 +66,9 @@ func ChangeClass(old, next Config) []Change {
 	add("display.off_time", Live, old.Display.OffTime != next.Display.OffTime)
 	add("display.power_days", Live, !slices.Equal(old.Display.PowerDays, next.Display.PowerDays))
 
-	// [audio]. GStreamer selects the output device when the browser starts. The
-	// volume goes to the ALSA mixer at once.
+	// [audio]. Chromium reads the default device of ALSA when it starts, so only a
+	// new browser process uses a new output (internal/device/audio). The volume
+	// goes to the ALSA mixer at once.
 	add("audio.output", Browser, old.Audio.Output != next.Audio.Output)
 	add("audio.volume", Live, old.Audio.Volume != next.Audio.Volume)
 
@@ -79,6 +80,13 @@ func ChangeClass(old, next Config) []Change {
 	add("playback.shuffle", Live, old.Playback.Shuffle != next.Playback.Shuffle)
 	add("playback.nightly_restart", Live, old.Playback.NightlyRestart != next.Playback.NightlyRestart)
 	add("schedule", Live, !sameRules(old.Schedule, next.Schedule))
+
+	// [watchdog]. The browser supervisor reads these four values at each check
+	// through a function, so a new threshold is live (D30).
+	add("watchdog.enabled", Live, old.Watchdog.Enabled != next.Watchdog.Enabled)
+	add("watchdog.heartbeat_timeout", Live, old.Watchdog.HeartbeatTimeout != next.Watchdog.HeartbeatTimeout)
+	add("watchdog.restarts_before_reboot", Live, old.Watchdog.RestartsBeforeReboot != next.Watchdog.RestartsBeforeReboot)
+	add("watchdog.restart_window", Live, old.Watchdog.RestartWindow != next.Watchdog.RestartWindow)
 
 	// [server]. The sync client reads these values before each poll.
 	add("server.url", Live, old.Server.URL != next.Server.URL)
