@@ -216,6 +216,51 @@ checked with a screenshot of the virtual display or with the ops log.
   matters. Each updater test gave its own version reader, so the real one never ran. To
   cover a real reader, start the test binary again from `TestMain` as the program under
   test. This needs no compiler and works on Windows and Linux.
+- Put a fact where its life is correct. The health marker of an update matters for one
+  boot only, so its place is tmpfs: `/run/portapixel/health/<version>.ok`. A restart of
+  the machine clears it, so an old marker cannot exist. The first fix kept the marker on
+  flash. It then needed an arm step, an order rule and a loop that wrote the marker
+  again, and that loop wrote to flash 17,000 times a day when the gate stayed armed. The
+  `.bad` marker and `.swap-pending` stay on flash, because they must survive a restart.
+- A tag rule must name the cause, not the symptom. The fault was two kernels in
+  `/lib/modules`. The first `@image` tag also took the GPU, WiFi and network firmware
+  from an on-box install. `@image` is only for a package that installs a kernel or
+  writes the boot chain. QEMU needs no firmware, so CI cannot see this fault.
+- Rule: a file that a user supplies is never active content. An SVG can hold a script.
+  `/media/` has no session and has the same origin as the admin UI. A correct media type
+  for `.svg` made a sideloaded SVG able to run a script with the session of the admin.
+  Each answer with a user file has `Content-Security-Policy: sandbox` and `nosniff`. An
+  SVG in an `<img>` element still shows, because that policy does not apply to an image
+  load. The old `text/plain` answer was safe only by accident. When you correct a type,
+  ask what the wrong type protected.
+- `os.ModeDevice` is also set for a character device. A block device has `ModeDevice`
+  set and `ModeCharDevice` clear. Without the second test, `/dev/null` is a good target.
+- A job that PUBLISHES must wait for every gate. A job that only tests must not. The
+  first pipeline pushed the container image before the boot test ran, and a push cannot
+  be undone. `server-image` and `release` now need each gate.
+- A value that a test only prints is not a check. The boot test read the image version
+  and printed it. It read `0.` for `0.0.1-ci1`: `expect -re` with `\S+` returns on the
+  first character that arrives. A captured value needs an end mark, and the test must
+  compare it.
+- A `[` in a Tcl string in double quotes is a command substitution. Use `<` and `>` as
+  marks in an expect script.
+- `rc-service X start` from inside another OpenRC service is a second rc inside the
+  first. It answers "started" and does nothing. zram-init is in the boot runlevel, with
+  its size computed in its conf.d file.
+- A `const` that a page reads above its own line gives a blank page and an error in
+  the console only. Drive each page in a browser after a change. No test found the
+  blank Activity page.
+- A device with no network reaches its picture in 16.6 s, the same as a device with a
+  network. A cable in a dead network costs 10 s more: one bounded DHCP attempt. A move
+  of `networking` out of the boot runlevel would not help: `portapixeld` has `use net`
+  and `rc_parallel` is off.
+- The release also ships `portapixel-os-<version>.tar.gz`: `install.sh` needs
+  `packages.list`, `packages-read.awk` and `overlay/`, so `install.sh` alone is not an
+  install path.
+- `grep -q "$VERSION"` reads a full stop as "any character". Use `grep -qF`, or compare
+  the whole value.
+- A contract with three fields needs three checks. The updater read the name, the version
+  and the processor of a binary, and did not check the name.
 - When the order of two processes decides the result, the design is wrong. The health
   gate removed the marker after the daemon started. The gate now removes an old marker in
   `start_pre` only. The daemon writes its marker again while `.swap-pending` names it.
