@@ -49,6 +49,20 @@ export function mount(main, ctx) {
   const tableSlot = h('div');
   const problem = h('div');
 
+  /* The chips are built one time and only their state changes. A row that was
+     built again at each click would take the keyboard away from the chip that the
+     person just pressed.
+
+     THE PLACE OF THIS LINE MATTERS. It was below drawChips() and load(), and a
+     "const" cannot be read before its own line runs. drawChips() then stopped the
+     whole mount with "Cannot access 'chipButtons' before initialization": no
+     chips, no table, and load() never ran either. The page was empty and only the
+     console of the browser said why. */
+  const chipButtons = FILTERS.map(([value, label]) => h('button', {
+    type: 'button', class: 'pp-chip', text: label,
+    onClick: () => { filter = value; drawChips(); draw(); },
+  }));
+
   const autoBox = h('input', {
     type: 'checkbox', checked: true,
     onChange: (e) => { auto = e.target.checked; },
@@ -78,14 +92,6 @@ export function mount(main, ctx) {
     zone = next;
     draw();
   });
-
-  /* The chips are built one time and only their state changes. A row that was
-     built again at each click would take the keyboard away from the chip that the
-     person just pressed. */
-  const chipButtons = FILTERS.map(([value, label]) => h('button', {
-    type: 'button', class: 'pp-chip', text: label,
-    onClick: () => { filter = value; drawChips(); draw(); },
-  }));
 
   function drawChips() {
     if (!chips.firstChild) fill(chips, chipButtons);
