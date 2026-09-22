@@ -62,6 +62,14 @@ func main() {
 	}
 	admin := filepath.Join(*root, "device-admin")
 	shared := filepath.Join(*root, "shared")
+	// The component gallery is a page for a developer. It is NOT under web/,
+	// because everything under web/ goes into both binaries and answers with
+	// Content-Security-Policy script-src 'self'. It lives in tests/gallery and it
+	// reads the shared stylesheet and the shared modules from /shared/.
+	gallery := filepath.Join(filepath.Dir(*root), "tests", "gallery")
+	if *root == "web" {
+		gallery = filepath.Join("tests", "gallery")
+	}
 	for _, dir := range []string{admin, shared} {
 		if _, err := os.Stat(dir); err != nil {
 			log.Fatalf("devserver: cannot read %s: %v (start this from the root of the repository)", dir, err)
@@ -75,6 +83,7 @@ func main() {
 
 	adminFiles := noStore(http.FileServer(http.Dir(admin)))
 	sharedFiles := http.StripPrefix("/shared/", noStore(http.FileServer(http.Dir(shared))))
+	galleryFiles := http.StripPrefix("/gallery/", noStore(http.FileServer(http.Dir(gallery))))
 
 	var pretend *fake
 	if *withFake {
@@ -95,6 +104,11 @@ func main() {
 		}
 		if strings.HasPrefix(r.URL.Path, "/shared/") {
 			sharedFiles.ServeHTTP(w, r)
+			return
+		}
+		// http://127.0.0.1:8099/gallery/gallery.html shows every component.
+		if strings.HasPrefix(r.URL.Path, "/gallery/") {
+			galleryFiles.ServeHTTP(w, r)
 			return
 		}
 		adminFiles.ServeHTTP(w, r)

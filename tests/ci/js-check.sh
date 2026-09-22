@@ -66,5 +66,28 @@ else
 	echo "remote loads: none; every asset is local"
 fi
 
+# ------------------------------------------------------------- 3. inline scripts
+# Nothing under web/ may hold a script inside the page, and nothing may hold an
+# event handler attribute. Each answer of the two admin UIs and of the player
+# carries Content-Security-Policy with script-src 'self', which blocks both. A
+# page with an inline script then shows nothing and says why only in the console
+# of the browser. web/shared/gallery.html was such a page: it was in both
+# binaries, reachable at /shared/gallery.html, and dead. It is now
+# tests/gallery/gallery.html, where a developer runs it through the devserver.
+#
+# An index.html may only LOAD a module: <script type="module" src="...">.
+grep -rnE '<script(>|[^>]*>[[:space:]]*[^<[:space:]])' --include='*.html' web \
+	>"$WORK/inline" 2>/dev/null || true
+grep -rnE '<[^>]+[[:space:]]on[a-z]+[[:space:]]*=' --include='*.html' --include='*.svg' web \
+	>>"$WORK/inline" 2>/dev/null || true
+if [ -s "$WORK/inline" ]; then
+	echo "FAIL: a file under web/ holds a script in the page or an event handler"
+	echo "      attribute. Content-Security-Policy script-src 'self' blocks both:"
+	cat "$WORK/inline"
+	echo inline >>"$WORK/bad"
+else
+	echo "inline scripts: none; every script under web/ is a file of its own"
+fi
+
 [ ! -s "$WORK/bad" ] || exit 1
 echo "js-check: all checks pass"

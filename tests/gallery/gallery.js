@@ -1,15 +1,12 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>PortaPixel component gallery</title>
-<link rel="stylesheet" href="pp.css">
-</head>
-<body>
-<div id="root"></div>
+/* tests/gallery/gallery.js -- the script of the component gallery.
 
-<script type="module">
+   It was an inline module inside gallery.html. Nothing under web/ may hold an
+   inline script: the pages of the two admin UIs and the player answer with
+   Content-Security-Policy script-src 'self', which blocks one. The gallery is
+   a page for a developer, so it lives here and not in the binary.
+
+   The paths start with /shared/, which is where
+   tests/device-admin/devserver puts the shared files. */
 /* Static gallery for the shared components. It needs no backend: every value
    here is made up. Open it from a static server and look at it at desktop and
    phone widths, in the light theme and the dark theme. */
@@ -18,8 +15,8 @@ import {
   h, fill, icon, toast, modal, confirmDialog, typedConfirm,
   fmtBytes, fmtDuration, fmtAgo, statusDot, badge, banner, factList,
   table, progress, spinner, route, renderShell,
-} from './ui.js';
-import { mountPlaylistEditor } from './playlist-editor.js';
+} from '/shared/ui.js';
+import { mountPlaylistEditor } from '/shared/playlist-editor.js';
 
 /* ------------------------------------------------------------- fake data */
 
@@ -629,6 +626,3 @@ route({
   editor: show(editor),
   login: show(login),
 });
-</script>
-</body>
-</html>
