@@ -3,6 +3,7 @@ package admin
 import (
 	"fmt"
 	"net/http"
+	neturl "net/url"
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/server/db"
@@ -40,16 +41,16 @@ func (d Deps) putSettings(w http.ResponseWriter, r *http.Request) {
 			Message: fmt.Sprintf("must be between %d and %d seconds",
 				db.MinPollSeconds, db.MaxPollSeconds)})
 	}
-	url := strings.TrimSpace(body.PublicURL)
-	if url != "" && !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
-		errs = append(errs, db.FieldError{Field: "public_url", Message: "must start with http:// or https://"})
+	public, urlErr := checkPublicURL(body.PublicURL)
+	if urlErr != "" {
+		errs = append(errs, db.FieldError{Field: "public_url", Message: urlErr})
 	}
 	if len(errs) > 0 {
 		httpjson.Fields(w, "the request has a field that this server cannot use", errs)
 		return
 	}
 
-	if err := d.SaveSettings(Settings{ServerName: name, PollSeconds: body.PollSeconds, PublicURL: url}); err != nil {
+	if err := d.SaveSettings(Settings{ServerName: name, PollSeconds: body.PollSeconds, PublicURL: public}); err != nil {
 		fail(w, err)
 		return
 	}
@@ -61,4 +62,44 @@ func (d Deps) putSettings(w http.ResponseWriter, r *http.Request) {
 		"restart_needed": false,
 		"settings":       d.Settings(),
 	})
+}
+
+// checkPublicURL gives the public URL in its stored form, or the sentence that says
+// why a device could not use it. An empty value is permitted: then the admin UI
+// answers on the loopback names only.
+//
+// The rules are the rules of the device, internal/device/syncer.CheckServerURL. This
+// is the one field where the server hands an address to a device: the enrollment
+// token page pastes it into the [server] block of portapixel.toml. A value that only
+// had to start with http:// or https:// could carry a query, a fragment or a user
+// name, and every card that got that block would then refuse its own configuration
+// at first boot, on a screen that nobody stands in front of.
+//
+// The two packages may not import each other (ARCHITECTURE section 2), so the rules
+// are written twice today. They belong in one shared package beside
+// fleet.ResolveURL; a test of this package holds the two in step until then.
+func checkPublicURL(raw string) (string, string) {
+	text := strings.TrimSpace(raw)
+	if text == "" {
+		return "", ""
+	}
+	u, err := neturl.Parse(text)
+	if err != nil {
+		return "", "that is not a web address"
+	}
+	switch {
+	case u.Scheme != "http" && u.Scheme != "https":
+		return "", "must start with http:// or https://"
+	case u.Host == "":
+		return "", "it names no server"
+	case u.User != nil:
+		return "", "it must hold no user name and no password"
+	case u.Fragment != "" || strings.Contains(text, "#"):
+		return "", "it must hold no # part"
+	case u.RawQuery != "":
+		return "", "it must hold no ? part"
+	}
+	// The slash at the end goes now, once, and not on every device.
+	u.Path = strings.TrimSuffix(u.Path, "/")
+	return u.String(), ""
 }

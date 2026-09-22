@@ -75,6 +75,10 @@ func (d Deps) updateGroup(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.Read(w, r, &body) {
 		return
 	}
+	if errs := db.DayErrors("screen_days", body.ScreenDays); errs != nil {
+		httpjson.Fields(w, "the request has a field that this server cannot use", errs)
+		return
+	}
 	days := strings.Join(db.CleanDays(body.ScreenDays), ",")
 	if err := db.ValidScreenRule(body.ScreenOn, body.ScreenOff, days); err != nil {
 		httpjson.Fields(w, "the request has a field that this server cannot use",
@@ -117,7 +121,8 @@ func (d Deps) deleteGroup(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := d.DB.DeleteGroup(id); err != nil {
 		if errors.Is(err, db.ErrInUse) {
-			httpjson.Error(w, http.StatusConflict, "this group still holds screens; move them first")
+			httpjson.Error(w, http.StatusConflict,
+				"this group still holds screens or time rules; take them away first")
 			return
 		}
 		fail(w, err)
@@ -203,6 +208,10 @@ func (d Deps) readAssignment(w http.ResponseWriter, r *http.Request, id int64) (
 		Priority   int      `json:"priority"`
 	}
 	if !httpjson.Read(w, r, &body) {
+		return db.Assignment{}, false
+	}
+	if errs := db.DayErrors("days", body.Days); errs != nil {
+		httpjson.Fields(w, "the request has a field that this server cannot use", errs)
 		return db.Assignment{}, false
 	}
 	if body.PlaylistID != 0 {

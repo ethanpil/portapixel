@@ -10,7 +10,10 @@
 package server
 
 import (
+	"errors"
+	"log/slog"
 	"net/http"
+	"runtime/debug"
 
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/server/admin"
@@ -29,6 +32,10 @@ type Deps struct {
 	// because the public URL changes while the server runs, and the allowlist must
 	// change with it and not at the next restart.
 	Hosts func() []string
+	// IsHTTPS reports if a caller reached the server over TLS, directly or through
+	// a proxy that the configuration trusts. Only such an answer takes the strict
+	// transport header. A nil value means "never", which is right for a test server.
+	IsHTTPS func(*http.Request) bool
 }
 
 // New gives the handler of the whole server.
@@ -57,7 +64,36 @@ func New(d Deps) http.Handler {
 	root := http.NewServeMux()
 	root.Handle("/api/v1/", httpjson.NotFoundJSON(deviceMux, "/api/"))
 	root.Handle("/", ui)
-	return root
+	// The browser rules go on every answer of both subtrees. One middleware holds
+	// them, so no handler can leave one out (headers.go).
+	return withRecover(secureHeaders(d.IsHTTPS, root))
+}
+
+// withRecover turns a panic of a handler into a 500 with a JSON body and a log
+// line.
+//
+// net/http already stops a panic from ending the process, but it drops the
+// connection with no answer and no record. web/shared/api.js then says "the answer
+// is not JSON", and nothing in the ops log says what happened. A fleet server must
+// say what went wrong.
+func withRecover(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			p := recover()
+			if p == nil {
+				return
+			}
+			if err, ok := p.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+				// The contract of net/http: this one is deliberate and silent.
+				panic(p)
+			}
+			slog.Error("a handler panicked", "method", r.Method, "path", r.URL.Path,
+				"panic", p, "stack", string(debug.Stack()))
+			httpjson.Error(w, http.StatusInternalServerError,
+				"the server could not finish this request; the log holds the reason")
+		}()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // staticRoutes serves the admin UI and the shared assets from the binary.

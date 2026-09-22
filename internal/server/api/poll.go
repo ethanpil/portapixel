@@ -2,6 +2,7 @@ package api
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/ethanpil/portapixel/internal/manifest"
@@ -31,7 +32,13 @@ func (d Deps) getManifest(w http.ResponseWriter, r *http.Request) {
 	}
 	// A poll counts as contact. Without this a device that polls but sends no
 	// heartbeat would look offline on the dashboard.
-	d.DB.TouchSeen(dev.ID, d.clientIP(r))
+	//
+	// It is a best-effort write and the manifest goes out whatever it answers: a
+	// locked database must not stop a screen from getting its content. The failure
+	// still reaches the log, because a full disk shows itself here first.
+	if err := d.DB.TouchSeen(dev.ID, d.clientIP(r)); err != nil {
+		slog.Warn("write the last contact time", "device", dev.ID, "error", err)
+	}
 	httpjson.Write(w, http.StatusOK, m)
 }
 

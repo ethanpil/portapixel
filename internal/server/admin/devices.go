@@ -185,6 +185,10 @@ func (d Deps) setOverrides(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.Read(w, r, &body) {
 		return
 	}
+	if errs := db.DayErrors("screen_days", body.ScreenDays); errs != nil {
+		httpjson.Fields(w, "the request has a field that this server cannot use", errs)
+		return
+	}
 	days := strings.Join(db.CleanDays(body.ScreenDays), ",")
 	if err := db.ValidScreenRule(body.ScreenOn, body.ScreenOff, days); err != nil {
 		httpjson.Fields(w, "the request has a field that this server cannot use",

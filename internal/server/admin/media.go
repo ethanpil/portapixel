@@ -108,6 +108,12 @@ func (d Deps) postMedia(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, map[string]any{"media": saved, "duplicate": res.Duplicate})
 }
 
+// maxUploadName is the longest file name that the library stores. Every filesystem
+// stops at about this length, and the device cuts the name again when it builds the
+// name of its own copy. Nothing limited it before, so a header of a megabyte could
+// land in the media table and in every page that lists it.
+const maxUploadName = 255
+
 // uploadName reads the file name of an upload. web/shared/api.js sends it
 // percent-encoded, because a header may hold no character above 7-bit ASCII.
 func uploadName(r *http.Request) string {
@@ -115,13 +121,28 @@ func uploadName(r *http.Request) string {
 	if raw == "" {
 		return ""
 	}
-	if decoded, err := url.QueryUnescape(raw); err == nil {
+	// PathUnescape and not QueryUnescape: a file name is a path element, and the
+	// query rule turns a "+" into a space. "promo+2025.mp4" was stored as
+	// "promo 2025.mp4".
+	if decoded, err := url.PathUnescape(raw); err == nil {
 		raw = decoded
 	}
 	// Take the last element of a path of either kind: a browser sends the plain
 	// name, but a curl call may send a whole path.
 	raw = raw[strings.LastIndexAny(raw, `/\`)+1:]
-	return strings.TrimSpace(raw)
+	// A control character in a name reaches a log line, a JSON answer and a header
+	// of the download. None of them wants one.
+	raw = strings.Map(func(c rune) rune {
+		if c < 0x20 || c == 0x7f {
+			return -1
+		}
+		return c
+	}, raw)
+	raw = strings.TrimSpace(raw)
+	if len(raw) > maxUploadName {
+		raw = raw[:maxUploadName]
+	}
+	return raw
 }
 
 // deleteMedia removes an object. An object that a playlist holds stays, and the
@@ -187,8 +208,12 @@ func (d Deps) getThumb(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "image/jpeg")
-	w.Header().Set("ETag", `"`+sha+`"`)
-	// A thumbnail is named by the hash of its source, so it never changes.
+	// The validator names the source hash AND the thumbnail recipe. The hash alone
+	// would be the name of the input: a change of the width, of the quality or of the
+	// scaler makes a different picture out of the same object, and a cache life of a
+	// year would never let the browser see it.
+	w.Header().Set("ETag", `"`+sha+"-"+media.ThumbTag+`"`)
+	// A thumbnail of one object and one recipe never changes.
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	http.ServeContent(w, r, sha+".jpg", info.ModTime(), f)
 }

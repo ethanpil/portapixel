@@ -56,8 +56,8 @@ func (d Deps) refreshReleases(w http.ResponseWriter, r *http.Request) {
 // each of thirty releases on every page view would fight every heartbeat of the
 // fleet for the one write connection.
 func (d Deps) listReleases(w http.ResponseWriter, r *http.Request, force bool) {
-	list, listErr := d.Mirror.Lister.List(d.Background(), force)
-	if d.Mirror.Lister.Fresh() {
+	list, listErr, fresh := d.Mirror.Lister.List(d.Background(), force)
+	if fresh {
 		notes := make([]db.ReleaseNote, 0, len(list))
 		for _, rel := range list {
 			if releases.ValidVersion(rel.Version) {
@@ -204,6 +204,9 @@ func (d Deps) uploadBundle(w http.ResponseWriter, r *http.Request) {
 			httpjson.Error(w, http.StatusConflict, "a mirror already runs for "+d.Mirror.Working())
 		case errors.Is(err, releases.ErrBadBundle):
 			httpjson.Error(w, http.StatusUnprocessableEntity, err.Error())
+		case errors.Is(err, releases.ErrNoSpace):
+			// The same answer as a media upload that does not fit (D27).
+			httpjson.Error(w, http.StatusInsufficientStorage, err.Error())
 		default:
 			// A full disk, a read-only directory or a damaged signature file are
 			// faults of the server and not of the upload. An answer of 422 would

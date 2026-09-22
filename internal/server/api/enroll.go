@@ -14,13 +14,17 @@ import (
 //
 // There are two limiters, because there are two kinds of abuse on one open route.
 //
-//   - Limiter counts the wrong tokens: five a minute from one address. A device
-//     that polls with a good claim secret clears its own count, so a screen that
-//     waits for approval never locks itself out.
-//   - PendingLimiter counts the requests that make a row in the pending list.
-//     Without it an unauthenticated caller could loop over device IDs and fill the
-//     table, because every one of those requests succeeds and would clear the
-//     first limiter. A poll of a request that already waits does not count.
+//   - Limiter counts the wrong tokens: five a minute from one address. A request
+//     that showed a good token clears the count of its address, so a screen that
+//     polls with its claim secret never locks itself out. A request with NO token
+//     shows nothing, so it never clears the count: a caller could otherwise send
+//     one of those between two guesses and guess for ever.
+//   - PendingLimiter counts the requests that carry no token at all. That is the
+//     code-pairing flow, and it is the one request that an unauthenticated caller
+//     can repeat with a new device ID each time to fill the pending table. The
+//     count happens BEFORE the write: a check after the commit can only hold the
+//     answer back, and the row is then already in the table. A screen that waits
+//     polls with its claim secret and is not in this count.
 func (d Deps) postEnroll(w http.ResponseWriter, r *http.Request) {
 	ip := d.clientIP(r)
 	if !d.Limiter.Allow(ip) {
@@ -33,6 +37,17 @@ func (d Deps) postEnroll(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.Read(w, r, &req) {
 		d.Limiter.Fail(ip)
 		return
+	}
+
+	if req.Token == "" {
+		if !d.PendingLimiter.Allow(ip) {
+			httpjson.Error(w, http.StatusTooManyRequests,
+				"too many new screens from this address; wait a while")
+			return
+		}
+		// The request counts whatever it does with the table, because a caller that
+		// repeats it is the abuse that this limiter holds back.
+		d.PendingLimiter.Fail(ip)
 	}
 
 	res, err := d.DB.Enroll(req, ip)
@@ -59,22 +74,18 @@ func (d Deps) postEnroll(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if res.Created {
-		// A new row in the pending list. This one counts, and the count does not
-		// go away because the request worked.
-		if !d.PendingLimiter.Allow(ip) {
-			httpjson.Error(w, http.StatusTooManyRequests,
-				"too many new screens from this address; wait a while")
-			return
-		}
-		d.PendingLimiter.Fail(ip)
 		d.Log.Log("enroll-pending", req.DeviceID+" waits with the code "+res.PairingCode)
-		httpjson.Write(w, http.StatusOK, res.EnrollResponse)
-		return
 	}
-
-	// A good token or a poll of a request that waits. The wrong-token count of
-	// this address goes away.
-	d.Limiter.Reset(ip)
+	if req.Token != "" {
+		// The request showed a token that this server gave out: a device token, a
+		// claim secret, or an enrollment token. The wrong-token count of the address
+		// goes away.
+		d.Limiter.Reset(ip)
+	} else {
+		// No token, so nothing was proved. The attempt that Allow counted ends here
+		// and adds nothing: this request is neither a failure nor a proof.
+		d.Limiter.Done(ip)
+	}
 	if res.Status == "paired" {
 		d.Log.Log("enroll", req.DeviceID+" paired from "+ip)
 	}

@@ -1,9 +1,11 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ethanpil/portapixel/internal/server/db"
 	"github.com/ethanpil/portapixel/internal/server/httpjson"
@@ -30,15 +32,18 @@ func (d Deps) getMedia(w http.ResponseWriter, r *http.Request) {
 			"that is not a SHA-256 value of 64 lower case hex characters")
 		return
 	}
-	// The download needs to know that the object is in the library and nothing
-	// else. MediaExists is one query with no join; d.DB.Media would also name
-	// every playlist that holds the object, which no device reads.
-	if have, err := d.DB.MediaExists(sha); err != nil {
+	// The download needs the row for two values: that the object is in the library,
+	// and the media type that the upload decided. MediaRow is one query with no
+	// join; d.DB.Media would also name every playlist that holds the object, which
+	// no device reads.
+	row, err := d.DB.MediaRow(sha)
+	if errors.Is(err, db.ErrNotFound) {
+		httpjson.Error(w, http.StatusNotFound, "the media library holds no object with this hash")
+		return
+	}
+	if err != nil {
 		d.Log.Log("media-error", sha[:8]+": "+err.Error())
 		httpjson.Error(w, http.StatusInternalServerError, "the server could not read the media library")
-		return
-	} else if !have {
-		httpjson.Error(w, http.StatusNotFound, "the media library holds no object with this hash")
 		return
 	}
 
@@ -67,7 +72,41 @@ func (d Deps) getMedia(w http.ResponseWriter, r *http.Request) {
 	// content of a screen is not public by default. A device holds its own copy in
 	// its object store, so a proxy cache would save it nothing anyway.
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	// The type comes from the row and not from the first bytes of the file. The name
+	// in the URL is a hash with no extension, so http.ServeContent would guess, and a
+	// file that a person uploaded as a picture but that holds HTML would then be
+	// served as HTML. internal/server/media decided the type at the upload.
+	w.Header().Set("Content-Type", row.MIME)
+	setDisposition(w, row.MIME, row.OrigName)
 	http.ServeContent(w, r, sha, info.ModTime(), f)
+}
+
+// setDisposition tells the browser to save a stored object instead of showing it,
+// unless the object is a picture or a video.
+//
+// A picture and a video are what the admin UI draws, and the headers of
+// internal/server.secureHeaders already make an object inert. Everything else -
+// an SVG, an HTML file that somebody named .png, a release binary - is a download
+// and nothing else.
+func setDisposition(w http.ResponseWriter, mime, name string) {
+	if strings.HasPrefix(mime, "image/") && mime != "image/svg+xml" {
+		return
+	}
+	if strings.HasPrefix(mime, "video/") {
+		return
+	}
+	// The name goes in the quoted form with the quotes and the backslashes taken
+	// out, so that a name cannot add a second header field.
+	safe := strings.Map(func(r rune) rune {
+		if r < 0x20 || r == '"' || r == '\\' || r == 0x7f {
+			return -1
+		}
+		return r
+	}, name)
+	if safe == "" {
+		safe = "download"
+	}
+	w.Header().Set("Content-Disposition", `attachment; filename="`+safe+`"`)
 }
 
 // getRelease answers GET /api/v1/releases/{version}/{file}.
@@ -111,5 +150,9 @@ func (d Deps) getRelease(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusNotFound, "the mirror holds no file with this name")
 		return
 	}
+	// A release file is a binary and a signature. Neither is content that a browser
+	// should show, so both go out as a download of unknown bytes.
+	w.Header().Set("Content-Type", "application/octet-stream")
+	setDisposition(w, "application/octet-stream", name)
 	http.ServeContent(w, r, name, info.ModTime(), f)
 }
