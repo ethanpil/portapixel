@@ -90,8 +90,10 @@ checked with a screenshot of the virtual display or with the ops log.
 - Chromium 149 keeps the page of a URL item in memory after the daemon goes back to the
   player. Three URL items made three more renderer processes and about 380 MB more
   RSS, and it never came back. The name `BackForwardCache` in `--disable-features`
-  stops it: the process count stays at 8 and the renderer goes back to 109 MB after
-  each item. Measured in QEMU on 2026-09-22 (BIOS, 1 GB, 2 CPUs). A 30 minute soak
+  stops it: the process count does not grow and the renderer goes back to 109 MB
+  after each item. The count at rest depends on the RAM: 8 at 1 GB, 9 at 2 GB, because
+  Chromium keeps a spare renderer when it has room. Judge the fix by growth, not by
+  the number. Measured in QEMU on 2026-09-22 (BIOS, 1 GB, 2 CPUs). A 30 minute soak
   with a URL item in each loop showed no growth. On a slide-only playlist the flag
   shows nothing, so measure with URL items.
 - Flags measured on 2026-09-22 and refused. The noise of the measurement is 5 MB of
@@ -293,6 +295,8 @@ checked with a screenshot of the virtual display or with the ops log.
   again gives the same IDs to new commands, and the device then acknowledges them and
   does not run them. HEAD clears the list at each new pairing (a80fa15). The lab client
   of build 0.3.0-lab1 showed the fault.
+- On the test container, `free -m` reports the RAM of the Proxmox host (64 GB). The
+  real limit is in `/proc/meminfo` (4 GB). `builder-vm.sh` reads the second.
 - A job that PUBLISHES must wait for every gate. A job that only tests must not. The
   first pipeline pushed the container image before the boot test ran, and a push cannot
   be undone. `server-image` and `release` now need each gate.
