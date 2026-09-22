@@ -3,42 +3,56 @@
 #
 # The updater stages a release, flips the "current" link and leaves a pending
 # marker. This script gives the new daemon PP_HEALTH_TIMEOUT seconds to write
-#   $PP_RELEASES/health/<version>.ok
+#   $PP_RUN/health/<version>.ok
 # The marker can fail to appear. This script then puts "current" back to
 # "previous". It marks the release bad, so the updater never installs it again.
 # Then it restarts the service.
 #
-# TWO MODES, and the order of the two is the whole protocol:
-#   arm    remove a stale marker of this version. The OpenRC service runs this in
-#          start_pre, BEFORE it starts the daemon, and it waits for it.
-#   wait   watch for the marker and roll back without it. The service runs this
-#          in the background, at the same time as the daemon.
-# The default mode is wait.
+# WHY THE MARKER IS IN TMPFS. A health marker is true for one boot only, so its
+# place is /run, which the kernel empties at every start. A marker of an earlier
+# boot cannot exist, so no step has to remove one, and no rule about the order of
+# two processes is necessary. The first design kept the marker on the flash. It
+# then needed an "arm" step in start_pre, an order rule between the gate and the
+# daemon, and a loop in the daemon that wrote the marker again every few seconds.
+# That loop wrote to the flash about 17,000 times a day while the gate stayed
+# armed, against D2.
 #
-# Why the arm mode exists: the wait mode removed the stale marker itself, after
-# the service had already started both. A daemon that won that race wrote its
-# marker first, the gate then removed it, waited the whole timeout and rolled a
-# GOOD release back, marked bad for ever. A protocol in which the order of two
-# processes decides the answer is not a protocol. Nothing removes a marker after
-# the daemon starts now, and the daemon writes the marker again every few seconds
-# while the pending marker names its version.
+# THREE FILES STAY ON THE FLASH, because each must survive a restart:
+#   $PP_RELEASES/.swap-pending        the version that must prove itself
+#   $PP_RELEASES/health/<ver>.bad     the one channel to updater CheckRollback
+#   $PP_RELEASES/health/gate-boots    how many starts this pending version got
+# Each of the three gets a "sync" where it is written, in the rollback path.
 #
-# With no pending marker both modes exit at once. This runs on every start of
+# THIS SCRIPT REMOVES NO MARKER. The init script clears the tmpfs health
+# directory in start_pre, which covers a restart of the service with no restart of
+# the machine.
+#
+# With no pending marker it exits at once. The service starts it on every start of
 # portapixeld, so it must stay cheap.
 set -u
 
 . /usr/libexec/portapixel/oplog.sh
 
+# One mode, "wait". The old "arm" mode is gone with the marker on the flash.
 MODE="${1:-wait}"
 case "$MODE" in
-arm|wait) ;;
-*) printf 'health-gate.sh: unknown mode %s; use "arm" or "wait"\n' "$MODE" >&2; exit 2 ;;
+wait) ;;
+arm)
+	printf 'health-gate.sh: the "arm" mode is gone. The health marker is in\n' >&2
+	printf '  %s/health and the kernel empties that on every boot.\n' "${PP_RUN:-/run/portapixel}" >&2
+	exit 2
+	;;
+*) printf 'health-gate.sh: unknown mode %s; the only mode is "wait"\n' "$MODE" >&2; exit 2 ;;
 esac
 
 PENDING="$PP_RELEASES/.swap-pending"     # holds the version that must prove itself
-HEALTH="$PP_RELEASES/health"
-BOOTS="$HEALTH/gate-boots"               # how many starts this pending version got
+FLASH="$PP_RELEASES/health"              # .bad and the boot counter, on ext4
+RUNHEALTH="${PP_RUN:-/run/portapixel}/health"  # the .ok marker, in tmpfs
+BOOTS="$FLASH/gate-boots"                # how many starts this pending version got
 TIMEOUT="${PP_HEALTH_TIMEOUT:-120}"
+# How often to look for the marker. A test runs the whole gate many times, so the
+# step is a knob and not a number in the loop.
+POLL="${PP_HEALTH_POLL:-2}"
 
 [ -f "$PENDING" ] || exit 0
 
@@ -53,20 +67,6 @@ case "$VER" in
 	;;
 esac
 
-# ------------------------------------------------------------------- the arm mode
-# A stale marker from an earlier install of this same version would let the gate
-# pass at once, with nothing proved. The new binary has to write the marker again.
-#
-# This runs in start_pre and the service waits for it, so the marker is gone
-# before the daemon can write one. Nothing removes a marker after that point.
-if [ "$MODE" = arm ]; then
-	rm -f "$HEALTH/$VER.ok"
-	sync
-	oplog update.gate.arm "version=$VER; the daemon has to write the marker again"
-	exit 0
-fi
-
-# ------------------------------------------------------------------ the wait mode
 # One gate at a time. The service starts this script in the background on every
 # start of portapixeld. Without this lock, a restart during a pending update
 # gives two gates one pending marker to share.
@@ -75,12 +75,15 @@ mkdir -p "${PP_RUN:-/run/portapixel}" 2>/dev/null || true
 mkdir "$LOCK" 2>/dev/null || exit 0
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
 
-# The timeout comes from /etc/conf.d/portapixeld, which a person can edit.
+# The two numbers come from /etc/conf.d/portapixeld, which a person can edit.
 # ":-" only covers an empty value. A value such as "120s" makes every test below
 # fail. The wait then does not happen, and the gate rolls back every update at
 # once.
 case "$TIMEOUT" in
 ''|*[!0-9]*) TIMEOUT=120 ;;
+esac
+case "$POLL" in
+''|*[!0-9]*|0) POLL=2 ;;
 esac
 
 # --------------------------------------------------------- the boot loop guard
@@ -97,23 +100,21 @@ boots=$((boots + 1))
 printf '%s %s\n' "$VER" "$boots" >"$BOOTS"
 sync
 
-oplog update.gate.start "version=$VER timeout=${TIMEOUT}s start=$boots"
+oplog update.gate.start "version=$VER timeout=${TIMEOUT}s poll=${POLL}s start=$boots"
 
-# NOTHING removes "$HEALTH/$VER.ok" below. The arm mode did that before the daemon
-# started. A removal here is the race that rolled a good release back.
 waited=0
 while [ "$waited" -lt "$TIMEOUT" ]; do
-	if [ -f "$HEALTH/$VER.ok" ]; then
+	if [ -f "$RUNHEALTH/$VER.ok" ]; then
 		# The marker names the run that wrote it: version, pid and start time. Put
 		# it in the log, so a pass can be read back from the ops log alone.
-		mark="$(head -n1 "$HEALTH/$VER.ok" 2>/dev/null)"
+		mark="$(head -n1 "$RUNHEALTH/$VER.ok" 2>/dev/null)"
 		rm -f "$PENDING" "$BOOTS"
 		sync
 		oplog update.gate.pass "version=$VER after=${waited}s marker=$mark"
 		exit 0
 	fi
-	sleep 2
-	waited=$((waited + 2))
+	sleep "$POLL"
+	waited=$((waited + POLL))
 done
 
 # ------------------------------------------------------------------ the rollback
@@ -163,8 +164,8 @@ oplog update.rollback "back to $prev"
 # Only now record the release as bad. This marker is the one channel to
 # internal/updater CheckRollback, so a lost write would make the updater install
 # the same broken release again and again. Put it on the disk before we disarm.
-if ! : >"$HEALTH/$VER.bad"; then
-	oplog update.gate.markfail "cannot write $HEALTH/$VER.bad; the gate stays armed"
+if ! : >"$FLASH/$VER.bad"; then
+	oplog update.gate.markfail "cannot write $FLASH/$VER.bad; the gate stays armed"
 	exit 1
 fi
 sync

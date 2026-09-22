@@ -56,29 +56,44 @@ depend() {
 gate_pidfile="/run/portapixel-health-gate.pid"
 
 start_pre() {
-	# Arm the update health gate FIRST, and before the binary check below.
+	checkpath -d -m 0755 "${PP_RUN}"
+
+	# Start the update health gate FIRST, and before the binary check below.
 	# It must run even when this start fails. A release whose binary cannot run
 	# at all is the release that most needs a rollback. OpenRC does not run
-	# start_post when the start fails. The gate exits at once when no update is
-	# pending, so a normal boot pays nothing. It runs in the background, so it
-	# never holds up the first picture.
+	# start_post when the start fails.
+	#
+	# A normal boot pays NOTHING here: with no pending marker this block does not
+	# run at all. The gate itself runs in the background, so it never holds up the
+	# first picture.
 	if [ -f "${PP_RELEASES}/.swap-pending" ]; then
-		# The arm step FIRST, and this start waits for it. It removes a stale
-		# health marker of the pending version, and it must happen before the
-		# daemon can write one. When the removal was inside the background gate,
-		# a daemon that was quick lost its marker and the gate rolled a GOOD
-		# release back and marked it bad for ever.
-		/usr/libexec/portapixel/health-gate.sh arm || true
+		# The health marker of the daemon lives in tmpfs, under ${PP_RUN}/health,
+		# and the daemon writes it there because this script gives it --run
+		# ${PP_RUN}. A restart of the MACHINE empties tmpfs, so a marker of an
+		# earlier boot cannot exist. A restart of the SERVICE alone does not, so
+		# clear the directory here, before the daemon can write a marker.
+		#
+		# This is NOT "|| true". A marker that cannot be removed means the gate
+		# cannot tell an old answer from a new one, and a gate that cannot be
+		# trusted must not run at all: a passing gate keeps a release that never
+		# proved itself.
+		if ! rm -rf "${PP_RUN}/health"; then
+			eerror "cannot clear ${PP_RUN}/health, so the update gate cannot be trusted"
+			return 1
+		fi
+		checkpath -d -m 0755 "${PP_RUN}/health"
 		start-stop-daemon --start --background \
 			--make-pidfile --pidfile "$gate_pidfile" \
 			--exec /usr/libexec/portapixel/health-gate.sh -- wait || true
 	fi
+	checkpath -d -m 0755 "${PP_RUN}/health"
 	if [ ! -x "$command" ]; then
 		eerror "no daemon binary at $command"
 		eerror "this image was built with no --binary, or the current link is broken"
 		return 1
 	fi
-	checkpath -d -m 0755 "${PP_RUN}"
+	# On the flash: the .bad marker of a release that failed and the boot counter
+	# of the gate. Both must survive a restart of the machine.
 	checkpath -d -m 0755 "${PP_RELEASES}/health"
 	checkpath -d -m 0755 "${PP_STATE}"
 	# The tmpfs for the browser profile and cache starts empty on every boot
