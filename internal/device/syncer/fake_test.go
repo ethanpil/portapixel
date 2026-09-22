@@ -444,3 +444,25 @@ func (d *dev) write(name, content string) string {
 	}
 	return p
 }
+
+// opsSize is the size of the ops log in bytes. A test of the write discipline
+// compares it before and after: the ops log is a file on the same flash card, so a
+// line that one poll writes is a flash write every poll (D2).
+func (d *dev) opsSize(t *testing.T) int64 {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(d.state, "ops.log"))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatal(err)
+	}
+	return info.Size()
+}
+
+// opsTail gives the ops log for a failure message.
+func (d *dev) opsTail(t *testing.T) string {
+	t.Helper()
+	body, _ := os.ReadFile(filepath.Join(d.state, "ops.log"))
+	return string(body)
+}

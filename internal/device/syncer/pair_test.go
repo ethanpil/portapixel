@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
@@ -337,5 +338,96 @@ func TestInsecureURL(t *testing.T) {
 		if got := InsecureURL(tt.in); got != tt.want {
 			t.Errorf("InsecureURL(%q) = %v, want %v", tt.in, got, tt.want)
 		}
+	}
+}
+
+// A second Connect click on a pending code pairing must not put the claim secret in
+// portapixel.toml.
+//
+// The claim secret is a per-device secret of state.json, and the TOML holds only the
+// token that the person typed (ARCHITECTURE section 3, D25). One variable held both
+// values, so the second click wrote the secret into [server] token on the exFAT
+// card. Anybody with a laptop could read it, the settings page showed it as a mask
+// that looks like a real enrollment token, and a clone of that card offered another
+// screen's secret as its own token.
+func TestASecondConnectKeepsTheClaimSecretOutOfTheConfiguration(t *testing.T) {
+	f := newFakeServer(t)
+	d := newDev(t, f)
+
+	if _, err := d.s.Pair(context.Background(), f.srv.URL, "", true); err != nil {
+		t.Fatalf("the first connect: %v", err)
+	}
+	secret := d.st.ClaimSecret
+	if secret == "" {
+		t.Fatal("the device kept no claim secret")
+	}
+	if d.savedToken != "" {
+		t.Fatalf("the first connect saved the token %q", d.savedToken)
+	}
+
+	// The admin presses Connect again, for example after a reload of the page.
+	state, err := d.s.Pair(context.Background(), f.srv.URL, "", true)
+	if err != nil {
+		t.Fatalf("the second connect: %v", err)
+	}
+	if state.Status != StatusPending {
+		t.Fatalf("the state is %+v", state)
+	}
+	// The secret went on the wire, so the server saw no second pending request.
+	f.mu.Lock()
+	calls := len(f.enrolls)
+	last := f.enrolls[len(f.enrolls)-1]
+	f.mu.Unlock()
+	if calls < 2 {
+		t.Fatalf("the server got %d enroll calls", calls)
+	}
+	if last.Token != secret {
+		t.Errorf("the second enroll sent %q, want the claim secret", last.Token)
+	}
+	if d.st.ClaimSecret != secret {
+		t.Errorf("the claim secret changed to %q", d.st.ClaimSecret)
+	}
+	// And it never reached the file on the card.
+	if d.savedToken != "" {
+		t.Errorf("[server] token holds %q; the claim secret must stay in state.json", d.savedToken)
+	}
+	if d.cfg.Server.Token == secret {
+		t.Error("the claim secret is in portapixel.toml")
+	}
+}
+
+// The list of executed command IDs belongs to one pairing. A new server numbers its
+// commands from one, so a kept list would make the device pass over the first
+// commands of its new owner.
+func TestPairingAndUnpairingClearTheCommandList(t *testing.T) {
+	f := newFakeServer(t)
+	d := pairedDev(t, f)
+
+	if err := d.st.Save(d.state); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.s.opt.SaveState(func(st *identity.State) { st.MarkCommand(1); st.MarkCommand(2) }); err != nil {
+		t.Fatal(err)
+	}
+	if !d.st.RanCommand(1) {
+		t.Fatal("the fixture recorded no command")
+	}
+
+	if err := d.s.Unpair(); err != nil {
+		t.Fatalf("unpair: %v", err)
+	}
+	if len(d.st.Commands) != 0 {
+		t.Errorf("the unpair left the command list %v", d.st.Commands)
+	}
+
+	// A pairing with another server also starts with an empty list.
+	if err := d.s.opt.SaveState(func(st *identity.State) { st.MarkCommand(5) }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := d.s.Pair(context.Background(), f.srv.URL, f.enrollToken, true); err != nil {
+		t.Fatalf("pair again: %v", err)
+	}
+	if len(d.st.Commands) != 0 {
+		t.Errorf("the new pairing kept the command list %v", d.st.Commands)
 	}
 }

@@ -52,6 +52,10 @@ const (
 	// firstBackoff is the first wait after a network fault. It doubles up to the
 	// poll interval.
 	firstBackoff = 10 * time.Second
+	// faultRepeat is how often the SAME sync fault may go in the ops log. The log is
+	// a file on the flash card, so a server that is down for a week must not write a
+	// line at every poll (D2).
+	faultRepeat = time.Hour
 	// settleWait is how long the loop waits before its first pass. The browser and
 	// the HTTP server come up first.
 	settleWait = 3 * time.Second
@@ -172,6 +176,11 @@ type Syncer struct {
 	// write anything after an Unpair: the write would bring the fleet state of a
 	// server that this device left back to life.
 	gen uint64
+	// The last fault that went in the ops log, and when. A fault that holds gets one
+	// line an hour and not one line at every poll (see failed).
+	faultEvent string
+	faultText  string
+	faultAt    time.Time
 	// backoff is the wait after a network fault. It doubles up to the poll
 	// interval.
 	backoff time.Duration
@@ -312,6 +321,15 @@ func (s *Syncer) serverURL(st identity.State) string {
 // for ever (plan section 13: the scheduler uses only the fleet rules while the
 // device is paired).
 func (s *Syncer) Restore() {
+	// A staging or a trash directory that a power cut left behind. It is invisible
+	// to the library and to the free space arithmetic, and a trash directory holds a
+	// whole set of playlists.
+	//
+	// This runs BEFORE the pairing test. A device that unpaired after a power cut in
+	// the middle of a swap never reached this line, so a .trash- directory with a
+	// whole set of playlists in it stayed on the card for ever.
+	s.sweepLeftovers()
+
 	st := s.opt.State()
 	if !st.Paired() || st.Fleet == nil {
 		return
@@ -324,11 +342,6 @@ func (s *Syncer) Restore() {
 	s.rulesKey = rulesKey(st.Fleet)
 	s.applied = true
 	s.mu.Unlock()
-
-	// A staging or a trash directory that a power cut left behind. It is invisible
-	// to the library and to the free space arithmetic, and a trash directory holds a
-	// whole set of playlists, so it goes at start and not only in a defer.
-	s.sweepLeftovers()
 
 	if s.opt.SetFleetRules != nil {
 		s.opt.SetFleetRules(st.Fleet.DefaultPlaylist, st.Fleet.Schedule, st.Fleet.Screen)
@@ -441,8 +454,19 @@ func (s *Syncer) Once(ctx context.Context) time.Duration {
 // doubles and stops at the poll interval: a device with no network must not ask
 // every second, and it must not stop asking either.
 func (s *Syncer) failed(event string, err error) time.Duration {
-	s.log(event, err.Error())
-	s.setError(err.Error())
+	text := err.Error()
+	// The ops log gets the FIRST line of a fault and then one line an hour while the
+	// same fault holds.
+	//
+	// A paired device whose server is unreachable used to write one line at every
+	// poll, for ever: about 1400 lines a day onto the flash card, and the trim then
+	// rewrites the whole file. A device in its steady state writes nothing (D2), and
+	// a log that holds one fault a thousand times holds nothing else. The live
+	// sentence is in /api/status through Status.SyncError, so a person loses nothing.
+	if s.noteFault(event, text) {
+		s.log(event, text)
+	}
+	s.setError(text)
 
 	limit := s.interval()
 	s.mu.Lock()
@@ -493,11 +517,36 @@ func (s *Syncer) setError(text string) {
 func (s *Syncer) setOK() {
 	now := s.opt.Now()
 	s.mu.Lock()
+	said := s.faultText != ""
+	s.faultText = ""
+	s.faultEvent = ""
+	s.faultAt = time.Time{}
 	s.lastSync = now
 	s.lastResult = "ok"
 	s.syncError = ""
 	s.backoff = 0
 	s.mu.Unlock()
+	// One line when a fault that reached the log is over. Without it the log would
+	// end at the fault and a person could not tell a screen that recovered from a
+	// screen that is still down.
+	if said {
+		s.log("sync.ok", "the server answers again")
+	}
+}
+
+// noteFault reports if this fault may go in the ops log now, and records it. A new
+// event or a new sentence is always written; the same fault again waits for
+// faultRepeat.
+func (s *Syncer) noteFault(event, text string) bool {
+	now := s.opt.Now()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	same := s.faultEvent == event && s.faultText == text
+	if same && now.Sub(s.faultAt) < faultRepeat {
+		return false
+	}
+	s.faultEvent, s.faultText, s.faultAt = event, text, now
+	return true
 }
 
 // generation gives the number of the pairing that runs now.

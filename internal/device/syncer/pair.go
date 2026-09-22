@@ -134,11 +134,19 @@ func (s *Syncer) Pair(ctx context.Context, rawURL, token string, save bool) (Pai
 
 	// A device that waits for approval on this server polls with its claim secret.
 	// A second click on Connect must not make a second pending request.
+	//
+	// The value on the WIRE and the value in the FILE are two values. The claim
+	// secret is a per-device secret of state.json, and the TOML holds only the token
+	// that the person typed (ARCHITECTURE section 3, D25). One variable for both put
+	// the claim secret into [server] token on the exFAT card, where any laptop reads
+	// it, and a clone of that card then offered another screen's secret as its
+	// enrollment token.
+	onWire := token
 	if token == "" && st.ClaimSecret != "" && st.ServerURL == base {
-		token = st.ClaimSecret
+		onWire = st.ClaimSecret
 	}
 
-	res, err := s.enroll(ctx, base, token)
+	res, err := s.enroll(ctx, base, onWire)
 	if err != nil {
 		return PairState{}, err
 	}
@@ -203,6 +211,10 @@ func (s *Syncer) takeEnrollment(base string, res manifest.EnrollResponse) error 
 			// the same one: the fleet playlists and the schedule have to come back.
 			// The objects stay on the card, so nothing is downloaded twice.
 			st.Fleet = nil
+			// The list of commands that ran belongs to the pairing that is over.
+			// Another server numbers its commands from one, so a kept list would make
+			// this device pass over the first commands of its new owner.
+			st.Commands = nil
 			return
 		}
 		st.ClaimSecret = res.ClaimSecret
@@ -298,6 +310,7 @@ func (s *Syncer) Unpair() error {
 		st.PendingSince = time.Time{}
 		st.ServerURL = ""
 		st.Fleet = nil
+		st.Commands = nil
 	}); err != nil {
 		return err
 	}
@@ -334,8 +347,10 @@ func (s *Syncer) dropToken() time.Duration {
 		st.ClaimSecret = ""
 		st.PairingCode = ""
 		st.ServerURL = ""
-		// The next pairing must apply the whole manifest again.
+		// The next pairing must apply the whole manifest again, and its server numbers
+		// its commands from one.
 		st.Fleet = nil
+		st.Commands = nil
 	})
 	s.pairMu.Unlock()
 	if err != nil {

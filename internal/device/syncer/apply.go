@@ -94,7 +94,7 @@ func (s *Syncer) applyManifest(ctx context.Context, base, token string, m manife
 	// manifest changed. A file that somebody deleted from the card with a laptop
 	// would otherwise never come back, not even after a reboot.
 	need := s.missing(mediaDir, objects)
-	playlistsOK := s.playlistsPresent(fleetRoot, m)
+	playlistsOK := s.playlistsPresent(fleetRoot, objects, m)
 
 	if sameContent && len(need) == 0 && playlistsOK {
 		if sameRules {
@@ -275,11 +275,20 @@ func (s *Syncer) present(dest string, o object) bool {
 // It is a stat for each playlist on every poll. Without it a directory that
 // somebody removed with a laptop never came back, because the manifest had not
 // changed and the compare ended the round.
-func (s *Syncer) playlistsPresent(fleetRoot string, m manifest.Manifest) bool {
+func (s *Syncer) playlistsPresent(fleetRoot string, objects map[string]object, m manifest.Manifest) bool {
 	want := make(map[string]bool, len(m.Playlists))
 	for _, p := range m.Playlists {
-		if p.Name == "" || p.Name != slug.Make(p.Name) {
+		if !usableFleetName(p.Name) {
 			continue // the render leaves it out as well
+		}
+		// The render is the only answer to "does this playlist become a directory".
+		// A check that asked a different question could never be true. A playlist
+		// whose items all fell away renders to nothing and gets no directory, so
+		// this function said "not present" at every poll for ever. The round then
+		// never took the short circuit. It wrote one sync.apply line to the flash
+		// every minute (D2). buildPlaylist writes no log line, so this stays a read.
+		if _, _, ok := s.buildPlaylist(objects, p); !ok {
+			continue
 		}
 		want[p.Name] = true
 		if _, err := os.Stat(filepath.Join(fleetRoot, p.Name, playlist.FileName)); err != nil {
@@ -299,7 +308,9 @@ func (s *Syncer) rulesFit(fleetRoot string, m manifest.Manifest) bool {
 		names = append(names, r.Playlist)
 	}
 	for _, name := range names {
-		if name == "" {
+		// The same rule as the render. A name that never becomes a directory must not
+		// hold the rules back for ever.
+		if !usableFleetName(name) {
 			continue
 		}
 		if _, err := os.Stat(filepath.Join(fleetRoot, name, playlist.FileName)); err != nil {
@@ -458,7 +469,7 @@ func (s *Syncer) writePlaylists(fleetRoot string, objects map[string]object, m m
 	rendered := make(map[string][]byte, len(m.Playlists))
 	for _, p := range m.Playlists {
 		name := p.Name
-		if name == "" || name != slug.Make(name) {
+		if !usableFleetName(name) {
 			s.log("sync.playlist.skipped", fmt.Sprintf("%q is not a directory name that this device accepts", p.Name))
 			continue
 		}
@@ -519,6 +530,26 @@ func (s *Syncer) anyPlaylistDiffers(fleetRoot string, rendered map[string][]byte
 // because playlist.Validate refuses it and the library would report it as a fault
 // at every scan.
 func (s *Syncer) renderPlaylist(objects map[string]object, p manifest.Playlist) ([]byte, bool) {
+	body, notes, ok := s.buildPlaylist(objects, p)
+	for _, n := range notes {
+		s.log(n.event, n.text)
+	}
+	return body, ok
+}
+
+// note is one line that the caller may put in the ops log.
+type note struct{ event, text string }
+
+// buildPlaylist turns a manifest playlist into the bytes of a local playlist.toml.
+// The second value holds the lines for the ops log and this function writes NONE of
+// them itself.
+//
+// Why the split: playlistsPresent asks the same question on every poll, and it must
+// stay a read. A version of this function that logged put one line on the flash
+// every minute for as long as the manifest held a playlist that renders to nothing
+// (D2).
+func (s *Syncer) buildPlaylist(objects map[string]object, p manifest.Playlist) ([]byte, []note, bool) {
+	var notes []note
 	out := playlist.Playlist{Meta: playlist.Meta{
 		Name:       p.Title,
 		Transition: p.Transition,
@@ -538,7 +569,7 @@ func (s *Syncer) renderPlaylist(objects map[string]object, p manifest.Playlist) 
 		case it.SHA256 != "":
 			o, ok := objects[it.SHA256]
 			if !ok {
-				s.log("sync.item.skipped", p.Name+": this device has no object for one item")
+				notes = append(notes, note{"sync.item.skipped", p.Name + ": this device has no object for one item"})
 				continue
 			}
 			out.Items = append(out.Items, playlist.Item{
@@ -550,10 +581,26 @@ func (s *Syncer) renderPlaylist(objects map[string]object, p manifest.Playlist) 
 		}
 	}
 	if errs := out.Validate(playlist.Options{AllowFleetRefs: true}); len(errs) > 0 {
-		s.log("sync.playlist.skipped", p.Name+": "+errs.Error())
-		return nil, false
+		notes = append(notes, note{"sync.playlist.skipped", p.Name + ": " + errs.Error()})
+		return nil, notes, false
 	}
-	return playlist.Render(out), true
+	return playlist.Render(out), notes, true
+}
+
+// usableFleetName is the ONE rule that says which manifest playlist name may become
+// a directory under _fleet.
+//
+// library.FleetMediaDir is the reserved name: _fleet/media holds the objects
+// themselves. A fleet playlist with the title "Media" becomes the slug "media", and
+// the swap then moved the whole object store into the trash directory and removed
+// it. Every fleet item became a 404, and the next poll fetched every object again,
+// over the link of the site and onto the card.
+//
+// The three passes that walk the manifest playlists - the render, the presence check
+// and the rules check - must all use this one rule, or one pass expects a directory
+// that another pass never makes.
+func usableFleetName(name string) bool {
+	return name != "" && name == slug.Make(name) && name != library.FleetMediaDir
 }
 
 // stalePlaylists gives the fleet playlist directories that the manifest no longer

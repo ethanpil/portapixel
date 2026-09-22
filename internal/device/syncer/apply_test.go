@@ -625,3 +625,154 @@ func hashEverything(t *testing.T, d *dev) {
 	}
 	t.Fatal("the library did not finish hashing the files of the test")
 }
+
+// The reserved name. _fleet/media holds the objects, so a fleet playlist can never
+// be called "media".
+//
+// A fleet admin who titles a playlist "Media" makes the slug "media". The swap then
+// moved the whole object store into the trash directory and removed it. Every fleet
+// item became a 404 and the screen fell back. The next poll fetched every object
+// again, over the link of the site and onto the card.
+func TestApplyRefusesAFleetPlaylistNamedLikeTheObjectStore(t *testing.T) {
+	f := newFakeServer(t)
+	ref := f.addObject("Welcome.jpg", "the picture of the lobby")
+	m := lobbyManifest(ref)
+	// The same manifest, with a second playlist that carries the reserved name.
+	m.Playlists = append(m.Playlists, manifest.Playlist{
+		Name: library.FleetMediaDir, Title: "Media",
+		Items: []manifest.Item{{URL: "https://dash.example.com/board", Duration: 30}},
+	})
+	f.setManifest(m)
+
+	d := pairedDev(t, f)
+	if next := d.s.Once(context.Background()); next <= 0 {
+		t.Fatalf("the wait after a good poll is %v", next)
+	}
+
+	// The object store is still there with the object in it.
+	if _, err := os.Stat(d.objectPath(ref)); err != nil {
+		t.Fatalf("the object store was destroyed: %v", err)
+	}
+	// The reserved name became no playlist.
+	if _, err := os.Stat(d.fleetPath(library.FleetMediaDir, "playlist.toml")); err == nil {
+		t.Error("a playlist.toml was written into the object store")
+	}
+	// The playlist that is good is still there.
+	if text := d.readFleetPlaylist("lobby"); !strings.Contains(text, "Welcome") {
+		t.Errorf("the good playlist is:\n%s", text)
+	}
+
+	// The same manifest again must change nothing and write nothing.
+	before := d.opsSize(t)
+	d.now = d.now.Add(time.Hour)
+	if next := d.s.Once(context.Background()); next <= 0 {
+		t.Fatalf("the wait after the second poll is %v", next)
+	}
+	if after := d.opsSize(t); after != before {
+		t.Errorf("the second poll wrote %d bytes to the ops log:\n%s", after-before, d.opsTail(t))
+	}
+}
+
+// A paired device whose manifest never changes writes NOTHING (D2).
+//
+// A manifest playlist that renders to nothing gets no directory, and the presence
+// check asked for one. It therefore answered "not present" at every poll for ever,
+// the round never took its short circuit, and one sync.apply line went to the flash
+// card every minute.
+func TestAPollThatChangesNothingWritesNothing(t *testing.T) {
+	f := newFakeServer(t)
+	ref := f.addObject("Welcome.jpg", "the picture of the lobby")
+	m := lobbyManifest(ref)
+	// A playlist that the fleet admin made and has not filled yet. It renders to
+	// nothing, because a playlist with no item is not a playlist.
+	m.Playlists = append(m.Playlists, manifest.Playlist{Name: "empty", Title: "Not filled yet"})
+	f.setManifest(m)
+
+	d := pairedDev(t, f)
+	if next := d.s.Once(context.Background()); next <= 0 {
+		t.Fatal("the first poll failed")
+	}
+
+	before := d.opsSize(t)
+	for i := 0; i < 5; i++ {
+		d.now = d.now.Add(time.Hour)
+		if next := d.s.Once(context.Background()); next <= 0 {
+			t.Fatalf("poll %d failed", i)
+		}
+	}
+	if after := d.opsSize(t); after != before {
+		t.Errorf("five polls that changed nothing wrote %d bytes to the ops log:\n%s",
+			after-before, d.opsTail(t))
+	}
+	if d.rescans != 1 {
+		t.Errorf("the device rescanned %d times; a poll that changed nothing must not rescan", d.rescans)
+	}
+}
+
+// A server that is unreachable must not write a line to the flash at every poll.
+//
+// A device whose server is down wrote about 1400 ops log lines a day, for ever, and
+// the trim then rewrites the whole file. The first line goes in, and then one line
+// an hour while the same fault holds. /api/status carries the live sentence, so a
+// person loses nothing (D2, D35).
+func TestARepeatedSyncFaultWritesOneLine(t *testing.T) {
+	f := newFakeServer(t)
+	f.setManifest(lobbyManifest(f.addObject("Welcome.jpg", "the picture")))
+	d := pairedDev(t, f)
+	if next := d.s.Once(context.Background()); next <= 0 {
+		t.Fatal("the first poll failed")
+	}
+
+	// The server goes away.
+	f.srv.Close()
+	if next := d.s.Once(context.Background()); next <= 0 {
+		t.Fatal("a poll against a closed server gave no wait")
+	}
+	first := d.opsSize(t)
+	if first == 0 {
+		t.Fatal("the first fault wrote nothing at all")
+	}
+
+	// Twenty more polls inside the hour write nothing.
+	for i := 0; i < 20; i++ {
+		d.now = d.now.Add(time.Minute)
+		d.s.Once(context.Background())
+	}
+	if got := d.opsSize(t); got != first {
+		t.Errorf("twenty polls of the same fault wrote %d bytes:\n%s", got-first, d.opsTail(t))
+	}
+
+	// An hour later the same fault is worth one line again: a person must be able to
+	// see that the screen is still down.
+	d.now = d.now.Add(2 * time.Hour)
+	d.s.Once(context.Background())
+	if got := d.opsSize(t); got <= first {
+		t.Error("the fault wrote no line after an hour")
+	}
+}
+
+// A power cut in the middle of a swap leaves a .trash- directory with a whole set of
+// playlists in it. The sweep at start must run on EVERY device, paired or not.
+//
+// The sweep was after the pairing test in Restore, so a device that unpaired after
+// such a power cut never reached it and the directory stayed on the card for ever.
+func TestRestoreSweepsLeftoversOnAnUnpairedDevice(t *testing.T) {
+	d := newDev(t, nil)
+	leftovers := []string{".staging-abc123", ".trash-def456"}
+	for _, name := range leftovers {
+		if err := os.MkdirAll(d.fleetPath(name, "lobby"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d.st.Paired() {
+		t.Fatal("the fixture is paired; this test is about the standalone device")
+	}
+
+	d.s.Restore()
+
+	for _, name := range leftovers {
+		if _, err := os.Stat(d.fleetPath(name)); !os.IsNotExist(err) {
+			t.Errorf("%s is still on the card (%v)", name, err)
+		}
+	}
+}
