@@ -256,6 +256,13 @@ checked with a screenshot of the virtual display or with the ops log.
   never reaches a URL item page: `Page.navigate` sends no referrer, the page has
   `Referrer-Policy: no-referrer`, and a `?k=` GET from another origin executes but is
   not readable.
+- An image build needs about 7 GB of free disk on the test box, and each earlier worker
+  left its 4 GB raw images under `/root/ppwork`. Remove the raw images of a session
+  when it ends. The `.img.gz` is sufficient: `gunzip` gives the raw image again.
+- A device keeps the IDs of the commands that it ran. A server whose database was made
+  again gives the same IDs to new commands, and the device then acknowledges them and
+  does not run them. HEAD clears the list at each new pairing (a80fa15). The lab client
+  of build 0.3.0-lab1 showed the fault.
 - A job that PUBLISHES must wait for every gate. A job that only tests must not. The
   first pipeline pushed the container image before the boot test ran, and a push cannot
   be undone. `server-image` and `release` now need each gate.
