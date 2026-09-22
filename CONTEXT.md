@@ -1,4 +1,4 @@
-# PortaPixel context
+﻿# PortaPixel context
 
 The plan (`portapixel-dev-plan.md`, revision 5) is the intent. This file is the truth:
 what we built, where we changed the plan, and the lessons that are not obvious from the
@@ -26,7 +26,7 @@ something that cost you time. Remove an entry when it is no longer true.
 | v0.1 boot and play | Built and reviewed. Proven in QEMU with screenshots. No real hardware check yet. |
 | v0.2 the appliance | Built and reviewed. CEC, DPMS and install-to-disk have no hardware check yet. |
 | v0.3 the fleet | Built and reviewed. Proven with two machines in the lab (`tests/qemu/lab`). |
-| v1.0 hardening | Not started: the 30 day soak, the hardware checklist, the release key. |
+| v1.0 hardening | Reviews done. The release pipeline is proven to a draft release. Open: the release key, the 30 day soak, the hardware checklist. |
 
 The aarch64 image was never built: the test container has no qemu-user binfmt. The first
 build is in GitHub Actions. No Raspberry Pi has started this image.

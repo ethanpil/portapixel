@@ -4,6 +4,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Select only fleet playlists while paired. Apply the audio settings (D11). Make the watchdog tunable (D30) (466ad4b to 3f0e44e).
 - Fix 15 findings of the final device review (19504ab to 699eb0a). The status for the LAN does not tell which passwords are the default. A fleet playlist named media cannot delete the object store. A standalone device writes nothing in its steady state. Each answer has security headers.
 - Fix 12 findings of the final OS, CI, web and document review (d855054 to e02d989). The container image and the release wait for each gate. The arm64 container holds an arm64 binary. The Activity page shows again.
 - Fix 13 findings of the final server review (d2faa1d to ec84667). A waiting enrollment is keyed on the hardware ID too. Command IDs never come back. Each answer has security headers, and a stored object is inert. Note: 7e2494d also holds the media store files and ec84667 holds the server tests; the two titles are wrong.
