@@ -94,6 +94,20 @@ const (
 	// address that is not local, so the device token goes over the internet in
 	// clear text.
 	WarnServerInsecure = "server-insecure"
+	// WarnMDNSNameTaken says that another device on the network already answers for
+	// the mDNS name of this device, so this device announces
+	// portapixel-<last4>.local instead (D20).
+	WarnMDNSNameTaken = "mdns-name-taken"
+	// WarnZramOff says that this device is low tier and has no zram swap. Chromium
+	// needs more memory than the WPE engine of the first design, and a low tier
+	// device with no swap restarts the browser again and again (plan section 16, the
+	// low RAM row). The OS layer configures zram; the daemon only reports it.
+	WarnZramOff = "zram-off"
+	// WarnRebootLoop says that the watchdog ladder rebooted this device more than
+	// once in the last hour. The device stops every automatic action and shows this
+	// on the fallback screen, so a person sees the state instead of a box that
+	// reboots for ever (plan 3.3, rung 4).
+	WarnRebootLoop = "reboot-loop"
 )
 
 // CodecReport says which video formats a device decodes (D12). The player probes

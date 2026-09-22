@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func newTestLog(t *testing.T) *Log {
@@ -248,5 +249,45 @@ func TestConcurrentLog(t *testing.T) {
 	got := l.Tail(writers * each)
 	if len(got) != writers*each {
 		t.Fatalf("got %d entries, want %d", len(got), writers*each)
+	}
+}
+
+// The trim counts LINES, so a line with no bound gives the file no bound in bytes.
+// A sync error that names a whole URL, or an error of a program that printed a page,
+// made lines of any length on a flash card that holds the ops log for ever (D35).
+func TestALongLineIsCut(t *testing.T) {
+	dir := t.TempDir()
+	l := New(filepath.Join(dir, "ops.log"))
+	l.Log(strings.Repeat("e", 4000), strings.Repeat("d", 40000))
+
+	entries := l.Tail(1)
+	if len(entries) != 1 {
+		t.Fatalf("the log holds %d entries", len(entries))
+	}
+	if len(entries[0].Event) > maxField+3 {
+		t.Errorf("the event is %d bytes long", len(entries[0].Event))
+	}
+	if len(entries[0].Details) > maxField+3 {
+		t.Errorf("the details are %d bytes long", len(entries[0].Details))
+	}
+	if !strings.HasSuffix(entries[0].Details, "...") {
+		t.Error("a line that was cut does not say so")
+	}
+
+	// The whole file stays inside a bound that the flash and the admin UI can hold.
+	info, err := os.Stat(filepath.Join(dir, "ops.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The time, two tab characters, two fields and the newline.
+	if want := int64(2*(maxField+3) + 32); info.Size() > want {
+		t.Errorf("one line made a file of %d bytes, want %d at most", info.Size(), want)
+	}
+
+	// A line that holds a character of more than one byte is still valid UTF-8.
+	l.Log("unicode", strings.Repeat("é", maxField))
+	last := l.Tail(1)[0]
+	if !utf8.ValidString(last.Details) {
+		t.Error("the cut broke a character")
 	}
 }

@@ -81,20 +81,28 @@ func TestResolveURL(t *testing.T) {
 	}
 }
 
-// The device token goes to the host that the request started on and to no other.
+// A redirect may stay on the host and the scheme that the request started on, and
+// nothing else.
+//
+// A redirect that the device FOLLOWED to another host took away the one proof that
+// ResolveURL gives: that every address a manifest names is on the paired server. The
+// server could then pick any host and any port, and read the answer back out of
+// sync_error. So an off-host hop is an error, not a request with one header less.
 func TestDropBearerOffHost(t *testing.T) {
 	tests := []struct {
-		name string
-		from string
-		to   string
-		keep bool
+		name  string
+		from  string
+		to    string
+		allow bool
 	}{
-		{name: "the same host", from: "https://s.example.com/a", to: "https://s.example.com/b", keep: true},
+		{name: "the same host", from: "https://s.example.com/a", to: "https://s.example.com/b", allow: true},
 		{name: "the same host with the default port", from: "https://s.example.com/a",
-			to: "https://s.example.com:443/b", keep: true},
+			to: "https://s.example.com:443/b", allow: true},
 		{name: "a subdomain", from: "https://s.example.com/a", to: "https://files.s.example.com/b"},
 		{name: "another host", from: "https://s.example.com/a", to: "https://cdn.example.net/b"},
 		{name: "another port", from: "https://s.example.com/a", to: "https://s.example.com:8443/b"},
+		{name: "a private address", from: "https://s.example.com/a", to: "http://10.0.0.1:8080/x"},
+		{name: "https becomes http", from: "https://s.example.com/a", to: "http://s.example.com/b"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -107,12 +115,21 @@ func TestDropBearerOffHost(t *testing.T) {
 				t.Fatal(err)
 			}
 			next.Header.Set("Authorization", "Bearer t")
-			if err := DropBearerOffHost(next, []*http.Request{first}); err != nil {
-				t.Fatal(err)
+			err = DropBearerOffHost(next, []*http.Request{first})
+			if tt.allow {
+				if err != nil {
+					t.Fatalf("a hop on the same host was refused: %v", err)
+				}
+				if next.Header.Get("Authorization") == "" {
+					t.Error("the token went away on a hop that stays on the server")
+				}
+				return
 			}
-			kept := next.Header.Get("Authorization") != ""
-			if kept != tt.keep {
-				t.Errorf("the token was kept = %v, want %v", kept, tt.keep)
+			if err == nil {
+				t.Fatal("the hop off the server was followed")
+			}
+			if next.Header.Get("Authorization") != "" {
+				t.Error("the token is still on the request")
 			}
 		})
 	}

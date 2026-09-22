@@ -197,3 +197,25 @@ func (j *jsonErrorWriter) Write(b []byte) (int, error) {
 // Unwrap gives the writer below, so http.NewResponseController and the flush of a
 // large answer still reach the real connection.
 func (j *jsonErrorWriter) Unwrap() http.ResponseWriter { return j.ResponseWriter }
+
+// ReadFrom passes a body straight to the writer below.
+//
+// http.ServeContent copies with io.CopyN, which takes the io.ReaderFrom of the real
+// writer of net/http when it is there. On Linux that path is sendfile: the kernel
+// moves the file to the socket with no buffer of ours in between. A wrapper that
+// only carries Write hides the interface, and every media download and every release
+// binary then went through a 32 KiB loop in user space. io.Copy does not look at
+// Unwrap, so the delegation is written here.
+func (j *jsonErrorWriter) ReadFrom(src io.Reader) (int64, error) {
+	if !j.done {
+		j.WriteHeader(http.StatusOK)
+	}
+	if j.replaced {
+		// The body of the answer that we replaced goes nowhere.
+		return io.Copy(io.Discard, src)
+	}
+	if rf, ok := j.ResponseWriter.(io.ReaderFrom); ok {
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(j.ResponseWriter, src)
+}

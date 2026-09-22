@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
 )
@@ -14,6 +15,12 @@ import (
 const (
 	maxLines  = 1200
 	keepLines = 1000
+	// maxField is the longest event name or detail text that one line holds. The
+	// trim counts LINES. With no cap on a line the file then has no bound in bytes: a
+	// sync error that names a whole URL, or the error of a program that printed a
+	// page, made lines of any length. 1200 lines of 512 bytes is 600 kB, which the
+	// admin UI can read and the flash can hold.
+	maxField = 512
 )
 
 // timeFormat is the time format of a log line: UTC, to the second.
@@ -161,7 +168,16 @@ func clean(s string) string {
 	s = strings.ReplaceAll(s, "\t", " ")
 	s = strings.ReplaceAll(s, "\r", " ")
 	s = strings.ReplaceAll(s, "\n", " ")
-	return strings.TrimSpace(s)
+	s = strings.TrimSpace(s)
+	if len(s) > maxField {
+		// Cut on a rune boundary, so that the file stays valid UTF-8.
+		cut := maxField
+		for cut > 0 && !utf8.RuneStart(s[cut]) {
+			cut--
+		}
+		s = s[:cut] + "..."
+	}
+	return s
 }
 
 // splitLines gives the non-empty lines of data.

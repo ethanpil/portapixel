@@ -56,20 +56,32 @@ func NewClient() *http.Client {
 // net/http uses by default.
 const MaxRedirects = 10
 
-// DropBearerOffHost takes the device token off a request that a redirect sent to
-// another host.
+// DropBearerOffHost refuses a redirect that leaves the host or the scheme that the
+// request started on, and it is the redirect rule of every fleet call.
 //
-// The token is the key to this device on its fleet server. net/http already refuses
-// to copy the header to another domain, and its rule accepts a subdomain of the same
-// domain. This rule is stricter: the host must be the host that the request started
-// on. A release mirror or a media route that answers with a redirect to a content
-// network must not carry the token there.
+// A redirect to another host must be an ERROR and not a request with one header
+// less. ResolveURL proves that every address a manifest names is on the paired
+// server. A 302 that the device followed took that proof away. The server could
+// then pick any host and any port for the device to connect to. It could read the
+// answer back out of sync_error and the ops log, and so scan the network of the
+// site from inside. It could also send the body of an https object over http.
+//
+// A redirect to the SAME host and scheme stays permitted: that is a path change
+// behind a reverse proxy, which a mirror does need.
 func DropBearerOffHost(req *http.Request, via []*http.Request) error {
 	if len(via) >= MaxRedirects {
 		return errors.New("the request followed too many redirects")
 	}
-	if len(via) > 0 && !sameHost(req.URL, via[0].URL) {
+	if len(via) == 0 {
+		return nil
+	}
+	first := via[0].URL
+	if !sameHost(req.URL, first) || req.URL.Scheme != first.Scheme {
+		// The header goes too, in case a caller ignores this error and reuses the
+		// request.
 		req.Header.Del("Authorization")
+		return fmt.Errorf("the server sent this device to %s://%s, which is not %s://%s",
+			req.URL.Scheme, req.URL.Host, first.Scheme, first.Host)
 	}
 	return nil
 }
