@@ -1,6 +1,7 @@
 package httpguard
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -179,23 +180,64 @@ func TestStripPortIsTheOneHelper(t *testing.T) {
 		name string
 		addr string
 		want string
+		// key is the limiter bucket. It is the host for IPv4 and a /64 for IPv6.
+		key string
 	}{
-		{name: "IPv4 with a port", addr: "192.168.1.9:41234", want: "192.168.1.9"},
-		{name: "IPv4 with no port", addr: "192.168.1.9", want: "192.168.1.9"},
-		{name: "IPv6 with a port", addr: "[::1]:41234", want: "::1"},
-		{name: "IPv6 in brackets with no port", addr: "[::1]", want: "::1"},
-		{name: "bare IPv6", addr: "::1", want: "::1"},
-		{name: "a name with a port", addr: "lobby.local:8080", want: "lobby.local"},
+		{name: "IPv4 with a port", addr: "192.168.1.9:41234", want: "192.168.1.9", key: "192.168.1.9"},
+		{name: "IPv4 with no port", addr: "192.168.1.9", want: "192.168.1.9", key: "192.168.1.9"},
+		{name: "IPv6 with a port", addr: "[::1]:41234", want: "::1", key: "::/64"},
+		{name: "IPv6 in brackets with no port", addr: "[::1]", want: "::1", key: "::/64"},
+		{name: "bare IPv6", addr: "::1", want: "::1", key: "::/64"},
+		{name: "a name with a port", addr: "lobby.local:8080", want: "lobby.local", key: "lobby.local"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := HostOf(tt.addr); got != tt.want {
 				t.Fatalf("HostOf(%q) = %q, want %q", tt.addr, got, tt.want)
 			}
-			if got := limiterKey(tt.addr); got != tt.want {
-				t.Fatalf("limiterKey(%q) = %q, want %q", tt.addr, got, tt.want)
+			if got := limiterKey(tt.addr); got != tt.key {
+				t.Fatalf("limiterKey(%q) = %q, want %q", tt.addr, got, tt.key)
 			}
 		})
+	}
+}
+
+// TestTheLimiterCountsAnIPv6NetworkAndNotOneAddress covers the bucket of an IPv6
+// caller.
+//
+// Every customer holds a /64 or more, and a source address inside that block costs
+// the caller nothing. A limiter that keyed the whole 128 bits therefore had no limit
+// at all over IPv6: the login route would take unlimited bcrypt guesses, and the
+// enroll route unlimited token guesses.
+func TestTheLimiterCountsAnIPv6NetworkAndNotOneAddress(t *testing.T) {
+	l := NewLimiter()
+	for i := 0; i < maxFailures; i++ {
+		addr := fmt.Sprintf("[2001:db8:1:2::%x]:5000", i+1)
+		if !l.Allow(addr) {
+			t.Fatalf("attempt %d from the same /64 was refused too early", i+1)
+		}
+		l.Fail(addr)
+	}
+	if l.Allow("[2001:db8:1:2::ffff]:5000") {
+		t.Fatal("another address of the same /64 got a new budget")
+	}
+	if !l.Allow("[2001:db8:1:3::1]:5000") {
+		t.Fatal("another /64 was refused")
+	}
+	if !l.Allow("192.0.2.7:5000") {
+		t.Fatal("an IPv4 address was refused")
+	}
+}
+
+// TestDoneEndsAnAttemptAndCountsNothing covers the third answer of the limiter. A
+// path that is neither a failure nor a proof must give the open attempt back.
+func TestDoneEndsAnAttemptAndCountsNothing(t *testing.T) {
+	l := NewLimiter()
+	for i := 0; i < maxFailures*2; i++ {
+		if !l.Allow("198.51.100.4:5000") {
+			t.Fatalf("attempt %d was refused although every one before it ended clean", i+1)
+		}
+		l.Done("198.51.100.4:5000")
 	}
 }
 

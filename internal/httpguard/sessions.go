@@ -58,6 +58,7 @@ func (s *Sessions) Login(w http.ResponseWriter, r *http.Request) string {
 	s.mu.Lock()
 	now := s.now()
 	s.sessions[token] = session{expires: now.Add(sessionLife), issued: now}
+	s.dropExpired(now)
 	s.mu.Unlock()
 
 	s.setSessionCookie(w, r, token)
@@ -82,6 +83,20 @@ func (s *Sessions) setSessionCookie(w http.ResponseWriter, r *http.Request, toke
 // secureFor answers if the cookie of this request takes the Secure attribute.
 func (s *Sessions) secureFor(r *http.Request) bool {
 	return s.Secure != nil && r != nil && s.Secure(r)
+}
+
+// dropExpired removes the sessions that nobody can use any more. The caller holds
+// the lock.
+//
+// Without it the map loses an entry only when that exact token comes back after it
+// died, so a login page that somebody opens each day for a year leaves a row for
+// each login. The limiter of this package has the same pass for the same reason.
+func (s *Sessions) dropExpired(now time.Time) {
+	for token, sess := range s.sessions {
+		if now.After(sess.expires) {
+			delete(s.sessions, token)
+		}
+	}
 }
 
 // Logout removes the session of this request and clears the cookie.

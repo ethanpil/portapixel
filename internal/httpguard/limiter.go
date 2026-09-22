@@ -1,6 +1,7 @@
 package httpguard
 
 import (
+	"net"
 	"sync"
 	"time"
 )
@@ -16,6 +17,12 @@ const (
 // addresses that have no recent record. One pass costs one step for each
 // address, and it runs once in maxWrites records, so the cost stays small.
 const maxWrites = 1024
+
+// maxKeys is the number of addresses that the limiter holds. A pass runs at this
+// size as well as every maxWrites records, so a caller that arrives from a new
+// address each time cannot grow the map for a whole window. A homelab fleet is a
+// few hundred addresses, so the value is far above any real load.
+const maxKeys = 20000
 
 // The limits of the pending-enrollment limiter: five new screens from one address
 // in one hour. An open route that makes a row must have a limit of its own, and a
@@ -93,6 +100,21 @@ func (l *Limiter) Fail(remoteAddr string) {
 	l.sweep()
 }
 
+// Done ends the open attempt of an address and records nothing.
+//
+// The caller uses it on a path that is neither a failure nor a proof: an enroll
+// request with no token that worked is one. Without it the attempt that Allow
+// counted stays open for a whole window, so five such requests would lock the
+// address out although nothing went wrong.
+func (l *Limiter) Done(remoteAddr string) {
+	key := limiterKey(remoteAddr)
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	l.endOpen(key)
+}
+
 // Reset removes the failures of an address. The caller calls it after a good
 // login, so that one wrong keystroke does not count against the admin later.
 func (l *Limiter) Reset(remoteAddr string) {
@@ -145,7 +167,7 @@ func (l *Limiter) endOpen(key string) {
 // lock.
 func (l *Limiter) sweep() {
 	l.writes++
-	if l.writes < maxWrites {
+	if l.writes < maxWrites && len(l.failures)+len(l.open) < maxKeys {
 		return
 	}
 	l.writes = 0
@@ -156,7 +178,29 @@ func (l *Limiter) sweep() {
 	}
 }
 
-// limiterKey gives the address without the port, because the port changes with
-// each connection. It uses the one helper of the package, so that the limiter
-// and the host allowlist never disagree about what one address is.
-func limiterKey(remoteAddr string) string { return HostOf(remoteAddr) }
+// v6Prefix is the number of bytes of an IPv6 address that make one bucket. Eight
+// bytes are a /64, which is the smallest block that a provider gives to one
+// customer.
+const v6Prefix = 8
+
+// limiterKey gives the bucket of an address.
+//
+// The port goes away, because it changes with each connection. It uses the one
+// helper of the package, so that the limiter and the host allowlist never disagree
+// about what one address is.
+//
+// An IPv6 address counts by its /64 and not by its full 128 bits. One customer
+// holds a /64 or more, and a source address inside that block costs the caller
+// nothing, so a limiter that keyed the whole address would give an attacker 2^64
+// buckets and no limit at all. An IPv4 address counts whole.
+func limiterKey(remoteAddr string) string {
+	host := HostOf(remoteAddr)
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host
+	}
+	if v4 := ip.To4(); v4 != nil {
+		return v4.String()
+	}
+	return ip.Mask(net.CIDRMask(v6Prefix*8, 128)).String() + "/64"
+}
