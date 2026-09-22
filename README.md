@@ -18,12 +18,15 @@ Chromium. One Go module builds the device software and the fleet server. See
 **PortaPixel is pre-release software.**
 
 - The project is proven in QEMU only. Nobody has run it on real hardware yet.
-- The Raspberry Pi image has not started on a real Raspberry Pi.
+- The Raspberry Pi image builds in CI. It has never started on a real
+  Raspberry Pi.
+- The fleet server container builds and answers in CI. No fleet has run on it.
 - Treat every hardware claim below as untested until the release checklist
   says otherwise. See `docs/release-checklist.md`.
 - 1 GB of RAM is the practical minimum. 512 MB fails without swap: this is
-  measured, not a guess. With zram swap a 512 MB machine starts, but it uses
-  swap for the fallback screen alone. The image does not set up zram yet.
+  measured, not a guess. The first boot of a machine with less than 1 GB now
+  makes a zram swap device as large as the memory. A 512 MB machine then
+  starts, but it uses swap for the fallback screen alone.
 
 ## Hardware
 
@@ -33,7 +36,7 @@ built and confirmed so far.
 | Tier | Hardware | Image | Confirmed |
 |---|---|---|---|
 | x86_64 | A PC, a NUC or a thin client, BIOS or UEFI | `portapixel-<version>-x86_64.img.gz` | Boots and plays in QEMU only. |
-| aarch64 | Raspberry Pi 3, 4, 5, Zero 2 W, Pi 2 v1.2, CM4, CM5 | `portapixel-<version>-rpi-aarch64.img.gz` | Not built yet. The release workflow builds it for the first time. No Raspberry Pi has started it. |
+| aarch64 | Raspberry Pi 3, 4, 5, Zero 2 W, Pi 2 v1.2, CM4, CM5 | `portapixel-<version>-aarch64.img.gz` | Builds in CI, and CI reads the boot files inside it. No Raspberry Pi has started it. |
 
 The Pi Zero 2 W and the Pi 2 v1.2 are low-RAM devices. Chromium uses more RAM
 than the browser engine that the plan first named, so treat the Pi Zero 2 W as

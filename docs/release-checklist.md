@@ -110,6 +110,32 @@ on real hardware.
 - [ ] The Chromium start-up network connections, measured against a real
       firewall rather than a packet capture in a test network.
 
+### The commands of `install-to-disk` that no test has ever run
+
+Every test of `install-to-disk` gives the installer a double of the runner, so
+these command lines have never touched a real disk. Read the output of each one
+on the first real run, in this order (`internal/device/installer/install.go`):
+
+- [ ] `sgdisk --zap-all <disk>`
+- [ ] `sgdisk -n 1:0:+<boot>K -t 1:ef00 -c 1:PPBOOT -n 2:0:+<root>K
+      -t 2:8300 -c 2:PPROOT -n 3:0:0 -t 3:0700 -c 3:PPMEDIA <disk>`
+- [ ] `sgdisk --attributes=1:set:2 <disk>` (x86_64 only: the legacy BIOS
+      bootable bit, which the MBR boot code of syslinux needs)
+- [ ] `partx -u <disk>`, and `partprobe <disk>` when the first one fails
+- [ ] `mkfs.exfat -L PPMEDIA <media partition>`
+- [ ] The first 440 bytes of the MBR, which carry the GPT-aware boot code of
+      syslinux on x86_64 and nothing on a Raspberry Pi.
+- [ ] `mount` and `umount` of each new partition.
+
+### The update path that no test has ever run
+
+- [ ] `rc-service portapixeld restart` after an update, on a real device. The
+      health gate ends its rollback with that command, and every test of the
+      gate runs a program that only answers instead.
+- [ ] The daemon writes `<run>/health/<version>.ok` in tmpfs, and
+      `os/overlay/etc/init.d/portapixeld` clears that directory in `start_pre`.
+      Prove both on a device that takes a real update.
+
 ## The 30-day soak gate
 
 Before a 1.0 release, run two devices, one Raspberry Pi Zero 2 W and one

@@ -27,11 +27,42 @@ Everything is in one data directory, `/var/lib/portapixel-server` by default:
 A backup of `server.toml` and `portapixel.db` rebuilds the fleet. The media files
 are large, so back them up as files.
 
+**Stop the server before you copy `portapixel.db`.** The database runs in WAL
+mode, so the newest pages are in `portapixel.db-wal` and not yet in the database
+file. A copy of `portapixel.db` alone, made while the server runs, loses them and
+can be a file that nothing opens. Two safe ways:
+
+```sh
+rc-service portapixel-server stop        # or: docker compose stop
+cp /var/lib/portapixel-server/portapixel.db /where/you/keep/backups/
+rc-service portapixel-server start
+```
+
+Or copy all three files together, `portapixel.db`, `portapixel.db-wal` and
+`portapixel.db-shm`, with the server stopped. A `backup` subcommand that works
+while the server runs is a later feature.
+
 ## The first run
 
 The first run makes `server.toml`. It generates the admin password and prints it
 one time. Read it from the log and record it. The server keeps only the hash of
 the password, so it cannot print the password again.
+
+**That password is now in the log.** The server writes it to its standard output,
+so it is in the journal, in the Docker log or in the file that the init script
+names. Anybody who reads logs can read it. Change the password after the first
+sign-in, and then clear the old one:
+
+```sh
+# systemd
+journalctl --rotate && journalctl --vacuum-time=1s
+# Docker: the log of the container goes with the container
+docker compose down && docker compose up -d
+# OpenRC, where the init script writes to a file
+: >/var/log/portapixel-server.log
+```
+
+A password that you set yourself with `set-password` never reaches the log.
 
 To set another password later:
 

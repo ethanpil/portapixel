@@ -19,7 +19,7 @@ leaves little room for media.
 Download the release image for your hardware:
 
 - `portapixel-<version>-x86_64.img.gz` for a PC, a NUC or a thin client.
-- `portapixel-<version>-rpi-aarch64.img.gz` for a Raspberry Pi.
+- `portapixel-<version>-aarch64.img.gz` for a Raspberry Pi.
 
 Unzip the file. You get one `.img` file. Write this file to the stick. **The
 write erases everything already on the stick.**
@@ -114,11 +114,28 @@ Instead of the image, you can put PortaPixel onto a machine that already
 runs a stock, sys-mode install of Alpine Linux, at the exact release that a
 PortaPixel release pins.
 
-Run this as root:
+`install.sh` is not one file that runs on its own. It reads `packages.list`,
+it copies the `overlay` directory into the target, and it takes the first
+slides from `default-media`. Download `portapixel-os-<version>.tar.gz` from
+the release, not only `install.sh`, and unpack it:
 
 ```sh
-sh install.sh --binary portapixeld --version 0.1.0
+tar xzf portapixel-os-0.1.0.tar.gz
+cd os
 ```
+
+Download `portapixeld-amd64` or `portapixeld-arm64` from the same release and
+give its path to `--binary`. Then run this as root:
+
+```sh
+sh install.sh --binary ../portapixeld-amd64 --version 0.1.0
+```
+
+On-box mode installs **no kernel, no CPU microcode and no boot loader**: the
+host already boots itself, and a second kernel in `/lib/modules` leaves the
+boot loader with no way to know which one starts. The script prints the list
+it skipped. It **does** install the graphics, WiFi and Ethernet firmware,
+because the kernel of the host needs those files.
 
 `install.sh` puts the media, the playlists and `portapixel.toml` under
 `/var/lib/portapixel/media`. To keep the sideload workflow of a removable
