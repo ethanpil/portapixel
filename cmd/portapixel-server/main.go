@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ethanpil/portapixel/internal/updater"
 	"github.com/ethanpil/portapixel/internal/version"
 )
 
@@ -45,7 +44,7 @@ func main() {
 	case "selftest":
 		os.Exit(selftestCommand(args))
 	case "version":
-		os.Exit(versionCommand(args))
+		os.Exit(version.Command("portapixel-server", args, os.Stdout, os.Stderr))
 	case "-h", "--help", "help":
 		usage()
 		os.Exit(0)
@@ -56,28 +55,9 @@ func main() {
 	}
 }
 
-// versionCommand prints the build identity.
-//
-// The line with no flag is for a person and its shape never changes:
-// "portapixel-server <version> <arch>". "--json" prints the machine-readable
-// form that internal/updater reads. The server replaces itself the same way that
-// a device does, so both commands answer this flag.
-func versionCommand(args []string) int {
-	if len(args) == 1 && args[0] == "--json" {
-		info := updater.BinaryInfo{Name: "portapixel-server", Version: version.Version, Arch: version.Arch()}
-		data, err := info.JSON()
-		if err != nil {
-			return fail("cannot say which version this build is: %v", err)
-		}
-		os.Stdout.Write(data)
-		return 0
-	}
-	if len(args) > 0 {
-		return fail("version takes no argument but --json")
-	}
-	fmt.Printf("portapixel-server %s %s\n", version.Version, version.Arch())
-	return 0
-}
+// The "version" subcommand lives in internal/version, which owns both forms of
+// the answer. The server replaces itself the same way that a device does, so both
+// commands give the same shape and the updater reads one contract.
 
 func usage() {
 	fmt.Fprint(os.Stderr, `portapixel-server -- the PortaPixel fleet server

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"flag"
 	"fmt"
 	"net"
@@ -133,8 +134,20 @@ func healthURL(cfg Config) string {
 // checkURL asks a running server if it is healthy. The session route is the right
 // one: it needs no session of its own, it touches the database through the
 // settings, and it answers JSON.
+//
+// A TLS listener is asked with no certificate check. The check runs on the same
+// machine as the server and it proves that the process answers, not who it is:
+// there is nothing between the two that a certificate could protect. With the check
+// on, the address is the literal 127.0.0.1, so a self-signed certificate fails the
+// chain and a real certificate for the public name fails the host name. The
+// container health check then reported every TLS deployment as unhealthy for ever.
 func checkURL(base string) int {
 	client := &http.Client{Timeout: healthTimeout}
+	if strings.HasPrefix(base, "https://") {
+		client.Transport = &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		}
+	}
 	resp, err := client.Get(base + "/api/admin/session")
 	if err != nil {
 		return fail("%v", err)

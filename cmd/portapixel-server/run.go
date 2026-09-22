@@ -81,7 +81,16 @@ type server struct {
 	// stopSweep ends the background sweeps.
 	stopSweep chan struct{}
 	sweepOnce sync.Once
+	// bgWait counts the background goroutines. The database closes after the last
+	// one ends, so that nothing writes to a pool that is gone.
+	bgWait sync.WaitGroup
 
+	// refreshMu makes one refresh of the fleet cache whole. Two callers read the
+	// database at the same time on a normal day: an admin write and the report of
+	// the mirror. Without this lock the slower reader could publish its older
+	// values over the newer ones, and nothing would read the database again until
+	// the next admin write.
+	refreshMu sync.Mutex
 	// mu guards cfg and fleet, which the settings route writes.
 	mu sync.RWMutex
 	// fleet holds the values that every manifest needs. They come from the
@@ -111,9 +120,15 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 	// The first run has no password. Make one, print it one time, and store its
 	// hash. See GeneratePassword for why.
 	//
-	// The password goes to the standard output and nowhere else. The ops log, the
-	// database and server.toml never hold it: the file holds the bcrypt hash, and
+	// The password goes to the standard output and to nothing of ours. The ops log,
+	// the database and server.toml never hold it: the file holds the bcrypt hash, and
 	// the line below runs one time, because the next start finds that hash.
+	//
+	// The standard output of a service is not private. Both shipped units keep it:
+	// systemd puts it in the journal and the OpenRC script in
+	// /var/log/portapixel-server.log, and the Docker log holds it for the life of the
+	// container. That is how the operator reads it, and it is also why deploy/README
+	// must say "change the password and then clear that line".
 	if cfg.AdminPasswordHash == "" {
 		password := GeneratePassword()
 		hash, err := HashPassword(password)
@@ -148,6 +163,17 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 		return nil, err
 	}
 	proxies, proxyWarnings := httpjson.NewProxies(cfg.TrustedProxies)
+	// The configuration that hurts is the empty list behind a proxy, and the two
+	// values below give it away: a public URL of https while this process answers
+	// plain HTTP means that something else terminates TLS. Then every caller counts
+	// as the proxy: one bad card stops enrollment for the whole fleet, five wrong
+	// logins from anywhere lock the admin out, last_ip names the proxy on every row,
+	// and the session cookie goes out with no Secure attribute.
+	if strings.HasPrefix(cfg.PublicURL, "https://") && cfg.TLSCert == "" && len(cfg.TrustedProxies) == 0 {
+		proxyWarnings = append(proxyWarnings,
+			"public_url is https and this server answers plain HTTP, so a proxy is in front of it, "+
+				"but trusted_proxies is empty: put the address of that proxy in trusted_proxies")
+	}
 	for _, warning := range proxyWarnings {
 		slog.Warn("server.toml", "detail", warning)
 		log.Log("config-warning", warning)
@@ -181,8 +207,16 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 }
 
 // Close gives the database back and ends the background work.
+//
+// The wait is not optional. The mirror writes its state through a callback of this
+// type, and the two sweeps read and write as well, so a close that did not wait
+// would give one of them a pool that is gone.
 func (s *server) Close() {
 	s.stopBackground()
+	s.bgWait.Wait()
+	if s.mirror != nil {
+		s.mirror.Wait()
+	}
 	if s.db != nil {
 		s.db.Close()
 	}
@@ -196,6 +230,15 @@ func (s *server) stopBackground() {
 		}
 		close(s.stopSweep)
 	})
+}
+
+// background1 runs one background job and counts it, so that Close can wait.
+func (s *server) background1(job func()) {
+	s.bgWait.Add(1)
+	go func() {
+		defer s.bgWait.Done()
+		job()
+	}()
 }
 
 // config gives the configuration as it is now.
@@ -239,24 +282,27 @@ func (s *server) routes() http.Handler {
 			SaveSettings:  s.saveSettings,
 			FleetChanged:  s.refreshFleet,
 		},
-		Hosts: s.hosts,
+		Hosts:   s.hosts,
+		IsHTTPS: s.proxies.ClientIsHTTPS,
 	})
 }
 
 // sessions makes the session store of the admin UI.
 //
 // The cookie takes the Secure attribute when the caller reached the server over
-// TLS, either directly or through a proxy that we trust. A cookie with Secure over
-// plain HTTP would never come back, so the flag cannot be a constant: a homelab
-// server on a closed network answers plain HTTP by design.
+// TLS, either directly or through a proxy that we trust. The flag cannot be a
+// constant: a homelab server on a closed network answers plain HTTP by design, and
+// a cookie with Secure would never come back from it.
+//
+// The answer reads the REQUEST and not the configuration. A public URL of https
+// with a request that really arrived over plain HTTP used to give a Secure cookie
+// as well. The login then answered 200, the browser threw the cookie away, and the
+// admin was in a login loop with no message anywhere. Over plain HTTP the flag
+// protects nothing that is not already in the clear, so the request is the only
+// input that can be right.
 func (s *server) sessions() *httpguard.Sessions {
 	sessions := httpguard.NewSessions()
-	sessions.Secure = func(r *http.Request) bool {
-		if s.proxies.ClientIsHTTPS(r) {
-			return true
-		}
-		return strings.HasPrefix(s.config().PublicURL, "https://")
-	}
+	sessions.Secure = s.proxies.ClientIsHTTPS
 	return sessions
 }
 
@@ -275,8 +321,8 @@ func (s *server) Serve(ctx context.Context) int {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	go s.store.SweepEvery(sweepInterval, s.db.KnownHashes, s.stopSweep)
-	go s.sweepPendingEvery(sweepInterval)
+	s.background1(func() { s.store.SweepEvery(sweepInterval, s.db.KnownHashes, s.stopSweep) })
+	s.background1(func() { s.sweepRowsEvery(sweepInterval) })
 
 	scheme := "http"
 	if cfg.TLSCert != "" {
@@ -317,13 +363,25 @@ func (s *server) Serve(ctx context.Context) int {
 	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil {
-		return fail("the shutdown did not finish: %v", err)
+		// The grace period ended with a transfer still in flight. That is the end of
+		// the grace period and not a fault: a device that pulls a 200 MB release holds
+		// its connection for minutes, and the supervisor gives us eight seconds. Close
+		// the rest deliberately and report success, so that a normal stop does not look
+		// like a crash in the log of the unit.
+		slog.Warn("a transfer was still in flight when the grace period ended", "error", err)
+		s.log.Log("stop", "a transfer was still in flight when the grace period ended")
+		httpSrv.Close()
 	}
 	return 0
 }
 
-// sweepPendingEvery drops the enroll requests that waited too long.
-func (s *server) sweepPendingEvery(interval time.Duration) {
+// sweepRowsEvery drops the rows that the clock retired: the enroll requests that
+// waited too long, and the commands that no screen ever ran.
+//
+// The commands need a sweep of their own, because the poll of one device can only
+// retire the commands of that device. A screen that never comes back would leave
+// every order of its queue at "delivered" for ever.
+func (s *server) sweepRowsEvery(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
@@ -333,6 +391,9 @@ func (s *server) sweepPendingEvery(interval time.Duration) {
 		case <-ticker.C:
 			if err := s.db.SweepPending(); err != nil {
 				slog.Warn("the sweep of the pending list failed", "error", err)
+			}
+			if err := s.db.SweepCommands(); err != nil {
+				slog.Warn("the sweep of the command queue failed", "error", err)
 			}
 		}
 	}
@@ -353,6 +414,8 @@ func (s *server) readFleet() api.Fleet {
 // refreshFleet reads the values of the manifest from the database into the cache.
 // Every write that changes one of them calls it.
 func (s *server) refreshFleet() {
+	s.refreshMu.Lock()
+	defer s.refreshMu.Unlock()
 	name := s.db.Setting(db.SettingServerName, "PortaPixel")
 	poll := s.db.SettingInt(db.SettingPollSeconds, db.DefaultPollSeconds)
 	if poll < db.MinPollSeconds {
