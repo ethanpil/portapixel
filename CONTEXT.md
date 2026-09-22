@@ -235,6 +235,27 @@ checked with a screenshot of the virtual display or with the ops log.
   ask what the wrong type protected.
 - `os.ModeDevice` is also set for a character device. A block device has `ModeDevice`
   set and `ModeCharDevice` clear. Without the second test, `/dev/null` is a good target.
+- `/api/status` needs no session, so each field on it is public. The first version told
+  the LAN which devices had the default passwords: a port sweep gave a list of root
+  shells. The report has three levels: loopback (the pairing code), trusted (a session,
+  the fleet heartbeat) and everyone else.
+- One rule, one function. Three passes over the fleet playlists asked three different
+  questions. Two of them wrote to flash at each poll, and one deleted the object store
+  when a playlist had the name `media`.
+- Record a reboot before it happens. Everything in RAM goes away with it. `state.json`
+  counts reboots, and a loop stops the automatic actions (plan 3.3, rung 4).
+- The value on the wire and the value in the file are two values. A second Connect
+  wrote the claim secret of a code pairing into `portapixel.toml`.
+- A guard that protects two fields must not refuse the one route that owns them. The
+  lock on `server.url` refused the write of the pairing that succeeded, and the UI
+  showed a fault for a pairing that worked.
+- The rung 1 "control session dead" check runs only in a URL window or a kiosk page. A
+  dead CDP socket under a live player page is found by the heartbeat rule, not by CDP.
+- Any local process can drive the CDP port 9222. A page cannot: the
+  `--remote-allow-origins` flag names the loopback endpoint only. The player secret
+  never reaches a URL item page: `Page.navigate` sends no referrer, the page has
+  `Referrer-Policy: no-referrer`, and a `?k=` GET from another origin executes but is
+  not readable.
 - A job that PUBLISHES must wait for every gate. A job that only tests must not. The
   first pipeline pushed the container image before the boot test ran, and a push cannot
   be undone. `server-image` and `release` now need each gate.

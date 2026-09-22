@@ -4,6 +4,8 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+- Fix 15 findings of the final device review (19504ab to 699eb0a). The status for the LAN does not tell which passwords are the default. A fleet playlist named media cannot delete the object store. A standalone device writes nothing in its steady state. Each answer has security headers.
+- Fix 12 findings of the final OS, CI, web and document review (d855054 to e02d989). The container image and the release wait for each gate. The arm64 container holds an arm64 binary. The Activity page shows again.
 - Fix 13 findings of the final server review (d2faa1d to ec84667). A waiting enrollment is keyed on the hardware ID too. Command IDs never come back. Each answer has security headers, and a stored object is inert. Note: 7e2494d also holds the media store files and ec84667 holds the server tests; the two titles are wrong.
 - Fix the faults that the first CI run found (760ef9d to 872455a). An update reads the version from `version --json`. The health gate cannot remove a good marker. The on-box installer adds no kernel. The tree does not build at commit a0fa2fc: it uses a type that the next commit, ff36380, adds. Skip a0fa2fc in a bisect.
 - Add the lint and release workflows for GitHub Actions and `docs/RELEASING.md` (43d3553, f983b59, c09fe86). The aarch64 image and the Docker image build for the first time.
