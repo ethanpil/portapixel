@@ -98,6 +98,7 @@ func (f *fleet) useRelease(rel testRelease) {
 	f.mirror.Lister.BaseURL = fakeGitHubFor(f.t, rel)
 	f.mirror.PublicKey = rel.public
 	f.mirror.DownloadHosts = []string{"127.0.0.1", "localhost", "::1"}
+	f.mirror.AllowHTTP = true
 }
 
 // waitForMirror waits until the mirror of one version stops working.
@@ -371,6 +372,7 @@ func TestBundleWhileAMirrorRunsGives409(t *testing.T) {
 	// nothing.
 	f.mirror.Lister.BaseURL = "http://127.0.0.1:1"
 	f.mirror.DownloadHosts = []string{"127.0.0.1"}
+	f.mirror.AllowHTTP = true
 	if err := f.mirror.Start(context.Background(), "1.5.0"); err != nil {
 		t.Fatal(err)
 	}

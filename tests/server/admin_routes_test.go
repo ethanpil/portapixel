@@ -125,7 +125,12 @@ func (f *fleet) setUpRoutes(t *testing.T) []any {
 	f.pairDevice("px-table001")
 	code, _ := f.enroll("px-table002", "")
 
-	return []any{group, playlist, made.ID, token.ID, sha, "px-table001", code.PairingCode, "1.5.0"}
+	// A second group with no devices and no rules. The delete route needs one: a
+	// group that still holds either of the two answers 409 by design.
+	empty := f.makeGroup("Spare")
+
+	return []any{group, playlist, made.ID, token.ID, sha, "px-table001", code.PairingCode,
+		"1.5.0", empty}
 }
 
 // setUpRoutesWithoutSession gives markers for the pass that has no session. Nothing
@@ -135,12 +140,12 @@ func (f *fleet) setUpRoutesWithoutSession(t *testing.T) []any {
 	t.Helper()
 	return []any{int64(1), int64(1), int64(1), int64(1),
 		"aaaa111122223333444455556666777788889999aaaabbbbccccddddeeeeffff",
-		"px-table001", "K7M2QP", "1.5.0"}
+		"px-table001", "K7M2QP", "1.5.0", int64(2)}
 }
 
 // adminRoutes is the table. The order of the markers is the order of
 // setUpRoutes: group, playlist, assignment, token, media hash, device, code,
-// version.
+// version, empty group.
 func adminRoutes(t *testing.T) []adminRoute {
 	t.Helper()
 	return []adminRoute{
@@ -176,7 +181,7 @@ func adminRoutes(t *testing.T) []adminRoute {
 		{name: "update a group", method: http.MethodPut, path: "/api/admin/groups/%[1]d",
 			body: map[string]any{"name": "Lobby", "default_playlist_id": 0,
 				"screen_on": "", "screen_off": "", "screen_days": []string{}}},
-		{name: "delete a group", method: http.MethodDelete, path: "/api/admin/groups/%[1]d"},
+		{name: "delete a group", method: http.MethodDelete, path: "/api/admin/groups/%[9]d"},
 		{name: "a command for a group", method: http.MethodPost, path: "/api/admin/groups/%[1]d/commands",
 			body: map[string]any{"type": "screen-off"}},
 

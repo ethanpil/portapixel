@@ -130,7 +130,8 @@ func newFleet(t *testing.T) *fleet {
 			SaveSettings:  f.saveSettings,
 			FleetChanged:  f.fleetChanged,
 		},
-		Hosts: f.allowedHosts,
+		Hosts:   f.allowedHosts,
+		IsHTTPS: f.clientIsHTTPS,
 	}))
 	t.Cleanup(f.srv.Close)
 
@@ -230,13 +231,14 @@ func (f *fleet) clientIP(r *http.Request) string {
 	return proxies.ClientIP(r)
 }
 
-// clientIsHTTPS answers the Secure question of the session cookie.
+// clientIsHTTPS answers the Secure question of the session cookie and the strict
+// transport header. It is the rule of the command and nothing more: the harness must
+// hold no copy of a guard, or a test would prove the copy (CONTEXT.md).
 func (f *fleet) clientIsHTTPS(r *http.Request) bool {
 	f.st.mu.Lock()
 	proxies := f.st.proxies
 	f.st.mu.Unlock()
-	return proxies.ClientIsHTTPS(r) ||
-		strings.HasPrefix(f.readSettings().PublicURL, "https://")
+	return proxies.ClientIsHTTPS(r)
 }
 
 // trustProxies replaces the proxy list of the harness.

@@ -187,12 +187,15 @@ func TestSessionCookieIsHardened(t *testing.T) {
 	}
 }
 
-// TestSessionCookieIsSecureOverHTTPS covers the two ways that a server answers TLS:
-// its own certificate, and a proxy in front of it that terminates the connection.
+// TestSessionCookieIsSecureOverHTTPS covers the answer of a TLS-terminating proxy
+// that the admin named in trusted_proxies, and the answer of one that nobody named.
+//
+// A public URL of https does NOT make the cookie Secure by itself. The flag must
+// answer the request and not the configuration: a server that is also reachable over
+// plain HTTP would otherwise send a cookie that the browser throws away, and the
+// admin would be in a login loop with a 200 on every login.
 func TestSessionCookieIsSecureOverHTTPS(t *testing.T) {
 	f := newFleet(t)
-	// The public URL says https, which is the case of a TLS-terminating proxy that
-	// the admin configured.
 	f.login()
 	f.mustOK(f.adminCall(http.MethodPut, "/api/admin/settings", map[string]any{
 		"server_name": "Test fleet", "default_poll_seconds": 60,
@@ -201,8 +204,8 @@ func TestSessionCookieIsSecureOverHTTPS(t *testing.T) {
 
 	res := f.mustOK(f.call(http.MethodPost, "/api/admin/login",
 		map[string]string{"password": f.password()}, nil), "login")
-	if cookie := res.header.Get("Set-Cookie"); !strings.Contains(cookie, "Secure") {
-		t.Errorf("the cookie of an https server does not hold Secure: %q", cookie)
+	if cookie := res.header.Get("Set-Cookie"); strings.Contains(cookie, "Secure") {
+		t.Errorf("a public URL of https made the cookie Secure over plain HTTP: %q", cookie)
 	}
 
 	// A proxy that we trust says https in a header. One that we do not trust says
