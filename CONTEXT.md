@@ -28,8 +28,8 @@ something that cost you time. Remove an entry when it is no longer true.
 | v0.3 the fleet | Built and reviewed. Proven with two machines in the lab (`tests/qemu/lab`). |
 | v1.0 hardening | Reviews done. The release pipeline is proven to a draft release. Open: the release key, the 30 day soak, the hardware checklist. |
 
-The aarch64 image was never built: the test container has no qemu-user binfmt. The first
-build is in GitHub Actions. No Raspberry Pi has started this image.
+The aarch64 image builds in GitHub Actions (the test container has no qemu-user binfmt),
+and CI reads the boot files inside it. No Raspberry Pi has started this image.
 
 ## 3. Divergences from the plan
 
