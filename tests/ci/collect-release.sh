@@ -59,6 +59,16 @@ say "the installer and the licences"
 take "$REPO/os/install.sh"
 take "$REPO/LICENSES-THIRD-PARTY.md"
 
+# install.sh ALONE cannot install anything. It reads os/packages.list with
+# os/packages-read.awk, it copies os/overlay into the target, and it takes the
+# first slides from os/default-media. The release published the one file and
+# docs/install.md told a person to run it, so the documented on-box path stopped
+# at "cannot find .../packages.list". Publish the whole directory beside it.
+say "the os directory that install.sh needs"
+OSTAR="$PUB/portapixel-os-$VERSION.tar.gz"
+tar -czf "$OSTAR" -C "$REPO" os LICENSES-THIRD-PARTY.md
+printf '    %s\n' "$(basename "$OSTAR")"
+
 # The service files of the server, as one small archive. They are four text files
 # that only a person who installs the server needs.
 say "the deployment files of the server"

@@ -462,15 +462,11 @@ jobs:
           PP_CI_UPDATE_GATE: 1
         run: go test -count=1 -v -timeout 20m ./tests/ci/updategate/
 
-  # What this job proves: the server route tests pass, the Docker image builds for
-  # both architectures, and the image runs and answers. Nothing here was ever
-  # built or run before this workflow (final review 23).
-  server:
+  # What this job proves: the route stack of the fleet server answers as its tests
+  # say. It is early and it gates nothing else, so one run shows every fault.
+  server-tests:
     needs: settings
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write # push the server image to GHCR
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -481,6 +477,24 @@ jobs:
 
       - name: the server route tests
         run: go test -count=1 ./tests/server/...
+
+  # What this job proves: the Docker image builds for both architectures, and each
+  # variant runs and holds a binary of its own processor. Nothing here was ever
+  # built or run before this workflow (final review 23).
+  #
+  # IT PUBLISHES, so it waits for every gate. A public container image is the one
+  # deliverable that no later job re-checks, and a push cannot be taken back: the
+  # tag stays in the registry and the version number is burned. With "needs:
+  # settings" alone, a run whose lint or whose boot test failed had already pushed
+  # the image, and a run with draft=false had already moved "latest".
+  server-image:
+    needs: [settings, lint, server-tests, images, smoke-x86, smoke-arm, smoke-update]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push the server image to GHCR
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
@@ -644,7 +658,8 @@ jobs:
       - smoke-x86
       - smoke-arm
       - smoke-update
-      - server
+      - server-tests
+      - server-image
     runs-on: ubuntu-latest
     permissions:
       contents: write # publish the GitHub Release
@@ -668,6 +683,28 @@ jobs:
           SIGNED: ${{ needs.settings.outputs.signed }}
         run: sh tests/ci/collect-release.sh out "$VERSION" "$SIGNED"
 
+      # The signatures and SHA256SUMS were made in the "sign" job, and the bytes
+      # then went through a zip, an artifact store and an unzip. Verify the files
+      # that THIS job is about to upload, not the copy that another job made. It
+      # costs seconds, and it makes the publish step the step that is verified.
+      - name: the checksums and the signatures of the files we publish
+        env:
+          SIGNED: ${{ needs.settings.outputs.signed }}
+          PP_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+        run: |
+          set -eu
+          cd out/publish
+          sha256sum -c SHA256SUMS
+          if [ "$SIGNED" = yes ]; then
+            sudo apt-get update -qq && sudo apt-get install -y -qq minisign
+            for f in portapixeld-* portapixel-server-*; do
+              case "$f" in *.minisig) continue ;; esac
+              minisign -V -P "$PP_PUBLIC_KEY" -m "$f" -x "$f.minisig"
+            done
+          else
+            echo "no signatures in this release, so only the checksums are verified"
+          fi
+
       - name: the release note
         env:
           VERSION: ${{ needs.settings.outputs.version }}
@@ -679,7 +716,13 @@ jobs:
           tag_name: ${{ needs.settings.outputs.tag }}
           name: PortaPixel ${{ needs.settings.outputs.tag }}
           body_path: out/NOTES.md
-          draft: ${{ needs.settings.outputs.draft == 'true' }}
+          # An UNSIGNED release stays a draft, whatever the dispatcher asked for.
+          # A device that holds the public key refuses a release with no
+          # signature, and a fleet mirror stops with "the release has no file
+          # portapixeld-amd64.minisig". One unsigned run as the newest release
+          # therefore puts a whole fleet into a permanent update error. A person
+          # who wants it public can publish the draft by hand.
+          draft: ${{ needs.settings.outputs.draft == 'true' || needs.settings.outputs.signed == 'no' }}
           prerelease: ${{ needs.settings.outputs.prerelease == 'true' }}
           fail_on_unmatched_files: true
           # collect-release.sh puts exactly the deliverables here and stops the

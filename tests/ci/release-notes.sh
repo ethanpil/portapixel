@@ -55,7 +55,8 @@ cat <<EOF
 | \`portapixeld-amd64\`, \`portapixeld-arm64\` | the device daemon. The updater downloads these |
 | \`portapixel-server-amd64\`, \`portapixel-server-arm64\` | the fleet server |
 | \`SHA256SUMS\` | the checksum of every binary |
-| \`install.sh\` | put PortaPixel on a stock Alpine box (D51) |
+| \`portapixel-os-$VERSION.tar.gz\` | the \`os\` directory. Unpack it to install on a stock Alpine box (D51) |
+| \`install.sh\` | the installer of that directory, to read before you run it |
 | \`portapixel-*-packages.manifest\` | the exact package set of each image (D50) |
 | \`portapixel-server-deploy.tar.gz\` | the OpenRC, systemd and compose files |
 | \`LICENSES-THIRD-PARTY.md\` | the licences of the software in the image |
