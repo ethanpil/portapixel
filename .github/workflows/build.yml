@@ -570,6 +570,15 @@ jobs:
           VERSION: ${{ needs.settings.outputs.version }}
         run: |
           set -eu
+          # Print what the registry holds and what the local daemon took, so a
+          # failure below names the guilty side: a manifest with no arm64 entry, a
+          # pull that took the amd64 entry, or a build that put an amd64 binary
+          # inside the arm64 image.
+          echo "--- the platforms in the manifest list ---"
+          docker buildx imagetools inspect "$IMAGE" || true
+          docker run --rm --platform linux/arm64 "$IMAGE" version >/dev/null
+          echo "--- what the local daemon holds after the arm64 pull ---"
+          docker image inspect "$IMAGE" --format 'Architecture={{.Architecture}} Os={{.Os}}'
           json="$(docker run --rm --platform linux/arm64 "$IMAGE" version --json)"
           echo "arm64 image: $json"
           printf '%s' "$json" | grep -qF '"arch":"arm64"' || {
