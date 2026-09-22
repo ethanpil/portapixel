@@ -63,6 +63,12 @@ CREATE TABLE devices (
 );
 CREATE INDEX devices_token    ON devices(token_hash);
 CREATE INDEX devices_last_seen ON devices(last_seen);
+-- group_id and default_playlist_id are foreign keys that queries also filter on.
+-- Without an index, each one is a scan of the whole table: the group of a device,
+-- the number of devices of a group, a bulk command to a group, and the guard that
+-- stops the delete of a playlist that a screen still names.
+CREATE INDEX devices_group    ON devices(group_id);
+CREATE INDEX devices_playlist ON devices(default_playlist_id);
 
 -- pending_enrollments holds every request that waits for the admin.
 --
@@ -97,10 +103,11 @@ CREATE TABLE pending_enrollments (
   -- approval, so it never holds a device token in plain form.
   approved_at    TEXT    NOT NULL DEFAULT ''
 );
-CREATE INDEX pending_claim   ON pending_enrollments(claim_hash);
-CREATE INDEX pending_code    ON pending_enrollments(pairing_code);
+-- claim_hash and pairing_code are UNIQUE, and SQLite makes an index of its own for
+-- each UNIQUE column, so an index here would be a second copy of the same tree.
 CREATE INDEX pending_device  ON pending_enrollments(device_id);
 CREATE INDEX pending_created ON pending_enrollments(created_at);
+CREATE INDEX pending_token   ON pending_enrollments(token_id);
 
 CREATE TABLE enrollment_tokens (
   id         INTEGER PRIMARY KEY,
@@ -178,7 +185,11 @@ CREATE INDEX assignments_group  ON assignments(group_id);
 CREATE INDEX assignments_device ON assignments(device_id);
 
 CREATE TABLE commands (
-  id           INTEGER PRIMARY KEY,
+  -- AUTOINCREMENT, and not a plain rowid, because the device remembers the ID of
+  -- each command that it ran. A plain rowid comes back after the rows of a deleted
+  -- screen go away, and the device would then acknowledge a new command as one that
+  -- it already ran. The high-water mark lives in sqlite_sequence.
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
   device_id    TEXT    NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
   type         TEXT    NOT NULL,
   args_json    TEXT    NOT NULL DEFAULT '',

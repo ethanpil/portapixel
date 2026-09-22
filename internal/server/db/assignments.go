@@ -179,6 +179,10 @@ func nullString(v string) any {
 
 // CleanDays gives a day list in the order of the week with no repeats and no
 // unknown words. The admin UI sends the days as the user clicked them.
+//
+// A caller must run BadDays FIRST. CleanDays throws an unknown word away, and an
+// empty day list means "every day" on both ends of the wire, so a bad word that
+// nobody reports widens a rule from one day to seven.
 func CleanDays(days []string) []string {
 	order := []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 	seen := map[string]bool{}
@@ -192,4 +196,28 @@ func CleanDays(days []string) []string {
 		}
 	}
 	return out
+}
+
+// BadDays names the words of a day list that are not days of the week. An empty
+// answer means that CleanDays will keep every word of the list.
+func BadDays(days []string) []string {
+	var bad []string
+	for _, day := range days {
+		name := strings.ToLower(strings.TrimSpace(day))
+		if name == "" || !dayNames[name] {
+			bad = append(bad, day)
+		}
+	}
+	return bad
+}
+
+// DayErrors gives the 422 answer of a bad day list, or nil when the list is good.
+// The three routes that take a day list share it, so one word is wrong in one way.
+func DayErrors(field string, days []string) Errors {
+	bad := BadDays(days)
+	if len(bad) == 0 {
+		return nil
+	}
+	return Errors{{Field: field,
+		Message: strings.Join(bad, ", ") + ": a day is one of mon, tue, wed, thu, fri, sat, sun"}}
 }

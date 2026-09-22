@@ -63,6 +63,12 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 	if m.PollSeconds <= 0 {
 		m.PollSeconds = opt.DefaultPoll
 	}
+	// One floor holds for the two ends. The device repairs anything under this
+	// value to its own default, so a number below it would be a number that the
+	// screen ignores, and the admin page would print a value that is not the truth.
+	if m.PollSeconds < MinPollSeconds {
+		m.PollSeconds = MinPollSeconds
+	}
 
 	group, hasGroup, err := d.deviceGroup(dev)
 	if err != nil {
@@ -208,7 +214,7 @@ func (d *DB) deviceGroup(dev Device) (Group, bool, error) {
 	if dev.GroupID == 0 {
 		return Group{}, false, nil
 	}
-	g, err := d.Group(dev.GroupID)
+	g, err := d.GroupNoCount(dev.GroupID)
 	if errors.Is(err, ErrNotFound) {
 		return Group{}, false, nil
 	}

@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"log/slog"
 	"strconv"
 )
 
@@ -29,10 +30,20 @@ const (
 )
 
 // Setting gives one value, or the fallback when the table holds none.
+//
+// A fault of the database is not "the table holds none". The caller of this
+// function keeps the values of the manifest in memory, so a read that failed and
+// answered the fallback would give the whole fleet the default server name and the
+// default poll interval until the next admin write. The log line says which one it
+// was.
 func (d *DB) Setting(key, fallback string) string {
 	var v string
 	err := d.r.QueryRow(`SELECT v FROM settings WHERE k = ?`, key).Scan(&v)
-	if errors.Is(err, sql.ErrNoRows) || err != nil {
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+		return fallback
+	case err != nil:
+		slog.Error("read a setting", "key", key, "error", err)
 		return fallback
 	}
 	return v

@@ -65,7 +65,7 @@ func (d *DB) allMediaUsers() (map[string][]string, error) {
 }
 
 // Media gives one object with the playlists that use it. The admin media page
-// needs the list; a device path uses MediaRow or MediaExists instead.
+// needs the list; a device path uses MediaRow instead.
 func (d *DB) Media(sha string) (Media, error) {
 	m, err := d.MediaRow(sha)
 	if err != nil {
@@ -76,7 +76,7 @@ func (d *DB) Media(sha string) (Media, error) {
 }
 
 // MediaRow gives one object with no list of playlists. One query, for the paths
-// that only need the row: the upload answer and the manifest.
+// that only need the row: the upload answer, the manifest and the download.
 func (d *DB) MediaRow(sha string) (Media, error) {
 	row := d.r.QueryRow(`SELECT `+mediaColumns+` FROM media WHERE sha256 = ?`, sha)
 	m, err := scanMedia(row)
@@ -84,20 +84,6 @@ func (d *DB) MediaRow(sha string) (Media, error) {
 		return Media{}, ErrNotFound
 	}
 	return m, err
-}
-
-// MediaExists reports if the library holds this object. The download route of the
-// device needs the answer and nothing else, and this is one query with no join.
-func (d *DB) MediaExists(sha string) (bool, error) {
-	var one int
-	err := d.r.QueryRow(`SELECT 1 FROM media WHERE sha256 = ?`, sha).Scan(&one)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func scanMedia(s interface{ Scan(...any) error }) (Media, error) {

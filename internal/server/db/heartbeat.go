@@ -127,6 +127,16 @@ func (d *DB) hardwareRules(tx *tx, id, reported, stored, pendingHW string, pendi
 	}
 
 	if reported == stored {
+		if pendingHW != "" {
+			// The machine that we know answers again, and the clone window passed.
+			// The change that waited is old news: take it away. Without this, the
+			// hardware-swap card stays on the screen for ever, and one click of the
+			// admin would store the hardware ID of a box that is not there. The real
+			// box would then look like a change at its next heartbeat.
+			_, err := tx.Exec(`UPDATE devices SET needs_confirm = 0,
+				pending_hardware_id = '', pending_hardware_at = '' WHERE id = ?`, id)
+			return err
+		}
 		// The machine that we know, and nothing waits. There is nothing to write.
 		return nil
 	}

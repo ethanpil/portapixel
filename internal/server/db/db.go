@@ -59,9 +59,21 @@ const openParams = "?_pragma=journal_mode(WAL)" +
 	"&_pragma=foreign_keys(1)" +
 	"&_pragma=synchronous(NORMAL)"
 
+// writeParams is what the write pool adds.
+//
+// BEGIN IMMEDIATE takes the write lock at the start of the transaction. Several of
+// our write transactions read a row and then write it, and a plain BEGIN takes a
+// read snapshot first. A second writer that commits in that moment makes the write
+// fail with SQLITE_BUSY_SNAPSHOT, and busy_timeout does NOT cover that case: the
+// transaction would have to roll back to see the newer snapshot, so a wait cannot
+// help. With IMMEDIATE the wait happens at BEGIN, where busy_timeout does work.
+//
+// The read pool must not take it: a read would then wait for the writer.
+const writeParams = "&_txlock=immediate"
+
 // Open opens the database at path and brings the schema up to date.
 func Open(path string) (*DB, error) {
-	w, err := sql.Open("sqlite", path+openParams)
+	w, err := sql.Open("sqlite", path+openParams+writeParams)
 	if err != nil {
 		return nil, fmt.Errorf("open %s: %w", path, err)
 	}

@@ -44,6 +44,23 @@ func (d *DB) Group(id int64) (Group, error) {
 	return g, err
 }
 
+// GroupNoCount gives one group without the number of devices in it.
+//
+// The manifest path uses it. The count of Group is a correlated subquery over the
+// whole devices table, and a poll throws the number away, so a fleet of 200 screens
+// would scan that table 200 times a minute for nothing. PlaylistNoCount exists for
+// the same reason.
+func (d *DB) GroupNoCount(id int64) (Group, error) {
+	row := d.r.QueryRow(`SELECT id, name, default_playlist_id,
+			screen_on, screen_off, screen_days, created_at, 0
+		FROM groups WHERE id = ?`, id)
+	g, err := scanGroup(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Group{}, ErrNotFound
+	}
+	return g, err
+}
+
 func scanGroup(s interface{ Scan(...any) error }) (Group, error) {
 	var (
 		g          Group
@@ -60,11 +77,17 @@ func scanGroup(s interface{ Scan(...any) error }) (Group, error) {
 	return g, nil
 }
 
+// errNoGroupName is the field error of a group with no name. It is a typed error
+// and not a sentence, because a route must never read the text of an error to
+// decide the status code: the day that somebody improves the sentence, the answer
+// would become a 500.
+var errNoGroupName = Errors{{Field: "name", Message: "a group needs a name"}}
+
 // CreateGroup makes a group and gives its ID.
 func (d *DB) CreateGroup(name string) (int64, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return 0, errors.New("a group needs a name")
+		return 0, errNoGroupName
 	}
 	res, err := d.w.Exec(`INSERT INTO groups (name, created_at) VALUES (?, ?)`,
 		name, d.stamp(d.now()))
@@ -81,15 +104,20 @@ func (d *DB) CreateGroup(name string) (int64, error) {
 func (d *DB) UpdateGroup(g Group) error {
 	name := strings.TrimSpace(g.Name)
 	if name == "" {
-		return errors.New("a group needs a name")
+		return errNoGroupName
 	}
 	return d.affectOne(`UPDATE groups SET name = ?, default_playlist_id = ?,
 		screen_on = ?, screen_off = ?, screen_days = ? WHERE id = ?`,
 		name, nullInt64(g.DefaultPlaylistID), g.ScreenOn, g.ScreenOff, g.ScreenDays, g.ID)
 }
 
-// DeleteGroup removes a group. A group that holds devices stays: moving the
-// devices first is a decision for the admin, not for the server.
+// DeleteGroup removes a group. A group that holds devices or schedule rules
+// stays: moving the devices and removing the rules first is a decision for the
+// admin, not for the server.
+//
+// The rules count as well as the devices, because assignments.group_id has ON
+// DELETE CASCADE. Without the second half of the guard, one click would take away
+// every time rule of the group and no answer would say so.
 //
 // The count and the delete are one write transaction. Without it a device that
 // joins the group between the two statements would lose its group without
@@ -102,7 +130,9 @@ func (d *DB) DeleteGroup(id int64) error {
 	defer tx.Rollback()
 
 	var n int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM devices WHERE group_id = ?`, id).Scan(&n); err != nil {
+	if err := tx.QueryRow(`SELECT
+			(SELECT COUNT(*) FROM devices WHERE group_id = ?) +
+			(SELECT COUNT(*) FROM assignments WHERE group_id = ?)`, id, id).Scan(&n); err != nil {
 		return err
 	}
 	if n > 0 {

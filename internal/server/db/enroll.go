@@ -43,6 +43,13 @@ const codeLength = 6
 // pending list is a table that only grows, and an open route fills it.
 const pendingLife = 24 * time.Hour
 
+// approvedLife is how long a request that the admin approved waits for its device
+// to come and collect the token. A screen can be off for a week, so the value is
+// generous. It is not endless: the claim secret of an approved row is the whole
+// authorisation for a device token, and a secret that never expires is a key under
+// the mat. No admin route can see or cancel such a row.
+const approvedLife = 30 * 24 * time.Hour
+
 // maxPending is the largest number of requests that may wait at one time. A
 // homelab fleet is a few hundred screens, so two hundred requests are already
 // more than one batch of cards.
@@ -166,7 +173,7 @@ func (d *DB) Enroll(req manifest.EnrollRequest, ip string) (EnrollResult, error)
 
 	// The sweep runs here as well as on the timer: a server that nobody restarts
 	// and that has no timer must still lose its old requests (R4).
-	if err := sweepPending(tx, d.stamp(now.Add(-pendingLife))); err != nil {
+	if err := d.sweepPending(tx, now); err != nil {
 		return EnrollResult{}, err
 	}
 
@@ -186,24 +193,29 @@ func (d *DB) Enroll(req manifest.EnrollRequest, ip string) (EnrollResult, error)
 	return out, nil
 }
 
-// sweepPending removes the requests that waited longer than pendingLife. A row
-// that the admin approved stays: the admin made it deliberately, and its device
-// may be off for a week.
-func sweepPending(tx *tx, cutoff string) error {
+// sweepPending removes the requests that nobody answered any more.
+//
+// A request that waits for the admin goes after pendingLife. A request that the
+// admin approved gets the much longer approvedLife, because its device may be off
+// for a week, but it does not live for ever: its claim secret buys a device token
+// from any machine that holds it.
+func (d *DB) sweepPending(tx *tx, now time.Time) error {
 	_, err := tx.Exec(`DELETE FROM pending_enrollments
-		WHERE approved_at = '' AND created_at < ?`, cutoff)
+		WHERE (approved_at = '' AND created_at < ?)
+		   OR (approved_at <> '' AND approved_at < ?)`,
+		d.stamp(now.Add(-pendingLife)), d.stamp(now.Add(-approvedLife)))
 	return err
 }
 
-// SweepPending removes the requests that waited longer than pendingLife. A timer
-// of the server calls it, so a quiet server also loses its old requests.
+// SweepPending removes the requests that nobody answered any more. A timer of the
+// server calls it, so a quiet server also loses its old requests.
 func (d *DB) SweepPending() error {
 	tx, err := d.w.Begin()
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
-	if err := sweepPending(tx, d.stamp(d.now().Add(-pendingLife))); err != nil {
+	if err := d.sweepPending(tx, d.now()); err != nil {
 		return err
 	}
 	return tx.Commit()
@@ -402,14 +414,23 @@ func (d *DB) enrollTarget(tx *tx, id string) (deviceRowState, bool, error) {
 // makePending puts the request in the pending list with a new code and a new
 // claim secret. A device that already waits keeps its code, so that the code on
 // the screen does not change at every poll.
+//
+// The row that a request may take again is the row of the SAME machine: the same
+// device ID and the same hardware ID. Without the second half of that key, a
+// caller with no token and the device ID of a screen that waits could write its
+// own claim secret into the row of that screen, read the pairing code that the
+// admin sees, and collect the device token at the approval. A machine with
+// another hardware ID gets a row of its own, so the admin sees two requests and
+// chooses between them.
 func (d *DB) makePending(tx *tx, req manifest.EnrollRequest, ip string, now time.Time, tokenID int64, collides string) (EnrollResult, error) {
-	// A request of this device that already waits keeps its code. The claim
+	// A request of this machine that already waits keeps its code. The claim
 	// secret does not come back: the table holds only its hash, so a device that
 	// lost the secret takes a new one.
 	var rowID int64
 	var code string
 	err := tx.QueryRow(`SELECT id, pairing_code FROM pending_enrollments
-		WHERE device_id = ? AND approved_at = '' ORDER BY id LIMIT 1`, req.DeviceID).Scan(&rowID, &code)
+		WHERE device_id = ? AND hardware_id = ? AND approved_at = ''
+		ORDER BY id LIMIT 1`, req.DeviceID, req.HardwareID).Scan(&rowID, &code)
 	switch {
 	case err == nil:
 		secret := newToken()
@@ -427,8 +448,14 @@ func (d *DB) makePending(tx *tx, req manifest.EnrollRequest, ip string, now time
 		return EnrollResult{}, err
 	}
 
+	// The cap counts the requests that WAIT for the admin. A row that the admin
+	// approved already waits for its device and not for a person, and such a row
+	// stays until that device collects its token. If the cap counted those rows
+	// too, 200 approved screens that never came back would stop enrollment for the
+	// whole fleet, and no timer would ever clear them.
 	var waiting int
-	if err := tx.QueryRow(`SELECT COUNT(*) FROM pending_enrollments`).Scan(&waiting); err != nil {
+	if err := tx.QueryRow(`SELECT COUNT(*) FROM pending_enrollments
+		WHERE approved_at = ''`).Scan(&waiting); err != nil {
 		return EnrollResult{}, err
 	}
 	if waiting >= maxPending {
@@ -520,8 +547,12 @@ func (d *DB) pairRow(tx *tx, req manifest.EnrollRequest, ip string, now time.Tim
 	if err := d.touchEnrolled(tx, req, ip, now); err != nil {
 		return err
 	}
+	// The flags of the identity rules go away with the new token. One machine holds
+	// the token of this row now, so a conflict of two machines and a hardware change
+	// that waited are both answered.
 	if _, err := tx.Exec(`UPDATE devices SET token_hash = ?, ever_paired = 1, paired_at = ?,
-		needs_confirm = 0, pending_hardware_id = '', pending_hardware_at = ''
+		needs_confirm = 0, pending_hardware_id = '', pending_hardware_at = '',
+		conflict = 0, conflict_hardware_id = ''
 		WHERE id = ?`, tokenHash, d.stamp(now), req.DeviceID); err != nil {
 		return err
 	}
@@ -650,10 +681,13 @@ func (d *DB) ApprovePending(pendingID int64, groupID int64) error {
 	}
 
 	now := d.now()
-	_, have, err := d.enrollTarget(tx, p.DeviceID)
+	target, have, err := d.enrollTarget(tx, p.DeviceID)
 	if err != nil {
 		return err
 	}
+	// A row that was never paired takes the group of its enrollment token. A device
+	// ID with no row at all was never paired either.
+	neverPaired := !have || !target.everPaired
 
 	tokenGroup := int64(0)
 	if p.TokenID != 0 {
@@ -668,9 +702,8 @@ func (d *DB) ApprovePending(pendingID int64, groupID int64) error {
 	req := manifest.EnrollRequest{
 		DeviceID: p.DeviceID, HardwareID: p.HardwareID, Name: p.Name, Version: p.Version,
 	}
-	// A row that was never paired takes the group of its enrollment token. The
-	// group that the admin sends with the approval wins over both.
-	if err := d.upsertDevice(tx, req, p.IP, now, tokenGroup, !have); err != nil {
+	// The group that the admin sends with the approval wins over both.
+	if err := d.upsertDevice(tx, req, p.IP, now, tokenGroup, neverPaired); err != nil {
 		return err
 	}
 	if groupID != 0 {

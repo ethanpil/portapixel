@@ -32,6 +32,15 @@ const redeliverAfter = 10 * time.Minute
 // would reboot a screen every ten minutes after one lost answer.
 const maxDeliveries = 3
 
+// commandLife is how long a command waits for its screen. A screen that is off for
+// a day and comes back must not run a stack of orders from yesterday: a reboot that
+// arrives a day late is a screen that reboots for no reason a person can follow.
+const commandLife = 24 * time.Hour
+
+// commandKeep is how long an answered or expired row stays for the admin to read.
+// Nothing removed these rows before, so the table only grew.
+const commandKeep = 30 * 24 * time.Hour
+
 // The states of a command that the admin UI shows.
 const (
 	CommandQueued    = "queued"
@@ -119,11 +128,14 @@ func (d *DB) TakeCommands(deviceID string) ([]Command, error) {
 	}
 	defer tx.Rollback()
 
-	// A command that used up its tries and that nobody acknowledged is expired.
+	// A command that used up its tries and that nobody acknowledged is expired, and
+	// so is a command that waited longer than commandLife. The second half also holds
+	// for a command that never went out at all.
 	if _, err := tx.Exec(`UPDATE commands SET expired = 1
 		WHERE device_id = ? AND acked_at = '' AND expired = 0
-		  AND deliveries >= ? AND delivered_at <> '' AND delivered_at < ?`,
-		deviceID, maxDeliveries, retryCut); err != nil {
+		  AND ((deliveries >= ? AND delivered_at <> '' AND delivered_at < ?)
+		       OR queued_at < ?)`,
+		deviceID, maxDeliveries, retryCut, d.stamp(now.Add(-commandLife))); err != nil {
 		return nil, err
 	}
 
@@ -181,6 +193,37 @@ func (d *DB) TakeCommands(deviceID string) ([]Command, error) {
 		return nil, err
 	}
 	return out, nil
+}
+
+// SweepCommands answers the clock for the whole fleet and takes the old rows away.
+// A timer of the server calls it.
+//
+// TakeCommands can only expire the rows of the device that polls. A screen that
+// never comes back therefore left its commands at "delivered" for ever, and the
+// admin UI never showed the "expired" state that the contract names. Nothing at all
+// removed an answered row, so the table only grew.
+func (d *DB) SweepCommands() error {
+	now := d.now()
+	tx, err := d.w.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec(`UPDATE commands SET expired = 1
+		WHERE acked_at = '' AND expired = 0
+		  AND ((deliveries >= ? AND delivered_at <> '' AND delivered_at < ?)
+		       OR queued_at < ?)`,
+		maxDeliveries, d.stamp(now.Add(-redeliverAfter)),
+		d.stamp(now.Add(-commandLife))); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(`DELETE FROM commands
+		WHERE (acked_at <> '' OR expired = 1) AND queued_at < ?`,
+		d.stamp(now.Add(-commandKeep))); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 // Commands gives the newest commands of one device with their state.
