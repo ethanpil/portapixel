@@ -79,6 +79,12 @@ func (n *cdpNavigator) Start(ctx context.Context, url string) error {
 }
 
 // Navigate sends the browser to url.
+//
+// The call carries the URL and nothing else. Page.navigate takes an optional
+// "referrer", and the page that the browser leaves is /player?k=<player secret>.
+// A referrer would put that whole URL in the Referer header of the request to an
+// external page, and the page of a URL item would then hold the secret of the
+// player API (D46). TestCDPRung proves that the parameters stay at one.
 func (n *cdpNavigator) Navigate(ctx context.Context, url string) error {
 	_, err := n.call(ctx, "Page.navigate", map[string]any{"url": url})
 	return err

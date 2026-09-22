@@ -18,6 +18,9 @@ type recorder struct {
 	answers map[string]string
 	// fails names the programs that fail.
 	fails map[string]bool
+	// browserErr is what Suspend and Resume give back. browser.ErrBusy is the real
+	// one: the command queue of the browser is full while a cold launch runs.
+	browserErr error
 }
 
 func newRecorder() *recorder {
@@ -32,8 +35,15 @@ func (r *recorder) Run(ctx context.Context, name string, args ...string) ([]byte
 	return []byte(r.answers[name]), nil
 }
 
-func (r *recorder) Suspend() error { r.steps = append(r.steps, "browser suspend"); return nil }
-func (r *recorder) Resume() error  { r.steps = append(r.steps, "browser resume"); return nil }
+func (r *recorder) Suspend() error {
+	r.steps = append(r.steps, "browser suspend")
+	return r.browserErr
+}
+
+func (r *recorder) Resume() error {
+	r.steps = append(r.steps, "browser resume")
+	return r.browserErr
+}
 
 // joined gives the steps as one line, so a test can look for a sequence.
 func (r *recorder) joined() string { return strings.Join(r.steps, " | ") }
@@ -422,4 +432,44 @@ func (b *blockingRunner) Run(ctx context.Context, name string, args ...string) (
 		<-b.release
 	}
 	return b.inner.Run(ctx, name, args...)
+}
+
+// A browser that refuses the message means that the transition did NOT happen. The
+// state must stay where it was, so that the next tick of the loop tries again.
+//
+// This branch recorded the new state and wrote "power.on" anyway. The command queue
+// of the browser is full while a cold launch runs, so the screen-on at on_time got
+// ErrBusy. step() then saw the state that the schedule wanted and returned. Nothing
+// ever tried again: /api/status said screen_on true and the screen was black for
+// the whole day.
+func TestABrowserThatRefusesKeepsTheOldState(t *testing.T) {
+	r := newRecorder()
+	r.answers["wlr-randr"] = randrOutput
+	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Browser: r})
+
+	// Off first, which works, so the state is a known one.
+	if err := c.Set(false, "a test"); err != nil {
+		t.Fatalf("Set(false) = %v", err)
+	}
+	if c.ScreenOn() {
+		t.Fatal("the screen is still on")
+	}
+
+	// The browser is busy. Going on must fail and must change nothing.
+	r.browserErr = errors.New("the browser is busy; ask again in a moment")
+	if err := c.Set(true, "the screen schedule"); err == nil {
+		t.Fatal("Set(true) answered no error while the browser refused")
+	}
+	if c.ScreenOn() {
+		t.Error("the controller recorded the screen as on after a browser that refused")
+	}
+
+	// The browser answers again, so the next attempt works.
+	r.browserErr = nil
+	if err := c.Set(true, "the screen schedule"); err != nil {
+		t.Fatalf("the second attempt = %v", err)
+	}
+	if !c.ScreenOn() {
+		t.Error("the screen is not on after an attempt that worked")
+	}
 }

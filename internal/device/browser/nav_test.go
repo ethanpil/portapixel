@@ -101,6 +101,10 @@ type cdpStub struct {
 	reloads  int
 	sockets  int
 	noTarget bool
+	// navParams holds the parameters of the last Page.navigate. The player URL
+	// carries the player secret, so a referrer in this call would give that secret
+	// to the page of a URL item.
+	navParams map[string]any
 	// drop closes the socket after the next answer, which is what a renderer
 	// crash does.
 	drop bool
@@ -158,6 +162,7 @@ func (s *cdpStub) serve(conn *websocket.Conn) {
 		s.mu.Lock()
 		switch req.Method {
 		case "Page.navigate":
+			s.navParams = req.Params
 			if url, ok := req.Params["url"].(string); ok {
 				s.url = url
 			}
@@ -206,6 +211,20 @@ func TestCDPRung(t *testing.T) {
 	}
 	if got := browser.current(); got != "https://dash.example.com/board" {
 		t.Fatalf("the stub is on %q", got)
+	}
+	// The navigate call carries the URL and NOTHING else. The page that the daemon
+	// leaves is /player?k=<the player secret>, and the "referrer" parameter of
+	// Page.navigate would put that whole URL in the Referer header of the request to
+	// an external page. The page of a URL item would then hold the secret of the
+	// player API (D46).
+	browser.mu.Lock()
+	params := browser.navParams
+	browser.mu.Unlock()
+	if len(params) != 1 {
+		t.Errorf("Page.navigate sent %v; it must send the url and nothing else", params)
+	}
+	if _, has := params["referrer"]; has {
+		t.Error("Page.navigate sent a referrer, which gives the player secret to the page")
 	}
 	// One process only: the CDP rung navigates without a restart.
 	waitFor(t, "the browser to record its start", func() bool { return len(s.starts(t)) == 1 })

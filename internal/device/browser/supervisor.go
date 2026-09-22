@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -639,6 +640,30 @@ func (s *Supervisor) handleExit(now time.Time) {
 // The rung is picked once, at the first launch, and then it stays for the life of
 // the daemon (ARCHITECTURE section 7). A device that has no DevTools port must not
 // wait 45 seconds at every restart to learn the same thing again.
+//
+// THIS CALL HOLDS THE LOOP, AND THAT IS DELIBERATE. The bound is
+// CDPTimeout + navTimeout, which is 45 s + 20 s = 65 s on the FIRST launch of a
+// device with no DevTools port, and a small fraction of a second after that. One
+// goroutine owns the browser, so nothing needs a lock, and a launch that ran beside
+// the loop would need a second state machine for "a launch is in flight".
+//
+// What the wait costs, measured against each caller:
+//
+//   - The player. It is not up yet, so there is nothing to hold.
+//   - The watchdog. checkWatchdog runs after the launch in the same pass, and
+//     restart() starts the silence timer again, so the wait counts no step of the
+//     reboot ladder.
+//   - A URL item. URLItem answers "skip" at once while the browser is not running
+//     (State is not StateRunning), so the player never waits: it plays the next item
+//     and comes back to this one on the next pass (D19).
+//   - A command from a person or from the fleet queue. send() answers ErrBusy when
+//     the queue is full, and the API turns that into 503 with a sentence. A command
+//     that says "done" and does nothing is worse than an error.
+//   - The screen schedule. power.apply keeps its old state when the browser refuses,
+//     so the next tick of the power loop tries the transition again.
+//
+// A restructure would have to keep all five of those answers. It is not worth the
+// second state machine for a wait that happens one time per boot.
 func (s *Supervisor) launch(now time.Time) {
 	url := s.desiredURL()
 	s.target = url
@@ -728,6 +753,15 @@ func (s *Supervisor) restart(reason string, counted bool) {
 	// A restart is a fresh try, so the launch backoff starts again.
 	s.launchFailed = false
 	s.launchDelay = launchRetryMin
+	// The silence timer starts again as well. stopBrowser cleared the URL window
+	// and the kiosk page, so checkWatchdog in the SAME pass of step now sees no
+	// window and the old lastBeat of the time before that window. It read that as
+	// silence and restarted a second time, so ONE fault of the control rung took
+	// two steps of the reboot ladder and the device rebooted after two faults and
+	// not after four.
+	s.mu.Lock()
+	s.wd.started(now)
+	s.mu.Unlock()
 	if counted {
 		s.countRestart(now, reason)
 	}
@@ -909,7 +943,7 @@ func (s *Supervisor) openWindow(c command) {
 		reloaded: now,
 		polled:   now,
 	}
-	s.log("browser.url.start", fmt.Sprintf("%s dwell=%s resume=%d", c.url, c.dwell, c.resume))
+	s.logRepeat("browser.url.start", c.url, fmt.Sprintf("%s dwell=%s resume=%d", c.url, c.dwell, c.resume))
 	s.navigate(c.url)
 }
 
@@ -923,7 +957,7 @@ func (s *Supervisor) serviceWindow(now time.Time) {
 
 	if w.dwell > 0 && now.Sub(w.started) >= w.dwell {
 		s.window = nil
-		s.log("browser.url.end", fmt.Sprintf("%s after %s", w.url, w.dwell))
+		s.logRepeat("browser.url.end", w.url, fmt.Sprintf("%s after %s", w.url, w.dwell))
 		s.handBackToPlayer(w.resume)
 		return
 	}
@@ -1094,6 +1128,24 @@ func (s *Supervisor) isSuspended() bool {
 func (s *Supervisor) log(event, details string) {
 	if s.opt.Log != nil {
 		s.opt.Log.Log(event, details)
+	}
+}
+
+// logRepeat writes a line that a normal loop of the playlist produces again and
+// again. It writes at most one line per URL per noteRepeat.
+//
+// Why: the ops log is a file on the flash card. A playlist with one URL item wrote
+// browser.url.start and browser.url.end at every pass, which is about 1800 lines a
+// day, and the trim then rewrites the whole file twice a day. A device in its
+// steady state writes nothing to the flash (D2). The slog line always goes out, and
+// that one lands in RAM (D35).
+func (s *Supervisor) logRepeat(event, key, details string) {
+	slog.Debug(event, "details", details)
+	s.mu.Lock()
+	first := s.rememberNote(event+" "+key, s.opt.Now())
+	s.mu.Unlock()
+	if first {
+		s.log(event, details)
 	}
 }
 

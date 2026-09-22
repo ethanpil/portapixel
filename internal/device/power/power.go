@@ -224,21 +224,38 @@ func (c *Controller) Set(on bool, reason string) error {
 // compositor exists when the display call runs.
 func (c *Controller) apply(on bool, reason string) error {
 	if on {
-		err := c.resume()
+		if err := c.resume(); err != nil {
+			// The browser refused the message, so the transition did NOT happen. Keep
+			// the old state, so that the next tick of the loop tries again.
+			//
+			// This branch recorded the new state and wrote "power.on" anyway. The
+			// command queue of the browser is full while a cold launch runs, and the
+			// screen-on at on_time then got ErrBusy. step() saw the state that the
+			// schedule wanted, returned, and never tried again: /api/status said
+			// screen_on true, the browser stayed suspended and the screen was black
+			// for the whole day.
+			c.log("power.on.fail", reason+": "+err.Error()+"; the loop tries again")
+			return err
+		}
 		c.screen(true)
 		c.mu.Lock()
 		c.on = true
 		c.mu.Unlock()
 		c.log("power.on", reason)
+		return nil
+	}
+	// Going off, the display call comes first and it has no error to give. A browser
+	// that refuses to stop keeps the state at on, so the next tick tries again.
+	c.screen(false)
+	if err := c.suspend(); err != nil {
+		c.log("power.off.fail", reason+": "+err.Error()+"; the loop tries again")
 		return err
 	}
-	c.screen(false)
-	err := c.suspend()
 	c.mu.Lock()
 	c.on = false
 	c.mu.Unlock()
 	c.log("power.off", reason)
-	return err
+	return nil
 }
 
 // suspend stops the browser. A browser that is busy gives an error, which the API

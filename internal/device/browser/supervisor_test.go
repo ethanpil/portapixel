@@ -558,20 +558,76 @@ func TestSupervisorKioskEndResetsTheWatchdog(t *testing.T) {
 
 // The kiosk fallback screen is the same hand-back. The SPA answers from there,
 // so the silence timer starts there too.
+//
+// The two hours pass while a kiosk page that ANSWERS is on the screen. That is the
+// state in which silence is correct, and it is the state the clock may move in. The
+// first form of this test moved the clock while the player was still on the screen.
+// Two hours of silence is a real fault there. A tick between the two lines then
+// restarted the browser, and the test failed about one run in seven.
 func TestSupervisorKioskFallbackResetsTheWatchdog(t *testing.T) {
+	const good = "https://dash.example.com/board"
+	const gone = "https://dash.example.com/other"
+
 	clk := newClock()
 	h := newHarness(t, func(o *Options, h *harness) { o.Now = clk.now })
 	waitFor(t, "the browser to run", func() bool { return h.sup.State().Browser == StateRunning })
 	h.sup.Heartbeat(Heartbeat{Playlist: "default", Frames: 10})
 
+	// A kiosk page that answers. No heartbeat arrives from it, and that is correct.
+	h.setReachable(good, true)
+	h.setActive(Active{Playlist: "board", KioskURL: good})
+	waitFor(t, "the kiosk page", func() bool { return h.sawEvent("browser.kiosk.start") })
 	clk.add(2 * time.Hour)
-	h.setReachable("https://dash.example.com/board", false)
-	h.setActive(Active{Playlist: "board", KioskURL: "https://dash.example.com/board"})
+
+	// The playlist now names a page that does not answer, so the fallback screen
+	// comes up and the browser goes back to the player.
+	h.setReachable(gone, false)
+	h.setActive(Active{Playlist: "other", KioskURL: gone})
 	waitFor(t, "the fallback screen", func() bool { return h.sawEvent("browser.kiosk.fallback") })
 
 	time.Sleep(100 * time.Millisecond)
 	if got := h.countEvent("browser.restart"); got != 0 {
 		t.Fatalf("the kiosk fallback wrote %d browser.restart lines:\n%s", got, h.events())
+	}
+	if got := h.sup.State().Restarts; got != 0 {
+		t.Fatalf("the kiosk fallback counted %d restarts on the reboot ladder", got)
+	}
+}
+
+// ONE fault is ONE step on the reboot ladder.
+//
+// A restart clears the URL window and the kiosk page, and checkWatchdog runs in
+// the SAME pass of step(). It then saw no window and the lastBeat of the time
+// before that window, read the difference as silence and restarted a second time.
+// Two counted restarts came from one fault, so a device with a flaky control rung
+// rebooted after two faults and not after four (plan 3.3).
+func TestSupervisorRestartResetsTheSilenceTimer(t *testing.T) {
+	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
+	s := New(Options{
+		Command: CommandConfig{Override: DisableCommand},
+		Log:     testLog(t),
+		Now:     func() time.Time { return now },
+	})
+
+	// The state at the end of a URL window: the last heartbeat of the player is two
+	// hours old, because no heartbeat arrives while an external page is on the
+	// screen.
+	s.mu.Lock()
+	s.wd.started(now.Add(-2 * time.Hour))
+	s.mu.Unlock()
+
+	// One fault of the control rung during that window.
+	s.restart("the control rung does not answer during a URL item", true)
+
+	// The pass of step() that follows must find no silence at all.
+	s.mu.Lock()
+	reason := s.wd.idle(now, false)
+	s.mu.Unlock()
+	if reason != "" {
+		t.Fatalf("the tick after the restart would restart again: %q", reason)
+	}
+	if got := s.State().Restarts; got != 1 {
+		t.Fatalf("one fault counted %d restarts on the ladder, want 1", got)
 	}
 }
 
