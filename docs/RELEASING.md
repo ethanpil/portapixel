@@ -21,7 +21,8 @@ tag v0.1.0  ->  VERSION 0.1.0
 
 `VERSION` goes into the binary with `-ldflags -X`, into the image, into the
 release directory `/opt/portapixel/releases/0.1.0/`, and into the health marker
-`health/0.1.0.ok`. The `settings` job proves with `tests/ci/tagcheck` that
+`/run/portapixel/health/0.1.0.ok`. That marker is in RAM, because it is true for
+one boot only. The `settings` job proves with `tests/ci/tagcheck` that
 `internal/updater.NormalizeVersion` makes the same value from the tag. Two values
 here would roll every good release back and mark it bad for ever (D47).
 

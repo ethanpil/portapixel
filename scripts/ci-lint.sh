@@ -97,8 +97,8 @@ fi
 # with no rationale comment, or with an unknown tag, cannot slip in.
 #
 # ONE READER. This check uses os/packages-read.awk, the same file install.sh uses,
-# in its "check" mode. Before this there were two parsers of one grammar and they
-# disagreed: a line with two architecture tags installed on NEITHER architecture,
+# in its "check" mode. Before this there were two parsers of one grammar, and they
+# disagreed. A line with two architecture tags installed on NEITHER architecture,
 # and this lint called that line good.
 grammar=$(awk -v want=check -f os/packages-read.awk os/packages.list |
 	grep -n '^BAD ' || true)

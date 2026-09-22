@@ -57,9 +57,14 @@ cp /etc/network/interfaces /m/etc/network/interfaces
 cp /etc/apk/repositories /m/etc/apk/repositories
 
 # The kernel of this guest stays as the ISO installed it, which is linux-virt.
-# THAT IS THE POINT of this test. On-box mode installs no kernel, no kernel
-# firmware, no microcode and no boot loader package (the @image tag of
-# os/packages.list): it puts PortaPixel on a system that boots itself already.
+# THAT IS THE POINT of this test. On-box mode installs no kernel, no microcode
+# and no boot loader package (the @image tag of os/packages.list). It puts
+# PortaPixel on a system that boots itself already.
+#
+# The FIRMWARE packages do install on-box. They put files under /lib/firmware for
+# the kernel of the host, so they are safe on a running system. QEMU needs no
+# firmware, which is why this test cannot see whether they are there.
+#
 # This guest swapped linux-virt for the linux-lts of the image before, because
 # install.sh counted the kernels of the host and refused a box that had two. A
 # normal virtual machine host has linux-virt, so that refusal made the second

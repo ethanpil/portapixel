@@ -17,16 +17,16 @@
 # THE @image TAG names a package that installs a KERNEL or writes the BOOT CHAIN,
 # and nothing else. An ON-BOX install (os/install.sh with no --root) puts
 # PortaPixel on a system that already runs and already boots itself. It must never
-# install a second kernel there: a typical virtual machine host runs linux-virt,
-# our image runs linux-lts, and a host with two kernels does not know which one
-# starts. The CPU microcode carries the same tag, because a boot loader has to
-# load it and the on-box mode writes no boot loader configuration. mkinitfs is
-# tagged too: only the --root branch of install.sh builds an initramfs.
+# install a second kernel there. A typical virtual machine host runs linux-virt
+# and our image runs linux-lts, so a host with two kernels does not know which one
+# starts. The CPU microcode carries the same tag: a boot loader has to load it,
+# and the on-box mode writes no boot loader configuration. mkinitfs is tagged too,
+# because only the --root branch of install.sh builds an initramfs.
 #
 # A FIRMWARE PACKAGE IS NOT @image. It puts files under /lib/firmware, where they
 # are safe on a running system and where the kernel of the host needs them. The
 # first version of this tag took the GPU, the WiFi and the wired Ethernet firmware
-# away from every on-box install: a thin client with a Realtek NIC then did not
+# away from every on-box install. A thin client with a Realtek NIC then did not
 # link at all. QEMU needs no firmware, so CI cannot see that fault.
 #
 # install.sh skips every @image line on-box and prints which ones.

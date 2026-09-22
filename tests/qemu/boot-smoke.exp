@@ -102,14 +102,14 @@ expect {
 # clean value. "V""ER=" in the sent text echoes with the quotes in it and cannot
 # match the bare VER= that the shell prints.
 #
-# THREE rules, and each one cost a measurement.
+# FOUR rules, and each one cost a measurement.
 #
 # 1. The 80 column console. A typed line that is longer than the console leaves
-#    the cursor in the middle of a line, and the answer of the shell then starts
+#    the cursor in the middle of a line. The answer of the shell then starts
 #    there and wraps INSIDE the value. So make the console wide first, and keep
 #    the line that prints the value short.
 # 2. The value needs an END mark. "(\S+)" matches as soon as the first character
-#    of the value has arrived, so expect returned "0." for "0.0.1-ci1" and the
+#    of the value has arrived. Expect returned "0." for "0.0.1-ci1", and the
 #    test read a version that the guest never said. Put the value between "<" and
 #    ">" and match up to the ">": expect must then wait for the whole value.
 #    The marks are "<" and ">" and not brackets, because a "[" inside a string in

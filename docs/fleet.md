@@ -37,12 +37,21 @@ flow above. With a token, the screen pairs at once.
 
 ## What the fleet manages
 
-While a device is paired, the server manages exactly these settings:
+While a device is paired, the server manages exactly these five settings. The
+device names them itself, in `managed_fields` of `GET /api/pair`, and the admin
+UI reads that list instead of keeping a copy:
 
-- the playlists,
-- the default playlist,
-- the schedule rules,
-- the screen's on and off times.
+- `playback.default_playlist` — the playlist that plays when nothing is scheduled,
+- `schedule` — every schedule rule,
+- `display.on_time` — when the screen comes on,
+- `display.off_time` — when the screen goes off,
+- `display.power_days` — the days on which the screen comes on at all.
+
+The server also owns the playlists themselves and their media. Those are
+content, not settings: they arrive in `_fleet/` on the media partition.
+
+A `PUT /api/config` that changes one of the five answers 403 and names every one
+of them in `fields`.
 
 **Everything else stays local to the device.** This includes rotation,
 audio, the network settings, `video_mode`, the transition and its length,

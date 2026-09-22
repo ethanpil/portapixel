@@ -39,7 +39,7 @@ built and confirmed so far.
 | aarch64 | Raspberry Pi 3, 4, 5, Zero 2 W, Pi 2 v1.2, CM4, CM5 | `portapixel-<version>-aarch64.img.gz` | Builds in CI, and CI reads the boot files inside it. No Raspberry Pi has started it. |
 
 The Pi Zero 2 W and the Pi 2 v1.2 are low-RAM devices. Chromium uses more RAM
-than the browser engine that the plan first named, so treat the Pi Zero 2 W as
+than the browser engine that the plan first named. Treat the Pi Zero 2 W as
 untested until a real device passes the checklist.
 
 ## Quick start

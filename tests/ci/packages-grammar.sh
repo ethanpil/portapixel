@@ -8,7 +8,7 @@
 # The case that made this file necessary: "@x86_64 @aarch64 pkg". The header of
 # packages.list says that several architecture tags are an OR set. The first
 # reader cleared its "arch is ok" flag on every tag that was not the current
-# architecture, so such a line installed on NEITHER architecture and the lint
+# architecture. Such a line then installed on NEITHER architecture, and the lint
 # called it good.
 set -eu
 
