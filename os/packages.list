@@ -8,15 +8,28 @@
 #   @image pkgname     # rationale      -> install in an image build only
 #   # text                              -> comment, ignored
 #   (blank line)                        -> ignored
-# One package per line. Each line needs a rationale comment. Put the tags first.
-# A line can carry more than one tag, for example "@x86_64 @image linux-lts".
+# Each line needs a rationale comment. Put the tags first. A line can carry more
+# than one tag, for example "@x86_64 @image linux-lts". Several architecture tags
+# are an OR set: "@x86_64 @aarch64 pkg" installs on both. os/packages-read.awk is
+# the one reader of this grammar, and install.sh and scripts/ci-lint.sh both use
+# it.
 #
-# THE @image TAG is the kernel, the kernel firmware, the CPU microcode and any
-# boot loader package. An ON-BOX install (os/install.sh with no --root) puts
+# THE @image TAG names a package that installs a KERNEL or writes the BOOT CHAIN,
+# and nothing else. An ON-BOX install (os/install.sh with no --root) puts
 # PortaPixel on a system that already runs and already boots itself. It must never
 # install a second kernel there: a typical virtual machine host runs linux-virt,
 # our image runs linux-lts, and a host with two kernels does not know which one
-# starts. install.sh skips every @image line on-box and prints which ones.
+# starts. The CPU microcode carries the same tag, because a boot loader has to
+# load it and the on-box mode writes no boot loader configuration. mkinitfs is
+# tagged too: only the --root branch of install.sh builds an initramfs.
+#
+# A FIRMWARE PACKAGE IS NOT @image. It puts files under /lib/firmware, where they
+# are safe on a running system and where the kernel of the host needs them. The
+# first version of this tag took the GPU, the WiFi and the wired Ethernet firmware
+# away from every on-box install: a thin client with a Realtek NIC then did not
+# link at all. QEMU needs no firmware, so CI cannot see that fault.
+#
+# install.sh skips every @image line on-box and prints which ones.
 #
 # VERIFIED on Alpine 3.23.2 (an x86_64 box, and an aarch64 apk root from the
 # same v3.23 repositories) on 2026-09-18. Every name below exists in main or
@@ -65,9 +78,9 @@ sgdisk                     # GPT edit for the first boot p3 recreate (D36). Its 
 sfdisk                     # partition table dump and restore. Backup path for the p3 dance.
 partx                      # tell the kernel about the new p3 without a reboot (D36). Its own package.
 parted                     # partprobe. Second way to re-read the partition table.
-mkinitfs                   # build the initramfs. The feature list gives medium independence (D53).
+@image mkinitfs            # build the initramfs. The feature list gives medium independence (D53). Only the --root branch builds one.
 zram-init                  # compressed RAM swap for the low tier (plan section 4). No flash wear.
-zram-init-openrc           # the zram-init init script. The daemon configures it on low tier only.
+zram-init-openrc           # the zram-init init script. The first boot enables it under 1 GiB of memory.
 
 # --------------------------------------------------------------- the browser
 # The daemon starts:  cage -s -- chromium --kiosk --ozone-platform=wayland ...
@@ -139,27 +152,27 @@ acpid-openrc               # the acpid init script. The main package holds no in
 # --------------------------------------------------------- x86_64 firmware set
 # Curated but generous, per the "maximal drivers" goal (plan section 4). One
 # line per family, so a size problem can be traced to a family.
-@x86_64 @image linux-firmware-i915    # Intel graphics DMC and GuC blobs. Without them i915 loses its display power states.
-@x86_64 @image linux-firmware-xe      # Intel Xe graphics (Meteor Lake and later).
-@x86_64 @image linux-firmware-amdgpu  # AMD GPU. Modern Radeon and APU display needs it.
-@x86_64 @image linux-firmware-radeon  # older Radeon that the radeon driver handles.
-@x86_64 @image linux-firmware-nvidia  # nouveau signed firmware. NVIDIA renders through nouveau, software decode (D9).
-@x86_64 @image linux-firmware-intel   # Intel WiFi (iwlwifi). The plan called this "linux-firmware-iwlwifi", which does not exist.
-@x86_64 @image linux-firmware-ath9k_htc  # Atheros USB WiFi. PCIe ath9k needs no firmware, so there is no linux-firmware-ath9k.
-@x86_64 @image linux-firmware-ath10k  # Qualcomm Atheros 802.11ac WiFi.
-@x86_64 @image linux-firmware-ath11k  # Qualcomm Atheros WiFi 6.
-@x86_64 @image linux-firmware-ath12k  # Qualcomm Atheros WiFi 7.
-@x86_64 @image linux-firmware-brcm    # Broadcom WiFi. Common in thin clients and mini PCs.
-@x86_64 @image linux-firmware-rtw88   # Realtek 802.11ac WiFi, very common on cheap USB adapters.
-@x86_64 @image linux-firmware-rtw89   # Realtek WiFi 6.
-@x86_64 @image linux-firmware-rtlwifi # older Realtek WiFi.
-@x86_64 @image linux-firmware-mediatek # MediaTek WiFi, which includes the mt76 blobs.
-@x86_64 @image linux-firmware-rtl_nic # Realtek wired Ethernet. Many boards do not link without it.
-@x86_64 @image linux-firmware-realtek # Realtek audio codec blobs.
-@x86_64 @image linux-firmware-cirrus  # Cirrus audio codec blobs, used by recent laptop class boards.
+@x86_64 linux-firmware-i915    # Intel graphics DMC and GuC blobs. Without them i915 loses its display power states.
+@x86_64 linux-firmware-xe      # Intel Xe graphics (Meteor Lake and later).
+@x86_64 linux-firmware-amdgpu  # AMD GPU. Modern Radeon and APU display needs it.
+@x86_64 linux-firmware-radeon  # older Radeon that the radeon driver handles.
+@x86_64 linux-firmware-nvidia  # nouveau signed firmware. NVIDIA renders through nouveau, software decode (D9).
+@x86_64 linux-firmware-intel   # Intel WiFi (iwlwifi). The plan called this "linux-firmware-iwlwifi", which does not exist.
+@x86_64 linux-firmware-ath9k_htc  # Atheros USB WiFi. PCIe ath9k needs no firmware, so there is no linux-firmware-ath9k.
+@x86_64 linux-firmware-ath10k  # Qualcomm Atheros 802.11ac WiFi.
+@x86_64 linux-firmware-ath11k  # Qualcomm Atheros WiFi 6.
+@x86_64 linux-firmware-ath12k  # Qualcomm Atheros WiFi 7.
+@x86_64 linux-firmware-brcm    # Broadcom WiFi. Common in thin clients and mini PCs.
+@x86_64 linux-firmware-rtw88   # Realtek 802.11ac WiFi, very common on cheap USB adapters.
+@x86_64 linux-firmware-rtw89   # Realtek WiFi 6.
+@x86_64 linux-firmware-rtlwifi # older Realtek WiFi.
+@x86_64 linux-firmware-mediatek # MediaTek WiFi, which includes the mt76 blobs.
+@x86_64 linux-firmware-rtl_nic # Realtek wired Ethernet. Many boards do not link without it.
+@x86_64 linux-firmware-realtek # Realtek audio codec blobs.
+@x86_64 linux-firmware-cirrus  # Cirrus audio codec blobs, used by recent laptop class boards.
 
 # ------------------------------------------------------------ aarch64 (Pi) set
 @aarch64 @image linux-rpi         # the Raspberry Pi kernel. One flavour covers Zero 2 W to Pi 5 (D8).
 @aarch64 @image raspberrypi-bootloader   # start*.elf, bootcode.bin, fixup files and the DTBs for PPBOOT (plan section 6).
-@aarch64 @image linux-firmware-brcm      # Pi WiFi and Bluetooth blobs.
-@aarch64 @image linux-firmware-cypress   # Pi 3 and Pi 4 Cypress and Infineon WiFi blobs.
+@aarch64 linux-firmware-brcm      # Pi WiFi and Bluetooth blobs.
+@aarch64 linux-firmware-cypress   # Pi 3 and Pi 4 Cypress and Infineon WiFi blobs.

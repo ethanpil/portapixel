@@ -235,35 +235,31 @@ fi
 # packages.list is the only source of the package set. Read the lines for this
 # architecture: untagged lines plus the lines tagged with our architecture.
 #
-# ON-BOX mode leaves every @image line out. Those lines are the kernel, the kernel
-# firmware, the CPU microcode and any boot loader package. An on-box install puts
+# ON-BOX mode leaves every @image line out. Those lines are the kernel, the CPU
+# microcode, any boot loader package and mkinitfs. An on-box install puts
 # PortaPixel on a system that already boots itself: a normal virtual machine host
 # runs linux-virt, this image runs linux-lts, and installing ours gave the host two
 # kernels and no way to know which one starts. See packages.list, the @image tag.
+#
+# The FIRMWARE packages are NOT in that set. They put files under /lib/firmware for
+# the kernel of the host, and a box with no GPU or no Ethernet firmware is a box
+# with no picture or no network.
 ONBOX=0
 [ -n "$ROOT" ] || ONBOX=1
 
 # read_packages prints one package name per line. The first argument is the set:
 # "keep" gives the packages to install, "skip" gives the @image packages that
 # on-box mode leaves out.
+#
+# THE GRAMMAR LIVES IN ONE FILE. scripts/ci-lint.sh reads the same list, and two
+# readers of one grammar drift apart: the first pair already disagreed about a
+# line with two architecture tags. os/packages-read.awk is the one reader, and
+# tests/ci/packages-grammar.sh proves it against a file of sample lines.
+GRAMMAR="$SRC/packages-read.awk"
+[ -f "$GRAMMAR" ] || die "cannot find $GRAMMAR, the reader of packages.list"
 read_packages() {
-	awk -v arch="$ARCH" -v onbox="$ONBOX" -v want="$1" '
-		{ sub(/[ \t]*#.*$/, "") }        # drop the rationale comment
-		{ gsub(/^[ \t]+|[ \t]+$/, "") }  # trim
-		$0 == "" { next }
-		{
-			# The tags come first, and there can be more than one.
-			n = 1; image = 0; archok = 1
-			while (n <= NF && substr($n, 1, 1) == "@") {
-				if ($n == "@image") image = 1
-				else if ($n != "@" arch) archok = 0
-				n++
-			}
-			if (!archok || n > NF) next
-			if (image && onbox == 1) { if (want == "skip") print $n; next }
-			if (want == "keep") print $n
-		}
-	' "$SRC/packages.list"
+	awk -v arch="$ARCH" -v onbox="$ONBOX" -v want="$1" \
+		-f "$GRAMMAR" "$SRC/packages.list"
 }
 
 say "read the package set for $ARCH"
@@ -271,8 +267,9 @@ PKGS="$(read_packages keep)"
 [ -n "$PKGS" ] || die "packages.list gave no packages for $ARCH"
 if [ "$ONBOX" = 1 ]; then
 	SKIPPED="$(read_packages skip | tr '\n' ' ')"
-	say "on-box mode installs no kernel, kernel firmware, microcode or boot loader."
-	say "  this host keeps the kernel it boots. Skipped: ${SKIPPED:-none}"
+	say "on-box mode installs no kernel, no microcode and no boot loader."
+	say "  this host keeps the kernel it boots. The firmware packages DO install,"
+	say "  because the kernel of the host needs them. Skipped: ${SKIPPED:-none}"
 fi
 
 say "install $(printf '%s\n' "$PKGS" | wc -l | tr -d ' ') packages"
@@ -595,8 +592,10 @@ rc_add portapixeld default
 # shutdown: leave the file systems clean.
 for s in killprocs mount-ro savecache; do rc_add "$s" shutdown; done
 
-# zram-init is installed but NOT enabled. Only a low tier device gets swap, and
-# the daemon decides that at run time (plan section 4).
+# zram-init is installed and NOT enabled here. The first boot enables it, and only
+# on a machine with less than 1 GiB of memory (plan section 4). The rule needs the
+# memory of the real machine, which a build host does not have, and firstboot.sh
+# skips a host that already has swap of its own.
 
 # --------------------------------------------------------- 12. daemon settings
 say "write /etc/conf.d/portapixeld"
@@ -627,8 +626,11 @@ PP_KIOSK_CACHE="$KIOSK_CACHE"
 PP_KIOSK_RUNTIME="/run/user/$KIOSK_UID"
 
 # Seconds the new release has to write its health marker before the update
-# rolls back (plan section 15). health-gate.sh reads this too.
+# rolls back (plan section 15). health-gate.sh reads this too. The marker itself
+# is \$PP_RUN/health/<version>.ok, in RAM: it is true for one boot only.
 PP_HEALTH_TIMEOUT=120
+# Seconds between two looks for that marker. A test of the gate lowers it.
+PP_HEALTH_POLL=2
 EOF
 
 # ---------------------------------------------------- 13. identity of the image

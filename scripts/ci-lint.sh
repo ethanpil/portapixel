@@ -93,28 +93,32 @@ else
 fi
 
 # ----------------------------------------------------- the package list format
-# packages.list is the only source of the package set. Guard its format so a
-# line with no rationale comment, or with an unknown tag, cannot slip in.
-# A line can carry more than one tag, for example "@x86_64 @image linux-lts". Read
-# every leading tag, and a package name must come after them.
+# packages.list is the only source of the package set. Guard its format so a line
+# with no rationale comment, or with an unknown tag, cannot slip in.
+#
+# ONE READER. This check uses os/packages-read.awk, the same file install.sh uses,
+# in its "check" mode. Before this there were two parsers of one grammar and they
+# disagreed: a line with two architecture tags installed on NEITHER architecture,
+# and this lint called that line good.
+grammar=$(awk -v want=check -f os/packages-read.awk os/packages.list |
+	grep -n '^BAD ' || true)
+if [ -n "$grammar" ]; then
+	echo "FAIL: packages.list holds a line the reader refuses:"
+	echo "$grammar"
+	fail=1
+fi
+# The rationale comment is a rule of this file and not of the grammar, so it stays
+# here.
 awk '
 	/^[ \t]*(#|$)/ { next }
-	{
-		if ($0 !~ /#/) { printf "FAIL: packages.list:%d: no rationale comment: %s\n", FNR, $0; bad = 1 }
-		n = 1
-		while (n <= NF && substr($n, 1, 1) == "@") {
-			if ($n != "@x86_64" && $n != "@aarch64" && $n != "@image") {
-				printf "FAIL: packages.list:%d: unknown tag %s\n", FNR, $n; bad = 1
-			}
-			n++
-		}
-		if (n > NF || substr($n, 1, 1) == "#") {
-			printf "FAIL: packages.list:%d: tags with no package name: %s\n", FNR, $0; bad = 1
-		}
-	}
+	$0 !~ /#/ { printf "FAIL: packages.list:%d: no rationale comment: %s\n", FNR, $0; bad = 1 }
 	END { exit bad + 0 }
 ' os/packages.list || fail=1
 echo "packages.list: every line has a tag we know and a rationale"
+
+# The grammar has its own test, because a reader of a list must be proved with
+# lines that the real list does not hold.
+sh tests/ci/packages-grammar.sh || fail=1
 
 # -------------------------------------------------------------------- Go module
 if command -v go >/dev/null 2>&1; then
