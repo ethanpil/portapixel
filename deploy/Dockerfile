@@ -22,10 +22,20 @@ RUN go mod download
 
 COPY . .
 ARG VERSION=dev
-# buildx sets these two for each platform of the build. The defaults are for a
-# plain "docker build", which sets neither.
-ARG TARGETOS=linux
-ARG TARGETARCH=amd64
+# BuildKit sets these two for each platform of the build, and it is the default
+# builder of Docker 23 and later. They have NO default value on purpose. With a
+# default of "amd64", a build that does not set them makes an amd64 binary and
+# puts it in an image that says arm64. Nothing later in the build sees that, and
+# the container then stops with "exec format error" on the first start. A build
+# that cannot name its target must fail here instead.
+ARG TARGETOS
+ARG TARGETARCH
+RUN [ -n "$TARGETOS" ] && [ -n "$TARGETARCH" ] || { \
+        echo "FAIL: TARGETOS or TARGETARCH is empty."; \
+        echo "      Build with BuildKit, which sets both:"; \
+        echo "        docker build -f deploy/Dockerfile -t portapixel-server ."; \
+        echo "      A build with DOCKER_BUILDKIT=0 sets neither."; \
+        exit 1; }
 ENV CGO_ENABLED=0
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
         -trimpath \
