@@ -107,5 +107,22 @@ and `portapixel-server`. The versions are in `go.mod`.
 
 ## Default content
 
-The default playlist images are CC0 1.0 (public domain dedication). The
-maintainer supplied them (D37).
+The image carries seven demo videos in `/opt/portapixel/default-media/`. A new
+device copies them into the `default` playlist at the first boot (D37).
+
+| File | Source | Licence |
+|---|---|---|
+| `01-meadow.mp4` | Mixkit, clip 4075 (`mixkit-countryside-meadow-4075-hd-ready.mp4`) | Mixkit Stock Video Free License |
+| `02-creek.mp4` | Mixkit, clip 51585 (`mixkit-flying-over-a-relaxing-creek-full-of-rock-on-the-51585-hd-ready.mp4`) | Mixkit Stock Video Free License |
+| `03-forest.mp4` | Mixkit, clip 50847 (`mixkit-the-camera-slowly-slides-into-the-tranquil-forest-on-a-50847-hd-ready.mp4`) | Mixkit Stock Video Free License |
+| `04-beach.mp4` | Mixkit, clip 5016 (`mixkit-waves-coming-to-the-beach-5016-hd-ready.mp4`) | Mixkit Stock Video Free License |
+| `05-mountain-road.mp4` | Mixkit, clip 41576 (`mixkit-going-down-a-curved-highway-through-a-mountain-range-41576-hd-ready.mp4`) | Mixkit Stock Video Free License |
+| `06-waterfall.mp4` | Source not recorded; supplied by the maintainer (`100195-video-720.mp4`) | Not recorded |
+| `07-roses.mp4` | Source not recorded; supplied by the maintainer (`100899-video-720.mp4`) | Not recorded |
+
+The Mixkit terms are at <https://mixkit.co/license/>.
+
+These videos are NOT CC0. Plan D37 asks for CC0 content, and these files do not
+meet that rule. The maintainer must make sure that the terms permit us to put
+the files in the image and give the image to other persons.
+`os/default-media/README.md` has the same list, with the length of each file.

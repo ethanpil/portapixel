@@ -150,3 +150,7 @@ PortaPixel is MIT licensed. See `LICENSE`.
 The image and the two binaries also carry third-party software: Alpine
 Linux, Chromium, `cage`, and a small number of Go modules. See
 `LICENSES-THIRD-PARTY.md` for the full list and its licences.
+
+The image also carries seven demo videos for the first boot. They are not
+MIT licensed and not CC0. `LICENSES-THIRD-PARTY.md` gives the source and the
+licence of each one.

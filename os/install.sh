@@ -342,9 +342,9 @@ for f in "$ROOT"/etc/init.d/portapixel* "$ROOT"/usr/libexec/portapixel/*.sh; do
 	[ -f "$f" ] && chmod 0755 "$f" || :
 done
 
-# Default media for the first boot (D37). Only the files at the top level: the
-# directory also holds gen/, which is the generator of the slides, and the image
-# has no use for Go source.
+# Default media for the first boot (D37). Only the files at the top level. The
+# README.md goes in too. It does no harm: provision copies only the files that
+# the kind rule of internal/playlist knows as an image or a video.
 if [ -d "$SRC/default-media" ]; then
 	mkdir -p "$ROOT$RELEASE_ROOT/default-media"
 	for f in "$SRC"/default-media/*; do

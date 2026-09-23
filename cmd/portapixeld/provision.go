@@ -146,7 +146,8 @@ func installDefaultMedia(p *paths, id identity.Identity, log *opslog.Log) (bool,
 				return false, err
 			}
 		}
-		// No duration: the image items take [playback].image_duration.
+		// No duration: an image takes [playback].image_duration and a video
+		// plays for its full length. Mute stays false.
 		items = append(items, playlist.Item{File: name})
 	}
 

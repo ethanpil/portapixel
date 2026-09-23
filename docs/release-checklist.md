@@ -30,6 +30,10 @@ rungs (the DevTools protocol, then a relaunch), not three. See
 
 ## Playback
 
+- [ ] A new image plays the seven demo videos of the `default` playlist at
+      the first boot, each for its full length.
+- [ ] The maintainer confirmed that the terms of the demo videos permit us to
+      give them to other persons in the image. See `LICENSES-THIRD-PARTY.md`.
 - [ ] A mixed playlist with an image, a video and a web page item plays, with
       every transition tried at least once.
 - [ ] A web page item on a slow site shows an acceptable gap and always

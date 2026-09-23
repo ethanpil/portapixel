@@ -59,7 +59,7 @@ cat <<EOF
 | \`install.sh\` | the installer of that directory, to read before you run it |
 | \`portapixel-*-packages.manifest\` | the exact package set of each image (D50) |
 | \`portapixel-server-deploy.tar.gz\` | the OpenRC, systemd and compose files |
-| \`LICENSES-THIRD-PARTY.md\` | the licences of the software in the image |
+| \`LICENSES-THIRD-PARTY.md\` | the licences of the software and of the demo videos in the image |
 
 The server container image is \`ghcr.io/ethanpil/portapixel-server:$VERSION\`.
 

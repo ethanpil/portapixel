@@ -11,7 +11,8 @@ directory with no `playlist.toml` is not a playlist, so you can use it as
 scratch space.
 
 Every new device starts with one playlist named `default`, made from the
-sample images that ship with PortaPixel.
+seven demo videos that ship with PortaPixel. Each video plays for its full
+length. Replace them with your own content.
 
 ## Item types
 

@@ -115,8 +115,8 @@ runs a stock, sys-mode install of Alpine Linux, at the exact release that a
 PortaPixel release pins.
 
 `install.sh` is not one file that runs on its own. It reads `packages.list`,
-it copies the `overlay` directory into the target, and it takes the first
-slides from `default-media`. Download `portapixel-os-<version>.tar.gz` from
+it copies the `overlay` directory into the target, and it takes the demo
+videos from `default-media`. Download `portapixel-os-<version>.tar.gz` from
 the release, not only `install.sh`, and unpack it:
 
 ```sh
