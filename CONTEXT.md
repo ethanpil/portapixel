@@ -415,3 +415,24 @@ checked with a screenshot of the virtual display or with the ops log.
 - Run `go test -race` in CI on Linux. The Windows machine has no C compiler.
 - The development machine is Windows. Linux-only code (statfs, DRM, CEC, mount) sits
   behind build tags or runtime checks, so that `go test ./...` runs on Windows.
+- Rule: a remote command that saves the config obeys the same no-write rule as
+  `provision`. The rename command does not write when the config came from the shadow
+  copy, the defaults or a repair, or when a hand edit has a fault. It reads an unread
+  hand edit first. One lock (`cfgWriteMu`) holds each read, change, save and adopt.
+- One DNS label holds 63 octets. A name of 64 characters gives an mDNS name that
+  answers no query, and the announcer still logs success. So the name limit is 63.
+- The object name of a fleet item on a device is `<sha8>-<name>`, not the upload
+  name. Match the item on screen by hash, never by name.
+- A video preview sets the `.muted` property, not only the attribute. Use the
+  fragment `#t=0.5` to get a first frame, and give a grid video its `src` only
+  when the tile comes into view.
+- `go test` keeps a result by the files that the test binary opens. A child `node`
+  process opens nothing that counts. A wrapper must read the files that it tests.
+- The Edit tool writes `\uXXXX` in new text as the real character. Write escapes
+  with a script, then search the diff for U+200B to U+206F and U+FEFF.
+- The Bash tool makes `\` into `\`. Write code that holds backslashes with Edit or
+  Write.
+- `--browser-cmd` gives the browser no environment, and the browser runs in the
+  working directory of the daemon.
+- Before a push, run `go vet ./...` at EACH new commit, not only at HEAD. 37930f6
+  passed at HEAD and failed alone.
