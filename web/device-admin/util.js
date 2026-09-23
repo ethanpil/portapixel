@@ -93,3 +93,33 @@ function safePart(part) {
 export function frameURL(src) {
   return `${src}#t=0.5`;
 }
+
+/** The item of a playlist that the player reports in `np`, and its place.
+    Gives {item, index}. index is -1 when the place is not certain.
+
+    The index of the player is a place in the list that the daemon sent it.
+    The daemon shuffles that list and leaves out a missing file, so
+    items[np.index] can be another file. The name finds the item, and the hash
+    as well when the report has one. The same file two times in one playlist
+    gives the item but no place. */
+export function playingItem(items, np) {
+  const none = { item: null, index: -1 };
+  if (!np || !np.item || !Array.isArray(items)) return none;
+  const hits = [];
+  items.forEach((it, i) => {
+    if (!it || it.name !== np.item) return;
+    if (np.sha256 && it.sha256 && it.sha256 !== np.sha256) return;
+    hits.push(i);
+  });
+  if (hits.length === 0) return none;
+  return { item: items[hits[0]], index: hits.length === 1 ? hits[0] : -1 };
+}
+
+/** The name that a save of the Settings page sends. The fleet server can
+    rename the screen while the page is open. A name that the person did not
+    change on the page takes the name that runs now. Before this, a save of
+    another field put the old name back, and the next heartbeat put it on the
+    server too. */
+export function nameToSave(typed, loaded, running) {
+  return typed === loaded && running ? running : typed;
+}

@@ -17,7 +17,7 @@ import {
   fmtAgo, card, pageHead, setText, setShown, errorText, dayChips,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { notInThisBuild } from '../util.js';
+import { notInThisBuild, nameToSave } from '../util.js';
 
 const MASK = '********';
 
@@ -150,7 +150,8 @@ export function mount(main, ctx) {
   /* -------------------------------------------------------------- the controls */
 
   // Device.
-  const cName = text({ maxlength: '60', autocomplete: 'off' });
+  // 63 is manifest.MaxNameLength, the rule of the daemon and of the fleet server.
+  const cName = text({ maxlength: '63', autocomplete: 'off' });
   const cID = h('input', { class: 'pp-input pp-input--mono', type: 'text', readonly: true });
   const cTimezone = timezoneControl();
   const cTier = select([['auto', 'Automatic'], ['low', 'Treat as low-power'], ['high', 'Treat as full-power']]);
@@ -645,6 +646,11 @@ export function mount(main, ctx) {
     const next = readForm();
     saveBtn.disabled = true;
     try {
+      try {
+        const running = (await api('GET', '/api/config')).config.device.name;
+        next.device.name = nameToSave(next.device.name, cfg.device.name, running);
+      } catch { /* the save goes on with the name of the form */ }
+      if (gone) return;
       const applied = await api('PUT', '/api/config', next);
       // The device holds the secrets; the copy we keep holds the mask again.
       cfg = next;

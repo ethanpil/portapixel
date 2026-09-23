@@ -13,7 +13,7 @@ import {
   card, pageHead, setText, setShown, errorText,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { deviceTime, notInThisBuild, localMedia, frameURL } from '../util.js';
+import { deviceTime, notInThisBuild, localMedia, frameURL, playingItem } from '../util.js';
 
 /* status.warnings is a list of {code, message}. The codes are the contract with
    the daemon (internal/manifest/status.go). This page matched the first words of
@@ -394,9 +394,11 @@ export function mount(main, ctx) {
     const list = findPlaylist(np.playlist);
     setText(nowPlaylist, list ? list.title : np.playlist || '');
 
+    // The report names the file. Its index is a place in the shuffled list that
+    // the player got, so the page finds the item by its name and hash.
     const items = (list && list.items) || [];
-    const item = items[np.index] || null;
-    setText(nowCount, items.length ? `Item ${np.index + 1} of ${items.length}` : `Item ${np.index + 1}`);
+    const { item, index } = playingItem(items, np);
+    setText(nowCount, index >= 0 ? `Item ${index + 1} of ${items.length}` : '');
 
     // The preview is rebuilt only when the file changes: a video element that
     // is replaced every five seconds never shows a frame.
@@ -410,8 +412,16 @@ export function mount(main, ctx) {
     playing = { since: Date.parse(np.since), seconds: itemSeconds(item) };
     second();
 
-    const next = items.length > 1 ? items[(np.index + 1) % items.length] : null;
+    // The next item is known only for a list in its own order.
+    const next = index >= 0 && items.length > 1 && !shuffled(list) ? items[(index + 1) % items.length] : null;
     setText(nowNext, next ? `Next: ${next.name} · ${describe(next)}` : '');
+  }
+
+  /* The daemon shuffles a playlist when its own shuffle key, or else the device
+     setting, says so. With no configuration yet, the order is not known. */
+  function shuffled(list) {
+    if (list && typeof list.shuffle === 'boolean') return list.shuffle;
+    return !cfg || !!cfg.playback.shuffle;
   }
 
   function emptyReason(status) {
@@ -670,9 +680,12 @@ export function mount(main, ctx) {
       : h('div', { class: 'pp-help', style: { 'margin-top': '0' }, text: 'The log is empty.' }));
   }
 
+  /* The same rule as library.Snapshot.Find: while the device is paired, only a
+     fleet playlist plays, and a local playlist with the same name must not
+     take its place. */
   function findPlaylist(name) {
     if (!snap || !snap.playlists) return null;
-    return snap.playlists.find((p) => p.name === name) || null;
+    return snap.playlists.find((p) => p.name === name && (!snap.paired || p.fleet)) || null;
   }
 
   function dotFor(status) {

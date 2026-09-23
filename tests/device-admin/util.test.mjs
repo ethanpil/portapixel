@@ -5,7 +5,7 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { localMedia, frameURL } from '../../web/device-admin/util.js';
+import { localMedia, frameURL, playingItem, nameToSave } from '../../web/device-admin/util.js';
 
 // A paired device plays fleet objects from /media/_fleet/media/<object>. The first
 // guard took only /media/<playlist>/<file>, so every fleet item showed the
@@ -53,4 +53,41 @@ test('localMedia refuses every other address', () => {
 
 test('frameURL parks a video half a second in', () => {
   assert.equal(frameURL('/media/_fleet/media/aabbccdd-clip.mp4'), '/media/_fleet/media/aabbccdd-clip.mp4#t=0.5');
+});
+
+// The index of the player is a place in the list that the daemon sent it: the
+// daemon shuffles that list and leaves out a missing file. items[np.index] showed
+// the picture of another file under the name of the file on the screen.
+test('playingItem finds the item by its name and not by the index', () => {
+  const items = [
+    { name: 'teal.png', sha256: 'a'.repeat(64) },
+    { name: 'clip.mp4', sha256: 'b'.repeat(64) },
+    { name: 'menu.jpg' },
+  ];
+  // Shuffled: the player reports place 2 for clip.mp4.
+  assert.deepEqual(playingItem(items, { index: 2, item: 'clip.mp4' }), { item: items[1], index: 1 });
+  assert.deepEqual(playingItem(items, { index: 0, item: 'clip.mp4', sha256: 'b'.repeat(64) }), { item: items[1], index: 1 });
+  // A file with no hash yet still matches by its name.
+  assert.deepEqual(playingItem(items, { index: 0, item: 'menu.jpg', sha256: 'c'.repeat(64) }), { item: items[2], index: 2 });
+});
+
+test('playingItem gives no place when the match is not certain', () => {
+  const twice = [{ name: 'a.jpg' }, { name: 'b.jpg' }, { name: 'a.jpg' }];
+  assert.deepEqual(playingItem(twice, { index: 2, item: 'a.jpg' }), { item: twice[0], index: -1 });
+  const none = { item: null, index: -1 };
+  // Another file with the same name but another hash is not the file.
+  assert.deepEqual(playingItem([{ name: 'a.jpg', sha256: 'a'.repeat(64) }], { index: 0, item: 'a.jpg', sha256: 'b'.repeat(64) }), none);
+  assert.deepEqual(playingItem([{ name: 'a.jpg' }], { index: 0, item: 'gone.jpg' }), none);
+  assert.deepEqual(playingItem([{ name: 'a.jpg' }], null), none);
+  assert.deepEqual(playingItem(undefined, { index: 0, item: 'a.jpg' }), none);
+});
+
+// A rename from the fleet server arrives while the Settings page is open. A save
+// of another field must not put the old name back.
+test('nameToSave keeps a rename that arrived while the page was open', () => {
+  assert.equal(nameToSave('Lobby', 'Lobby', 'Front desk'), 'Front desk');
+  // The person typed a name: it wins.
+  assert.equal(nameToSave('Back office', 'Lobby', 'Front desk'), 'Back office');
+  assert.equal(nameToSave('Lobby', 'Lobby', 'Lobby'), 'Lobby');
+  assert.equal(nameToSave('Lobby', 'Lobby', undefined), 'Lobby');
 });
