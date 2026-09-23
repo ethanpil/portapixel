@@ -604,7 +604,7 @@ export function mount(main, ctx, deviceID) {
   /* ---- commands and removal ---- */
 
   async function queue(type) {
-    const sent = await sendToScreen(deviceID, dev().name || deviceID, type);
+    const sent = await sendToScreen(deviceID, dev().name || deviceID, type, waitingName(dev(), view && view.commands));
     if (sent) { await load(false); paintHistory(); }
   }
 

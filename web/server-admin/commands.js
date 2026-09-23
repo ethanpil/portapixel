@@ -9,14 +9,15 @@ import {
   h, toast, modal, confirmDialog, errorText,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { COMMANDS, GROUP_COMMANDS } from './util.js';
+import { COMMANDS, GROUP_COMMANDS, renameRefusal } from './util.js';
 
 /** Ask, then queue one command for one screen. Returns true when it is queued.
-    screenName is the name that the screen has now. */
-export async function sendToScreen(deviceId, screenName, type) {
+    screenName is the name that the screen has now. waiting is the name that a
+    queued rename waits with, or ''. */
+export async function sendToScreen(deviceId, screenName, type, waiting = '') {
   const cmd = COMMANDS.find((c) => c.type === type);
   if (!cmd) return false;
-  if (type === 'rename') return renameScreen(deviceId, screenName, cmd);
+  if (type === 'rename') return renameScreen(deviceId, screenName, cmd, waiting);
   const ok = await confirmDialog({
     title: `${cmd.label} on ${screenName}?`,
     body: h('div', null,
@@ -38,11 +39,12 @@ export async function sendToScreen(deviceId, screenName, type) {
 }
 
 /* The rename command takes the new name. The device owns its name, so this
-   server does not change the row: the screen takes the command at its next
-   check-in and reports the new name in the same check-in. */
-async function renameScreen(deviceId, screenName, cmd) {
+   server does not change the row. The screen takes the command at its next
+   check-in. It reports the new name in the same check-in. */
+async function renameScreen(deviceId, screenName, cmd, waiting) {
+  // 63 is manifest.MaxNameLength: the mDNS name comes from it.
   const input = h('input', {
-    class: 'pp-input', type: 'text', value: screenName || '', maxlength: '64', autofocus: true,
+    class: 'pp-input', type: 'text', value: waiting || screenName || '', maxlength: '63', autofocus: true,
   });
   const ok = await modal({
     title: `Rename ${screenName}`,
@@ -58,8 +60,9 @@ async function renameScreen(deviceId, screenName, cmd) {
   });
   if (!ok) return false;
   const name = input.value.trim();
-  if (name === screenName) {
-    toast('That is the name that the screen has now.');
+  const refusal = renameRefusal(name, screenName, waiting);
+  if (refusal) {
+    toast(refusal);
     return false;
   }
   try {

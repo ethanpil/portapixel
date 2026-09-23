@@ -57,8 +57,10 @@ test('playingMedia finds the object by the hash that the screen reports', () => 
     'a hash that the library does not hold must not fall back to the name');
 });
 
-test('playingMedia takes the name only when the report has no hash', () => {
-  assert.equal(util.playingMedia({ item: 'lab2-teal.png' }, library), teal);
+// The name of an upload is not unique. A match by name showed an unrelated
+// upload with the same name as a local file of the screen.
+test('playingMedia never matches by the name', () => {
+  assert.equal(util.playingMedia({ item: 'lab2-teal.png' }, library), null);
   assert.equal(util.playingMedia({ item: '55efb67e-lab2-teal.png' }, library), null);
   assert.equal(util.playingMedia(null, library), null);
   assert.equal(util.playingMedia({ item: 'lab2-teal.png' }, null), null);
@@ -91,6 +93,45 @@ test('mediaPreview draws the first frame of a video only when asked', () => {
   assert.equal(thumb.children[0].tag, 'img');
   assert.equal(thumb.children[0].attrs.src, util.thumbURL(teal.sha256));
   assert.notEqual(util.mediaPreview('video', null, { frame: true }).children[0].tag, 'video');
+});
+
+// The Media grid drew every video at once: 100 videos made about 165 requests
+// at each load. A video now gets its address when it comes into view.
+test('mediaPreview gives a video its address when it comes into view', () => {
+  const observed = new Set();
+  let report = null;
+  globalThis.IntersectionObserver = class {
+    constructor(fn) { report = fn; }
+    observe(el) { observed.add(el); }
+    unobserve(el) { observed.delete(el); }
+  };
+  try {
+    const seen = util.mediaPreview('video', clip, { wide: true, frame: true }).children[0];
+    const hidden = util.mediaPreview('video', clip, { wide: true, frame: true }).children[0];
+    const gone = util.mediaPreview('video', clip, { wide: true, frame: true }).children[0];
+    assert.equal(seen.attrs.src, undefined, 'a video out of view must ask for nothing');
+    assert.equal(observed.size, 3);
+
+    seen.isConnected = true;
+    hidden.isConnected = true;
+    gone.isConnected = false;  // the page drew its grid again
+    report([{ target: seen, isIntersecting: true }, { target: hidden, isIntersecting: false }]);
+    assert.equal(seen.attrs.src, `/api/admin/media/${clip.sha256}/file#t=0.5`);
+    assert.equal(hidden.attrs.src, undefined);
+    assert.ok(!observed.has(seen), 'a video with its address is not observed');
+    assert.ok(!observed.has(gone), 'a tile that left the page is not kept');
+    assert.ok(observed.has(hidden));
+  } finally {
+    delete globalThis.IntersectionObserver;
+  }
+});
+
+test('renameRefusal permits a rename that takes back a mistake', () => {
+  assert.equal(util.renameRefusal('Lobby', 'Lobby', ''), 'That is the name that the screen has now.');
+  assert.equal(util.renameRefusal('Front desk', 'Lobby', ''), '');
+  // "Lobyb" waits. The name that the screen has now takes its place.
+  assert.equal(util.renameRefusal('Lobby', 'Lobby', 'Lobyb'), '');
+  assert.equal(util.renameRefusal('Lobyb', 'Lobby', 'Lobyb'), 'The screen already waits for the name "Lobyb".');
 });
 
 test('rename is a command of one screen and never of a group', () => {

@@ -36,7 +36,7 @@ const CHIPS = [
 
 export function mount(main, ctx) {
   let groups = [];
-  let library = mediaIndex([]);  // the library by hash and by name, for the thumbnails
+  let library = mediaIndex([]);  // the library by hash, for the thumbnails
   let gone = false;
 
   /* One entry for each screen: the nodes plus the function that patches them.
@@ -128,8 +128,8 @@ export function mount(main, ctx) {
   /* The thumbnail of "on screen now" is the library thumbnail of that file,
      found by the hash that the screen reports. The server takes no screenshots
      (D26), so this is as close to a picture of the screen as the fleet gets.
-     A video keeps the icon here: a first frame in each row would ask the
-     server for a part of each video at each change of a large fleet. */
+     A video keeps the icon here. A first frame in each row asks the server
+     for a part of each video at each change of a large fleet. */
   async function loadMedia() {
     try {
       const out = await api('GET', '/api/admin/media');

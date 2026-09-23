@@ -100,15 +100,15 @@ export function preview(kind, url, opts = {}) {
 
     Only a page that shows one object, or one grid of the library, sets
     opts.frame. Each video element asks the server for a part of its file, and
-    the list of a large fleet draws its rows again at each change. */
+    the list of a large fleet draws its rows again at each change. A video gets
+    its address only when it comes into view: see loadWhenSeen. */
 export function mediaPreview(kind, m, opts = {}) {
   if (m && m.has_thumb) return preview(kind, thumbURL(m.sha256), opts);
   if (kind === 'video' && m && opts.frame) {
     const cls = opts.wide ? 'pp-thumb pp-thumb--wide' : 'pp-thumb pp-thumb--sm';
-    // Half a second in: at time 0 a video element often shows a black box. A
-    // file that this browser cannot decode, for example HEVC, gets the icon.
+    // A file that this browser cannot decode, for example HEVC, gets the icon.
     const video = h('video', {
-      src: `${fileURL(m.sha256)}#t=0.5`, preload: 'metadata', muted: true, playsinline: true,
+      preload: 'metadata', muted: true, playsinline: true,
       style: { width: '100%', height: '100%', 'object-fit': 'cover' },
       onError: () => box.replaceWith(preview(kind, null, opts)),
     });
@@ -116,31 +116,65 @@ export function mediaPreview(kind, m, opts = {}) {
     // also set the property.
     video.muted = true;
     const box = h('span', { class: cls }, video);
+    // Half a second in: at time 0 a video element often shows a black box.
+    loadWhenSeen(video, `${fileURL(m.sha256)}#t=0.5`);
     return box;
   }
   return preview(kind, null, opts);
 }
 
-/** The library, found by hash and by the name of the upload. */
+/* The videos that wait to come into view, each with its address. One observer
+   serves every page. */
+const waitingFrames = new Map();
+let frameObserver = null;
+
+/* Give a video its address when it comes into view, as loading="lazy" does for
+   an image. The Media grid drew every video at once: 100 videos made about 165
+   requests for their files at each load, and some tiles then failed to decode.
+   A browser with no IntersectionObserver gets the address at once. */
+function loadWhenSeen(video, src) {
+  if (typeof IntersectionObserver === 'undefined') {
+    video.setAttribute('src', src);
+    return;
+  }
+  if (!frameObserver) {
+    frameObserver = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting || !waitingFrames.has(e.target)) continue;
+        e.target.setAttribute('src', waitingFrames.get(e.target));
+        forgetFrame(e.target);
+      }
+      // A page that draws its grid again leaves tiles that nobody sees, and
+      // nothing reports such a tile. So each report also removes them.
+      for (const v of waitingFrames.keys()) {
+        if (!v.isConnected) forgetFrame(v);
+      }
+    }, { rootMargin: '200px' });
+  }
+  waitingFrames.set(video, src);
+  frameObserver.observe(video);
+}
+
+function forgetFrame(video) {
+  frameObserver.unobserve(video);
+  waitingFrames.delete(video);
+}
+
+/** The library, found by hash. */
 export function mediaIndex(list) {
   const bySha = new Map();
-  const byName = new Map();
-  for (const m of list || []) {
-    bySha.set(m.sha256, m);
-    byName.set(m.orig_name, m);
-  }
-  return { bySha, byName };
+  for (const m of list || []) bySha.set(m.sha256, m);
+  return { bySha };
 }
 
 /** The library object of the item that a screen reports, or null.
-    A screen reports the hash of the file in now_playing.sha256. Its file name
-    is the name of its own copy, <sha8>-<name>, which is never the name of the
-    upload. So the name is for a report with no hash only: an older release, or
-    a local file that the screen did not hash yet. */
+    A screen reports the hash of the file in now_playing.sha256. A report with
+    no hash gives null. Its file name is not a key: the name of an upload is not
+    unique, and a fleet object on a screen has the name <sha8>-<name>. A match
+    by name showed an unrelated upload that had the same name. */
 export function playingMedia(now, index) {
-  if (!now || !index) return null;
-  if (now.sha256) return index.bySha.get(now.sha256) || null;
-  return index.byName.get(now.item) || null;
+  if (!now || !index || !now.sha256) return null;
+  return index.bySha.get(now.sha256) || null;
 }
 
 /** A free-space bar with its number. */
@@ -176,6 +210,15 @@ export function commandLabel(cmd) {
   const label = (COMMANDS.find((c) => c.type === cmd.type) || {}).label || cmd.type;
   const name = cmd.type === 'rename' && cmd.args && cmd.args.name;
   return name ? `${label} to "${name}"` : label;
+}
+
+/** Why the rename dialog does not queue `name`, or ''. `waiting` is the name
+    that a queued rename waits with (see waitingName). While a rename waits, the
+    name that the screen has now goes out as a new rename: it takes the place of
+    a rename that was a mistake. */
+export function renameRefusal(name, screenName, waiting) {
+  if (waiting) return name === waiting ? `The screen already waits for the name "${waiting}".` : '';
+  return name === screenName ? 'That is the name that the screen has now.' : '';
 }
 
 /** The name that a rename command of this screen waits for, or ''.

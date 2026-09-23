@@ -131,11 +131,11 @@ func (d Deps) getDevice(w http.ResponseWriter, r *http.Request) {
 
 // renameDevice queues a rename command for the device. It does not write the row.
 //
-// The device owns its name: mDNS, the host name and the fallback screen use it. So
-// a rename from this server is a command, the same one that the command dialog
-// sends, and the row changes when the heartbeat of the device reports the new
-// name. That is in the same poll round. A write of the row here would only last
-// until that heartbeat.
+// The device owns its name: mDNS, the host name and the fallback screen use it.
+// So a rename from this server is a command. The command dialog sends the same
+// command. The row changes when the heartbeat of the device reports the new
+// name, in the same poll round. A write of the row here would only last until
+// that heartbeat.
 func (d Deps) renameDevice(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
