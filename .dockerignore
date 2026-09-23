@@ -13,3 +13,6 @@ out/
 ppvm/
 web/**/node_modules
 tests/qemu/lab
+# The demo videos of the device image (about 59 MB). The server build does not
+# read them.
+os/default-media
