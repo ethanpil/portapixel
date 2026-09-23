@@ -56,7 +56,7 @@ func (d Deps) postHeartbeat(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.Read(w, r, &hb) {
 		return
 	}
-	err := d.DB.Heartbeat(dev.ID, hb, d.clientIP(r))
+	name, err := d.DB.Heartbeat(dev.ID, hb, d.clientIP(r))
 	var fieldErrs db.Errors
 	switch {
 	case errors.As(err, &fieldErrs):
@@ -67,7 +67,7 @@ func (d Deps) postHeartbeat(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusInternalServerError, "the server could not write this heartbeat")
 		return
 	}
-	d.logName(dev, hb.Name)
+	d.logName(dev, hb.Name, name)
 	httpjson.Write(w, http.StatusOK, httpjson.OK)
 }
 
@@ -77,15 +77,17 @@ func (d Deps) postHeartbeat(w http.ResponseWriter, r *http.Request) {
 var refusedNames sync.Map
 
 // logName writes the name that a heartbeat reported to the ops log when it changed
-// the row, or when db.Heartbeat refused it. dev is the row before the heartbeat.
-func (d Deps) logName(dev db.Device, reported string) {
-	name, ok := manifest.CleanName(reported)
-	if !ok {
+// the row, or when db.Heartbeat refused it. dev is the row before the heartbeat,
+// and name is the name of the row after it. A clone reports a good name that the
+// row does not take, and that is not a line: two boxes on one token would write
+// one line at each heartbeat.
+func (d Deps) logName(dev db.Device, reported, name string) {
+	if _, ok := manifest.CleanName(reported); !ok {
 		if last, seen := refusedNames.Swap(dev.ID, reported); !seen || last != reported {
 			// The value is not in the line: it can hold a control character.
 			d.Log.Log("device-name-refused", fmt.Sprintf(
-				"%s reports a name that breaks the rule (1 to %d characters, no control character); the name stays %s",
-				dev.ID, manifest.MaxNameLength, strconv.Quote(dev.Name)))
+				"%s reports a name that breaks the rule (%s); the name stays %s",
+				dev.ID, manifest.NameRule, strconv.Quote(dev.Name)))
 		}
 		return
 	}

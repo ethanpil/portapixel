@@ -58,6 +58,35 @@ func TestTheRowTakesTheNameThatTheHeartbeatReports(t *testing.T) {
 	}
 }
 
+// Two boxes that run from one card report two names. Only the machine that the row
+// knows changes the name, so the row does not change at each heartbeat and the ops
+// log does not get one line for each of them.
+func TestACloneDoesNotChangeTheName(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	id := "px-name0004"
+	token := f.pairDevice(id)
+	f.getManifest(token)
+
+	beat := func(hardware, name string) {
+		t.Helper()
+		f.mustOK(f.device(http.MethodPost, "/api/v1/heartbeat", token, manifest.Heartbeat{
+			DeviceID: id, HardwareID: hardware, Name: name, Version: "1.5.0",
+		}), "heartbeat")
+	}
+	beat(hardwareOf(id), "Lobby")
+	for i := 0; i < 5; i++ {
+		beat(hardwareOf("px-clone999"), "Lobby 2")
+		beat(hardwareOf(id), "Lobby")
+	}
+	if got := f.deviceView(t, id).Name; got != "Lobby" {
+		t.Errorf("the row holds the name %q, want the name of the known box", got)
+	}
+	if n := strings.Count(opsText(t, f), "device-rename"); n != 1 {
+		t.Errorf("the ops log has %d rename lines, want 1:\n%s", n, opsText(t, f))
+	}
+}
+
 // A rename from the server is a command. The route queues it and does not write the
 // row, because the next heartbeat would write the old name back. One mechanism: the
 // route and the command dialog send the same command.

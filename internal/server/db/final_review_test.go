@@ -326,7 +326,7 @@ func (d *DB) mustPair(t *testing.T, id, hardware string) string {
 func (d *DB) mustBeat(t *testing.T, id, hardware string) {
 	t.Helper()
 	hb := manifest.Heartbeat{DeviceID: id, HardwareID: hardware, Name: id, Version: "1.4.2"}
-	if err := d.Heartbeat(id, hb, "10.0.0.5"); err != nil {
+	if _, err := d.Heartbeat(id, hb, "10.0.0.5"); err != nil {
 		t.Fatal(err)
 	}
 }

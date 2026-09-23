@@ -605,7 +605,7 @@ func TestHardwareRepairWithTheRealCallOrder(t *testing.T) {
 		t.Fatal(err)
 	}
 	hb := manifest.Heartbeat{DeviceID: "px-repair01", HardwareID: hw("a new box"), Version: "1.0.0"}
-	if err := d.Heartbeat("px-repair01", hb, "10.0.0.5"); err != nil {
+	if _, err := d.Heartbeat("px-repair01", hb, "10.0.0.5"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -657,13 +657,13 @@ func TestCloneConflictNeedsTheTwoToTakeTurns(t *testing.T) {
 	// Box A is the one that we know. Box B answers with the same token.
 	boxB := manifest.Heartbeat{DeviceID: "px-clone001", HardwareID: hw("box-b"), Version: "1.0.0"}
 	c.add(time.Minute)
-	if err := d.Heartbeat("px-clone001", boxB, "10.0.0.6"); err != nil {
+	if _, err := d.Heartbeat("px-clone001", boxB, "10.0.0.6"); err != nil {
 		t.Fatal(err)
 	}
 	// Box A answers again a minute later. Now the two take turns.
 	boxA := manifest.Heartbeat{DeviceID: "px-clone001", HardwareID: hw("px-clone001"), Version: "1.0.0"}
 	c.add(time.Minute)
-	if err := d.Heartbeat("px-clone001", boxA, "10.0.0.7"); err != nil {
+	if _, err := d.Heartbeat("px-clone001", boxA, "10.0.0.7"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -676,6 +676,44 @@ func TestCloneConflictNeedsTheTwoToTakeTurns(t *testing.T) {
 	}
 	if dev.ConflictHardwareID != hw("box-b") {
 		t.Fatalf("the conflict names %q", dev.ConflictHardwareID)
+	}
+}
+
+// Only the machine that the row knows can change the name of the row, and only
+// while the row has no conflict. Before this, a clone with a local name of its
+// own changed the name of the true screen at each heartbeat.
+func TestOnlyTheKnownMachineChangesTheName(t *testing.T) {
+	d := open(t)
+	c := &clock{at: time.Now()}
+	d.SetClock(c.now)
+	pair(t, d, "px-name0001")
+	beat := func(box, name string) string {
+		t.Helper()
+		c.add(time.Minute)
+		got, err := d.Heartbeat("px-name0001",
+			manifest.Heartbeat{DeviceID: "px-name0001", HardwareID: hw(box), Name: name, Version: "1.0.0"}, "10.0.0.6")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+
+	if got := beat("px-name0001", "Lobby"); got != "Lobby" {
+		t.Fatalf("the known machine could not change the name: the row holds %q", got)
+	}
+	// Box B asks to be this screen. It waits for the admin, so its name waits too.
+	if got := beat("box-b", "Box B"); got != "Lobby" {
+		t.Fatalf("a machine that waits for confirmation changed the name to %q", got)
+	}
+	// Box A answers in turn: that is a conflict. Now neither box changes the name.
+	beat("px-name0001", "Lobby")
+	if dev, err := d.Device("px-name0001"); err != nil || !dev.Conflict {
+		t.Fatalf("the two boxes made no conflict: %+v, %v", dev, err)
+	}
+	for _, box := range []string{"box-b", "px-name0001", "box-b"} {
+		if got := beat(box, "Name of "+box); got != "Lobby" {
+			t.Fatalf("a heartbeat of %s in a conflict changed the name to %q", box, got)
+		}
 	}
 }
 
@@ -695,7 +733,7 @@ func TestOneHardwareChangeIsNotAClone(t *testing.T) {
 			t.Fatal(err)
 		}
 		hb := manifest.Heartbeat{DeviceID: "px-once0001", HardwareID: hw("a new box"), Version: "1.0.0"}
-		if err := d.Heartbeat("px-once0001", hb, "10.0.0.5"); err != nil {
+		if _, err := d.Heartbeat("px-once0001", hb, "10.0.0.5"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -744,7 +782,7 @@ func TestCommandDeliveryAndAck(t *testing.T) {
 	}
 
 	hb := manifest.Heartbeat{DeviceID: "px-3333cccc", HardwareID: hw("px-3333cccc"), Acks: []int64{id}}
-	if err := d.Heartbeat("px-3333cccc", hb, "10.0.0.1"); err != nil {
+	if _, err := d.Heartbeat("px-3333cccc", hb, "10.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ = d.Commands("px-3333cccc", 10); list[0].State != CommandAcked {
@@ -839,6 +877,62 @@ func TestCommandGoesOutAgainAndThenExpires(t *testing.T) {
 	}
 }
 
+// A newer rename replaces an older one that has no acknowledgement. The old one
+// went out again 10 minutes after its delivery, after the new one, so the screen
+// ended on the old name.
+func TestANewerRenameReplacesAnOlderOne(t *testing.T) {
+	d := open(t)
+	c := &clock{at: time.Now()}
+	d.SetClock(c.now)
+	pair(t, d, "px-rename01")
+
+	reboot, err := d.QueueCommand("px-rename01", "reboot", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, err := d.QueueCommand("px-rename01", CommandRename, map[string]string{"name": "Lobby A"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The device takes both and runs the reboot only: the rename has no
+	// acknowledgement.
+	if got, _ := d.TakeCommands("px-rename01"); len(got) != 2 {
+		t.Fatalf("the first poll gave %+v", got)
+	}
+	newer, err := d.QueueCommand("px-rename01", CommandRename, map[string]string{"name": "Lobby B"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := d.TakeCommands("px-rename01"); len(got) != 1 || got[0].ID != newer {
+		t.Fatalf("the poll after the new rename gave %+v, want only %d", got, newer)
+	}
+
+	// Ten minutes on, the old rename does not go out again. The reboot does: a
+	// rename expires only another rename.
+	c.add(redeliverAfter + time.Minute)
+	got, err := d.TakeCommands("px-rename01")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range got {
+		if cmd.ID == old {
+			t.Fatalf("the old rename went out again after the new one: %+v", got)
+		}
+	}
+	if len(got) != 2 || got[0].ID != reboot || got[1].ID != newer {
+		t.Fatalf("the redelivery gave %+v, want the reboot and the new rename", got)
+	}
+	list, err := d.Commands("px-rename01", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, cmd := range list {
+		if cmd.ID == old && cmd.State != CommandExpired {
+			t.Errorf("the old rename is %q, want expired", cmd.State)
+		}
+	}
+}
+
 func TestADeviceCannotAckAnotherDeviceCommand(t *testing.T) {
 	d := open(t)
 	pair(t, d, "px-4444dddd")
@@ -849,7 +943,7 @@ func TestADeviceCannotAckAnotherDeviceCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	hb := manifest.Heartbeat{DeviceID: "px-5555eeee", HardwareID: hw("px-5555eeee"), Acks: []int64{id}}
-	if err := d.Heartbeat("px-5555eeee", hb, "10.0.0.1"); err != nil {
+	if _, err := d.Heartbeat("px-5555eeee", hb, "10.0.0.1"); err != nil {
 		t.Fatal(err)
 	}
 	list, err := d.Commands("px-4444dddd", 10)
@@ -872,7 +966,7 @@ func TestHeartbeatAcksAreCapped(t *testing.T) {
 	}
 	hb := manifest.Heartbeat{DeviceID: "px-acks0001", HardwareID: hw("px-acks0001"), Acks: acks}
 	var errs Errors
-	if err := d.Heartbeat("px-acks0001", hb, "10.0.0.1"); !errors.As(err, &errs) {
+	if _, err := d.Heartbeat("px-acks0001", hb, "10.0.0.1"); !errors.As(err, &errs) {
 		t.Fatalf("a heartbeat with %d acks gave %v, want a field error", len(acks), err)
 	}
 }

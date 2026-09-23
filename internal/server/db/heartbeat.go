@@ -41,29 +41,36 @@ const maxAcks = 100
 // mDNS, the host name and the fallback screen use it, and a person can change it
 // on the device. A name that breaks manifest.CleanName, or no name, keeps the name
 // of the row. The route writes the log line for it.
-func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) error {
+//
+// Only the machine that the row knows can change the name, and only while the row
+// has no conflict. A clone or a machine that waits for confirmation reports its
+// own name. It must not take the row of the true screen, and two boxes on one
+// token must not change the name at each heartbeat.
+//
+// name is the name that the row holds after the heartbeat.
+func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) (name string, err error) {
 	if len(hb.Acks) > maxAcks {
-		return Errors{{Field: "acks", Message: fmt.Sprintf("a heartbeat may acknowledge %d commands at most", maxAcks)}}
+		return "", Errors{{Field: "acks", Message: fmt.Sprintf("a heartbeat may acknowledge %d commands at most", maxAcks)}}
 	}
 	now := d.now()
 
 	tx, err := d.w.Begin()
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer tx.Rollback()
 
 	var (
-		name, stored, pendingHW, pendingAt string
-		needsConfirm                       int
+		stored, pendingHW, pendingAt string
+		needsConfirm, conflict       int
 	)
-	err = tx.QueryRow(`SELECT name, hardware_id, pending_hardware_id, pending_hardware_at, needs_confirm
-		FROM devices WHERE id = ?`, id).Scan(&name, &stored, &pendingHW, &pendingAt, &needsConfirm)
+	err = tx.QueryRow(`SELECT name, hardware_id, pending_hardware_id, pending_hardware_at, needs_confirm, conflict
+		FROM devices WHERE id = ?`, id).Scan(&name, &stored, &pendingHW, &pendingAt, &needsConfirm, &conflict)
 	if errors.Is(err, sql.ErrNoRows) {
-		return ErrNotFound
+		return "", ErrNotFound
 	}
 	if err != nil {
-		return err
+		return "", err
 	}
 
 	status := ""
@@ -71,7 +78,8 @@ func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) error {
 		status = string(data)
 	}
 
-	if reported, ok := manifest.CleanName(hb.Name); ok {
+	knownMachine := hb.HardwareID != "" && (stored == "" || hb.HardwareID == stored)
+	if reported, ok := manifest.CleanName(hb.Name); ok && knownMachine && conflict == 0 {
 		name = reported
 	}
 
@@ -80,11 +88,11 @@ func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) error {
 		SET last_seen = ?, status_json = ?, version = ?, sync_error = ?, last_ip = ?, name = ?
 		WHERE id = ?`,
 		d.stamp(now), status, hb.Version, hb.SyncError, ip, name, id); err != nil {
-		return err
+		return "", err
 	}
 
 	if err := d.hardwareRules(tx, id, hb.HardwareID, stored, pendingHW, parseTime(pendingAt), now); err != nil {
-		return err
+		return "", err
 	}
 
 	if len(hb.Acks) > 0 {
@@ -102,10 +110,10 @@ func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) error {
 		query := `UPDATE commands SET acked_at = ? WHERE id IN (` +
 			strings.Join(marks, ",") + `) AND device_id = ? AND acked_at = ''`
 		if _, err := tx.Exec(query, args...); err != nil {
-			return err
+			return "", err
 		}
 	}
-	return tx.Commit()
+	return name, tx.Commit()
 }
 
 // hardwareRules writes the repair case and the clone case of D21. See Heartbeat.
