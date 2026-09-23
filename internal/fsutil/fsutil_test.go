@@ -170,6 +170,33 @@ func TestCopyFileSync(t *testing.T) {
 	}
 }
 
+// A copy that stops in the middle leaves nothing at the target. The first boot
+// skips a default media file that exists, so a short file stayed in the default
+// playlist for ever.
+func TestCopyFileSyncLeavesNoShortFile(t *testing.T) {
+	dir := t.TempDir()
+	// A directory opens, and its first read fails: the copy stops after the
+	// target was made.
+	src := filepath.Join(dir, "a directory")
+	if err := os.Mkdir(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out")
+	if err := os.Mkdir(out, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := CopyFileSync(src, filepath.Join(out, "clip.mp4")); err == nil {
+		t.Fatal("the copy of a directory did not fail")
+	}
+	entries, err := os.ReadDir(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		t.Errorf("the failed copy left %s", e.Name())
+	}
+}
+
 func TestFreeBytes(t *testing.T) {
 	got, err := FreeBytes(t.TempDir())
 	if err != nil {

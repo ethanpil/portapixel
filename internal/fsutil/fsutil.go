@@ -88,6 +88,12 @@ func SyncDir(dir string) {
 
 // CopyFileSync copies src to dst and syncs dst before it returns. The caller
 // gets a complete file on the disk or an error.
+//
+// The copy goes to a temporary file in the directory of dst, and a rename puts it
+// at dst, as WriteFileAtomic does. A copy that stops in the middle, from an I/O
+// error or a power cut, then leaves no short file at dst. A caller that skips a
+// dst that exists, such as the first boot copy of the default media, would keep
+// a short file for ever.
 func CopyFileSync(src, dst string) error {
 	in, err := os.Open(src)
 	if err != nil {
@@ -100,20 +106,38 @@ func CopyFileSync(src, dst string) error {
 		return fmt.Errorf("stat %s: %w", src, err)
 	}
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, info.Mode().Perm())
+	dir := filepath.Dir(dst)
+	out, err := os.CreateTemp(dir, filepath.Base(dst)+".tmp*")
 	if err != nil {
-		return fmt.Errorf("create %s: %w", dst, err)
+		return fmt.Errorf("create a temporary file for %s: %w", dst, err)
 	}
+	tmp := out.Name()
+	done := false
+	defer func() {
+		if !done {
+			out.Close()
+			os.Remove(tmp)
+		}
+	}()
+
 	if _, err := io.Copy(out, in); err != nil {
-		out.Close()
 		return fmt.Errorf("copy %s to %s: %w", src, dst, err)
 	}
 	if err := out.Sync(); err != nil {
-		out.Close()
-		return fmt.Errorf("sync %s: %w", dst, err)
+		return fmt.Errorf("sync %s: %w", tmp, err)
+	}
+	// The temporary file has the mode 0600. See WriteFileAtomic for the
+	// filesystems that refuse a mode.
+	if err := chmodFile(out, info.Mode().Perm()); err != nil && !modeRefused(err) {
+		return fmt.Errorf("set the mode of %s: %w", tmp, err)
 	}
 	if err := out.Close(); err != nil {
-		return fmt.Errorf("close %s: %w", dst, err)
+		return fmt.Errorf("close %s: %w", tmp, err)
 	}
+	if err := os.Rename(tmp, dst); err != nil {
+		return fmt.Errorf("rename %s to %s: %w", tmp, dst, err)
+	}
+	done = true
+	SyncDir(dir)
 	return nil
 }
