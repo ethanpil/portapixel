@@ -2,7 +2,6 @@ package syncer
 
 import (
 	"context"
-	"fmt"
 	"strconv"
 
 	"github.com/ethanpil/portapixel/internal/device/identity"
@@ -119,9 +118,8 @@ func (s *Syncer) execute(ctx context.Context, c manifest.Command) {
 func (s *Syncer) rename(raw string) {
 	name, ok := manifest.CleanName(raw)
 	if !ok {
-		s.log("sync.command.rename", fmt.Sprintf(
-			"the server sent a name that this device cannot use (1 to %d characters, no control character); the name did not change",
-			manifest.MaxNameLength))
+		s.log("sync.command.rename",
+			"the server sent a name that this device cannot use ("+manifest.NameRule+"); the name did not change")
 		return
 	}
 	if s.opt.SaveName == nil {

@@ -7,6 +7,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
 // FieldError names one key that holds a bad value.
@@ -73,8 +75,10 @@ func (c Config) Validate() Errors {
 	}
 
 	// [device]
-	if strings.TrimSpace(c.Device.Name) == "" {
-		add("device.name", "must not be empty")
+	// The rule of the fleet server. A name that the server refuses would leave the
+	// name of the screen on the server stale for good.
+	if _, ok := manifest.CleanName(c.Device.Name); !ok {
+		add("device.name", "must be "+manifest.NameRule)
 	}
 	oneOf("device.tier", c.Device.Tier, "auto", "low", "high")
 	if c.Device.Timezone == "" {

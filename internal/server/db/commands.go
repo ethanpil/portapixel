@@ -3,7 +3,6 @@ package db
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -11,8 +10,7 @@ import (
 )
 
 // nameRule is the rule of a display name in words, for a field error.
-var nameRule = fmt.Sprintf("a screen needs a name of 1 to %d characters with no control character",
-	manifest.MaxNameLength)
+var nameRule = "a screen needs a name of " + manifest.NameRule
 
 // commandTypes holds the commands that a device runs (contract section 5). The
 // server refuses every other word: the device would not know it, and a word that
@@ -62,6 +60,11 @@ const (
 )
 
 // QueueCommand puts one command in the queue of one device.
+//
+// A rename expires each older rename of the device that has no acknowledgement.
+// The server sends an old command again 10 minutes after its delivery, and a new
+// one at the next poll. So the device could run the new name first and the old
+// name after it, and then keep the old name.
 func (d *DB) QueueCommand(deviceID, kind string, args map[string]string) (int64, error) {
 	if !validCommand(kind) {
 		return 0, Errors{{Field: "type", Message: "must be one of " + strings.Join(commandTypes, ", ")}}
@@ -78,7 +81,20 @@ func (d *DB) QueueCommand(deviceID, kind string, args map[string]string) (int64,
 	if err != nil {
 		return 0, err
 	}
-	res, err := d.w.Exec(`INSERT INTO commands (device_id, type, args_json, queued_at)
+
+	tx, err := d.w.Begin()
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if kind == CommandRename {
+		if _, err := tx.Exec(`UPDATE commands SET expired = 1
+			WHERE device_id = ? AND type = ? AND acked_at = '' AND expired = 0`,
+			deviceID, CommandRename); err != nil {
+			return 0, err
+		}
+	}
+	res, err := tx.Exec(`INSERT INTO commands (device_id, type, args_json, queued_at)
 		VALUES (?, ?, ?, ?)`, deviceID, kind, argsJSON, d.stamp(d.now()))
 	if err != nil {
 		// A foreign key violation means that the device is not there. Every other
@@ -89,7 +105,11 @@ func (d *DB) QueueCommand(deviceID, kind string, args map[string]string) (int64,
 		}
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err != nil {
+		return 0, err
+	}
+	return id, tx.Commit()
 }
 
 // QueueGroupCommand puts one command in the queue of every device of a group. It

@@ -438,7 +438,7 @@ func (d *DB) makePending(tx *tx, req manifest.EnrollRequest, ip string, now time
 			SET claim_hash = ?, hardware_id = ?, name = ?, version = ?, ip = ?,
 			    token_id = ?, collides_with = ?, last_poll_at = ?
 			WHERE id = ?`,
-			hashSecret(secret), req.HardwareID, strings.TrimSpace(req.Name), req.Version, ip,
+			hashSecret(secret), req.HardwareID, enrollName(req.Name), req.Version, ip,
 			nullInt64(tokenID), collides, d.stamp(now), rowID); err != nil {
 			return EnrollResult{}, err
 		}
@@ -471,7 +471,7 @@ func (d *DB) makePending(tx *tx, req manifest.EnrollRequest, ip string, now time
 		(claim_hash, pairing_code, device_id, hardware_id, name, version, ip,
 		 token_id, collides_with, created_at, last_poll_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		hashSecret(secret), code, req.DeviceID, req.HardwareID, strings.TrimSpace(req.Name),
+		hashSecret(secret), code, req.DeviceID, req.HardwareID, enrollName(req.Name),
 		req.Version, ip, nullInt64(tokenID), collides, d.stamp(now), d.stamp(now)); err != nil {
 		return EnrollResult{}, err
 	}
@@ -506,7 +506,7 @@ func freeCode(tx *tx) (string, error) {
 // paired in the group of its enrollment token; a row that was ever paired keeps
 // the group that the admin gave it.
 func (d *DB) upsertDevice(tx *tx, req manifest.EnrollRequest, ip string, now time.Time, groupID int64, takeGroup bool) error {
-	name := strings.TrimSpace(req.Name)
+	name := enrollName(req.Name)
 	stamp := d.stamp(now)
 	res, err := tx.Exec(`UPDATE devices SET hardware_id = ?, version = ?, last_ip = ?,
 		name = CASE WHEN name = '' THEN ? ELSE name END WHERE id = ? AND ever_paired = 0`,
@@ -765,4 +765,14 @@ func (d *DB) CountPending() (int, error) {
 	var n int
 	err := d.r.QueryRow(`SELECT COUNT(*) FROM pending_enrollments WHERE approved_at = ''`).Scan(&n)
 	return n, err
+}
+
+// enrollName gives the name of an enroll request in the form of
+// manifest.CleanName, or "" when the name breaks that rule. The heartbeat and the
+// rename command use the same rule, so a row never holds a name that a heartbeat
+// would refuse. An empty name is not a fault: the admin UI then shows the device
+// ID.
+func enrollName(raw string) string {
+	name, _ := manifest.CleanName(raw)
+	return name
 }

@@ -22,6 +22,12 @@ var validateCases = []validateCase{
 	{name: "the default is good", change: func(c *Config) {}},
 
 	{name: "empty name", change: func(c *Config) { c.Device.Name = " " }, wantField: "device.name"},
+	// A local save and a rename from the fleet server take exactly the same names:
+	// the rule is manifest.CleanName.
+	{name: "a name of 63 characters is good", change: func(c *Config) { c.Device.Name = strings.Repeat("a", 63) }},
+	{name: "a name of 64 characters", change: func(c *Config) { c.Device.Name = strings.Repeat("a", 64) }, wantField: "device.name"},
+	{name: "a name with a tab", change: func(c *Config) { c.Device.Name = "Lobby\tnorth" }, wantField: "device.name"},
+	{name: "a name with a bidi control", change: func(c *Config) { c.Device.Name = "Lobby" + string(rune(0x202E)) }, wantField: "device.name"},
 	{name: "bad tier", change: func(c *Config) { c.Device.Tier = "medium" }, wantField: "device.tier"},
 	{name: "empty timezone", change: func(c *Config) { c.Device.Timezone = "" }, wantField: "device.timezone"},
 	{name: "bad timezone", change: func(c *Config) { c.Device.Timezone = "Mars/Olympus" }, wantField: "device.timezone"},

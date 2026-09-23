@@ -191,3 +191,39 @@ func TestCleanName(t *testing.T) {
 		}
 	}
 }
+
+// The mDNS name comes from the display name, and a DNS label holds 63 octets. A
+// name of 64 characters gave an announcement that answered no query.
+func TestCleanNameFitsOneDNSLabel(t *testing.T) {
+	if _, ok := CleanName(strings.Repeat("a", 63)); !ok {
+		t.Error("CleanName refused a name of 63 characters")
+	}
+	if _, ok := CleanName(strings.Repeat("a", 64)); ok {
+		t.Error("CleanName took a name of 64 characters, which is too long for a DNS label")
+	}
+}
+
+// A name that a person cannot see, or that turns the text beside it around, is
+// refused. ZWNJ and ZWJ stay: Persian, the Indic scripts and emoji need them.
+func TestCleanNameRefusesInvisibleCharacters(t *testing.T) {
+	for _, good := range []string{
+		"\u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645", // ZWNJ in Persian
+		"\u0915\u094D\u200D\u0937",                         // ZWJ in Devanagari
+		"Team \U0001F469\u200D\U0001F4BB desk",             // ZWJ in an emoji
+	} {
+		if got, ok := CleanName(good); !ok || got != good {
+			t.Errorf("CleanName(%q) = %q, %v; want the same name, true", good, got, ok)
+		}
+	}
+	for _, r := range []rune{
+		'\u2028', '\u2029', // Zl, Zp
+		'\u200E', '\u200F', '\u202A', '\u202B', '\u202C', '\u202D', '\u202E',
+		'\u2066', '\u2067', '\u2068', '\u2069', // bidi controls
+		'\u200B', '\u2060', '\uFEFF', '\u00AD', // invisible
+	} {
+		raw := "Lobby" + string(r) + "north"
+		if got, ok := CleanName(raw); ok {
+			t.Errorf("CleanName took U+%04X and gave %q", r, got)
+		}
+	}
+}
