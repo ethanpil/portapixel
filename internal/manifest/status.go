@@ -138,6 +138,10 @@ type NowPlaying struct {
 	Item     string    `json:"item"` // file name or URL
 	Kind     string    `json:"kind"` // image | video | url
 	Since    time.Time `json:"since"`
+	// SHA256 is the hash of the file on the screen. The fleet server finds its
+	// library object with it. It is empty for a URL item, and for a local file
+	// that the device did not hash yet.
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // UpdateState is the state of the self-update (section 15).

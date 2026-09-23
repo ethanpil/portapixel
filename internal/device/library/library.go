@@ -120,6 +120,33 @@ func (s Snapshot) Find(name string) (Playlist, bool) {
 	return Playlist{}, false
 }
 
+// ItemSHA gives the SHA-256 of the file that the player reports on the screen,
+// or "" when the snapshot does not know it.
+//
+// The player reports the playlist and the file name. The index of the player
+// does not find the item: the daemon shuffles the list and leaves out a missing
+// file. A name that two files with two different hashes share gives "".
+//
+// It reads only the hashes that the snapshot already holds. It never reads a
+// file, because the status call must stay cheap.
+func (s Snapshot) ItemSHA(playlistName, itemName string) string {
+	p, ok := s.Find(playlistName)
+	if !ok || itemName == "" {
+		return ""
+	}
+	sha := ""
+	for _, it := range p.Items {
+		if it.Kind == playlist.KindURL || it.Name != itemName || it.SHA256 == "" {
+			continue
+		}
+		if sha != "" && sha != it.SHA256 {
+			return ""
+		}
+		sha = it.SHA256
+	}
+	return sha
+}
+
 // Options are the parameters of a Library.
 type Options struct {
 	// MediaRoot holds portapixel.toml, the playlist directories and _fleet.

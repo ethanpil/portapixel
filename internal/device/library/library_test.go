@@ -394,6 +394,65 @@ func TestHashCache(t *testing.T) {
 	}
 }
 
+// The status tells the fleet server the hash of the file on the screen. The
+// server finds its library object by that hash: the name on the device is the
+// object name <sha8>-<name>, which is not the name in the library.
+func TestItemSHA(t *testing.T) {
+	f := newFixture(t)
+	f.paired = true
+	f.dir(t, "_fleet/media", "", "55efb67e-lab2-teal.png", "aabbccdd-clip.mp4")
+	f.dir(t, "_fleet/lobby", "[playlist]\nname = \"Fleet lobby\"\n"+
+		"[[item]]\nfile = \"../media/55efb67e-lab2-teal.png\"\n"+
+		"[[item]]\nfile = \"../media/aabbccdd-clip.mp4\"\n"+
+		"[[item]]\nurl = \"https://example.com/board\"\nduration = 30\n")
+	f.lib.Rescan()
+
+	// The fleet client records the hash of each object that it holds. The clip
+	// has no hash yet, and the status path must not read the file to get one.
+	teal := filepath.Join(f.media, "_fleet", "media", "55efb67e-lab2-teal.png")
+	tealSHA := "55efb67e" + strings.Repeat("0", 56)
+	f.lib.NoteSHA(teal, tealSHA)
+
+	snap := f.lib.Snapshot()
+	tests := []struct {
+		name, playlist, item, want string
+	}{
+		{name: "a fleet object", playlist: "lobby", item: "55efb67e-lab2-teal.png", want: tealSHA},
+		{name: "a file with no hash yet", playlist: "lobby", item: "aabbccdd-clip.mp4", want: ""},
+		{name: "a URL item", playlist: "lobby", item: "https://example.com/board", want: ""},
+		{name: "a name that the playlist does not hold", playlist: "lobby", item: "other.png", want: ""},
+		{name: "a playlist that is not there", playlist: "gone", item: "55efb67e-lab2-teal.png", want: ""},
+		{name: "no name", playlist: "lobby", item: "", want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := snap.ItemSHA(tt.playlist, tt.item); got != tt.want {
+				t.Errorf("ItemSHA(%q, %q) = %q, want %q", tt.playlist, tt.item, got, tt.want)
+			}
+		})
+	}
+	if f.lib.Snapshot().ItemSHA("lobby", "aabbccdd-clip.mp4") != "" {
+		t.Error("the lookup computed a hash")
+	}
+}
+
+// Two files with one base name and two hashes give no answer. A wrong picture on
+// the server is worse than no picture.
+func TestItemSHAOfAnAmbiguousName(t *testing.T) {
+	snap := Snapshot{Playlists: []Playlist{{Name: "lobby", Items: []Item{
+		{Kind: "image", Name: "a.jpg", SHA256: "one"},
+		{Kind: "image", Name: "a.jpg", SHA256: "two"},
+		{Kind: "image", Name: "b.jpg", SHA256: "three"},
+		{Kind: "image", Name: "b.jpg", SHA256: "three"},
+	}}}}
+	if got := snap.ItemSHA("lobby", "a.jpg"); got != "" {
+		t.Errorf("an ambiguous name gave %q", got)
+	}
+	if got := snap.ItemSHA("lobby", "b.jpg"); got != "three" {
+		t.Errorf("one file in two places gave %q", got)
+	}
+}
+
 func TestHashCacheDropsDeadEntries(t *testing.T) {
 	f := newFixture(t)
 	f.dir(t, "default", goodTOML, "a.jpg", "b.mp4")

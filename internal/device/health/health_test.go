@@ -412,6 +412,28 @@ func TestUntrustedReportHidesAnItemThatIsNotAnAddress(t *testing.T) {
 	}
 }
 
+// The hash of a file tells a caller nothing that the file name does not. It stays
+// for every caller, and a URL item carries none, whatever the input says.
+func TestUntrustedReportKeepsTheHashOfAFile(t *testing.T) {
+	f := newRoots(t)
+	sha := strings.Repeat("ab", 32)
+	in := Inputs{
+		Config:     config.Default(),
+		DeviceID:   "px-1a2b3c4d",
+		NowPlaying: &manifest.NowPlaying{Kind: "image", Item: "55efb67e-lab2-teal.png", SHA256: sha},
+	}
+	if got := New(f.src).Status(in).NowPlaying.SHA256; got != sha {
+		t.Errorf("an untrusted caller got the hash %q, want %q", got, sha)
+	}
+	if got := New(f.src).Status(withTrust(in, true)).NowPlaying.SHA256; got != sha {
+		t.Errorf("a trusted caller got the hash %q, want %q", got, sha)
+	}
+	in.NowPlaying = &manifest.NowPlaying{Kind: "url", Item: "https://dash.example.com/board?k=s3cr3t", SHA256: sha}
+	if got := New(f.src).Status(in).NowPlaying.SHA256; got != "" {
+		t.Errorf("an untrusted caller got the hash %q for a URL item", got)
+	}
+}
+
 func withTrust(in Inputs, trusted bool) Inputs {
 	in.Trusted = trusted
 	return in

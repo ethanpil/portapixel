@@ -1,5 +1,11 @@
 package manifest
 
+import (
+	"strings"
+	"unicode"
+	"unicode/utf8"
+)
+
 // EnrollRequest asks the server to pair this device. It is the only device call
 // that carries no bearer token.
 type EnrollRequest struct {
@@ -70,10 +76,37 @@ type MediaRef struct {
 }
 
 // Command is one queued remote command.
+//
+// Only rename has an argument: Args["name"] is the new display name. It must pass
+// CleanName on both ends.
 type Command struct {
 	ID   int64             `json:"id"`
-	Type string            `json:"type"` // reboot | restart-browser | screen-on | screen-off | rescan | update
+	Type string            `json:"type"` // reboot | restart-browser | screen-on | screen-off | rescan | update | rename
 	Args map[string]string `json:"args,omitempty"`
+}
+
+// MaxNameLength is the longest display name of a screen, in characters.
+const MaxNameLength = 64
+
+// CleanName gives the display name of a screen in its one correct form. It
+// removes the spaces at the two ends. ok is false for a name that is empty, that
+// is longer than MaxNameLength characters, that is not UTF-8 or that holds a
+// control character.
+//
+// The server applies it to a rename command and to the name in a heartbeat. The
+// device applies it to a rename command. One rule in one function keeps the two
+// ends in agreement.
+func CleanName(raw string) (name string, ok bool) {
+	name = strings.TrimSpace(raw)
+	if name == "" || !utf8.ValidString(name) || utf8.RuneCountInString(name) > MaxNameLength {
+		return "", false
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return "", false
+		}
+	}
+	return name, true
 }
 
 // ScreenRule is the screen power schedule that the server manages.

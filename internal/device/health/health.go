@@ -266,9 +266,12 @@ func redact(out *manifest.Status) {
 	out.ServerURL = ""
 	out.SyncError = ""
 
+	// The hash of a file stays: it tells nothing that the file name does not. A URL
+	// item has no file, so it carries no hash.
 	if out.NowPlaying != nil && out.NowPlaying.Kind == "url" {
 		short := *out.NowPlaying
 		short.Item = urlOrigin(short.Item)
+		short.SHA256 = ""
 		out.NowPlaying = &short
 	}
 }

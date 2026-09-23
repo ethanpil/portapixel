@@ -114,7 +114,7 @@ func TestRoundTrip(t *testing.T) {
 					IPs:        []string{"192.168.1.5"},
 					LastSync:   time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC),
 					Warnings:   []Warning{{Code: WarnWebPassword, Message: "change the web password"}},
-					NowPlaying: &NowPlaying{Playlist: "lobby", Index: 2, Item: "a.jpg", Kind: "image"},
+					NowPlaying: &NowPlaying{Playlist: "lobby", Index: 2, Item: "a.jpg", Kind: "image", SHA256: strings.Repeat("b", 64)},
 					Update:     UpdateState{State: "idle"},
 				},
 			},
@@ -143,5 +143,51 @@ func TestRoundTrip(t *testing.T) {
 				t.Fatalf("round trip changed the value:\n got %+v\nwant %+v", out.Elem().Interface(), tt.value)
 			}
 		})
+	}
+}
+
+// The server finds the library object of the item on a screen by its hash. The
+// name on the device is the object name, which is not the name in the library.
+func TestNowPlayingCarriesTheHash(t *testing.T) {
+	data, err := json.Marshal(NowPlaying{Item: "55efb67e-lab2-teal.png", Kind: "image", SHA256: "55efb67e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"sha256":"55efb67e"`) {
+		t.Errorf("now_playing is %s, want a sha256 key", data)
+	}
+	data, err = json.Marshal(NowPlaying{Item: "https://example.com", Kind: "url"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "sha256") {
+		t.Errorf("a URL item has no hash, but now_playing is %s", data)
+	}
+}
+
+func TestCleanName(t *testing.T) {
+	tests := []struct {
+		raw  string
+		want string
+		ok   bool
+	}{
+		{raw: "Lobby north", want: "Lobby north", ok: true},
+		{raw: "  Front desk \t", want: "Front desk", ok: true},
+		{raw: "Écran du hall", want: "Écran du hall", ok: true},
+		{raw: strings.Repeat("é", MaxNameLength), want: strings.Repeat("é", MaxNameLength), ok: true},
+		{raw: strings.Repeat("a", MaxNameLength+1)},
+		{raw: ""},
+		{raw: "   "},
+		{raw: "two\nlines"},
+		{raw: "a\x00b"},
+		{raw: "del\x7f"},
+		{raw: "c1\u0085x"},
+		{raw: "bad \xff utf-8"},
+	}
+	for _, tt := range tests {
+		got, ok := CleanName(tt.raw)
+		if got != tt.want || ok != tt.ok {
+			t.Errorf("CleanName(%q) = %q, %v; want %q, %v", tt.raw, got, ok, tt.want, tt.ok)
+		}
 	}
 }
