@@ -3,6 +3,7 @@ package health
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -315,6 +316,13 @@ func TestHosts(t *testing.T) {
 	factory := Hosts(config.Default(), "px-1a2b3c4d", 80)
 	if !strings.Contains(strings.Join(factory, " "), "portapixel-3c4d.local") {
 		t.Errorf("the allowlist has no mDNS name: %v", factory)
+	}
+
+	// A device with a name of its own also takes the factory name. The announcer
+	// uses it when another device holds the name, and a name that is not on the
+	// list answers 421.
+	if !slices.Contains(hosts, "portapixel-3c4d.local") || !slices.Contains(hosts, "portapixel-3c4d.local:8099") {
+		t.Errorf("the allowlist of a named device has no factory name: %v", hosts)
 	}
 }
 

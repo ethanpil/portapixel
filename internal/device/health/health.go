@@ -537,7 +537,11 @@ func LocalIPs() []string {
 func Hosts(cfg config.Config, deviceID string, port int) []string {
 	out := []string{"localhost", "127.0.0.1", "[::1]", "::1"}
 	out = append(out, LocalIPs()...)
-	out = append(out, netcfg.MDNSName(cfg, deviceID), netcfg.Slug(cfg.Device.Name)+".local")
+	// The factory name is always there. When another device on the network holds
+	// the name of this one, the announcer takes the factory name. Without it here,
+	// that name answered 421 and the admin page of the device was out of reach.
+	out = append(out, netcfg.MDNSName(cfg, deviceID), netcfg.Slug(cfg.Device.Name)+".local",
+		netcfg.FactoryMDNSName(deviceID))
 	if port != 0 && port != 80 {
 		// The names with the port. httpguard compares both forms, but a name that
 		// holds a port and no name is not a name we know.
