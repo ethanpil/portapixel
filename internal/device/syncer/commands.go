@@ -2,6 +2,8 @@ package syncer
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 
 	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/manifest"
@@ -21,6 +23,7 @@ const (
 	CmdScreenOff      = "screen-off"
 	CmdRescan         = "rescan"
 	CmdUpdate         = "update"
+	CmdRename         = "rename"
 )
 
 // runCommands runs each command one time and gives the IDs to acknowledge.
@@ -97,9 +100,38 @@ func (s *Syncer) execute(ctx context.Context, c manifest.Command) {
 			// command is done either way: the server asked, and the device answered.
 			s.log("sync.command.update", err.Error())
 		}
+	case CmdRename:
+		s.rename(c.Args["name"])
 	default:
 		s.log("sync.command.unknown", "the server asked for "+c.Type+", which this release does not know")
 	}
+}
+
+// rename saves the display name that the server sent. The device owns its name:
+// mDNS, the host name and the fallback screen use it. So the server does not
+// change it directly. It sends this command, and the next heartbeat reports the
+// new name.
+//
+// A name that the device cannot use is acknowledged with a line in the ops log.
+// The server sends a command again only when no acknowledgement arrives, so a
+// refusal must never stop the round. The log line does not quote the refused
+// value, because it can hold a control character.
+func (s *Syncer) rename(raw string) {
+	name, ok := manifest.CleanName(raw)
+	if !ok {
+		s.log("sync.command.rename", fmt.Sprintf(
+			"the server sent a name that this device cannot use (1 to %d characters, no control character); the name did not change",
+			manifest.MaxNameLength))
+		return
+	}
+	if s.opt.SaveName == nil {
+		return
+	}
+	if err := s.opt.SaveName(name); err != nil {
+		s.log("sync.command.rename", "the device cannot save the name "+strconv.Quote(name)+": "+err.Error())
+		return
+	}
+	s.log("sync.command", CmdRename+" to "+strconv.Quote(name))
 }
 
 // runLocal calls the local command of the daemon and logs a refusal.

@@ -16,6 +16,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
+	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
 	"github.com/ethanpil/portapixel/internal/updater"
 	"github.com/ethanpil/portapixel/internal/version"
@@ -621,5 +622,117 @@ func TestThePairingWriteIsNotRefusedByItsOwnGuard(t *testing.T) {
 	}
 	if got := d.config().Server.URL; got != "" {
 		t.Errorf("the server address is still %q after an unpair", got)
+	}
+}
+
+// The status carries the hash of the file on the screen, so the fleet server finds
+// its library object. The name on the device is the object name <sha8>-<name>,
+// which never matched the name in the library of the server.
+func TestNowPlayingCarriesTheHashThatTheLibraryKnows(t *testing.T) {
+	media, state := t.TempDir(), t.TempDir()
+	writePlaylistDir(t, media, filepath.Join("_fleet", "lobby"), "Fleet lobby", "55efb67e-lab2-teal.png")
+	writePlaylistDir(t, media, filepath.Join("_fleet", "hall"), "Fleet hall", "aabbccdd-clip.mp4")
+	lib := library.New(library.Options{
+		MediaRoot: media,
+		StateDir:  state,
+		Paired:    func() bool { return true },
+	})
+	lib.Rescan()
+	sha := "55efb67e" + strings.Repeat("0", 56)
+	lib.NoteSHA(filepath.Join(media, "_fleet", "lobby", "55efb67e-lab2-teal.png"), sha)
+
+	tests := []struct {
+		name string
+		np   *manifest.NowPlaying
+		want string
+	}{
+		{name: "a file that the library hashed",
+			np:   &manifest.NowPlaying{Playlist: "lobby", Item: "55efb67e-lab2-teal.png", Kind: "image"},
+			want: sha},
+		{name: "a file that has no hash yet",
+			np: &manifest.NowPlaying{Playlist: "hall", Item: "aabbccdd-clip.mp4", Kind: "video"}},
+		{name: "a URL item",
+			np: &manifest.NowPlaying{Playlist: "lobby", Item: "55efb67e-lab2-teal.png", Kind: "url"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			nowPlayingSHA(tt.np, lib.Snapshot())
+			if tt.np.SHA256 != tt.want {
+				t.Errorf("sha256 = %q, want %q", tt.np.SHA256, tt.want)
+			}
+		})
+	}
+	nowPlayingSHA(nil, lib.Snapshot()) // no item on the screen: no panic
+}
+
+// The rename command of the fleet server writes device.name through the save path
+// of the admin, with its checks. The device owns its name, and a paired device
+// takes the command because device.name is not a managed field.
+func TestTheRenameCommandSavesThroughTheAdminPath(t *testing.T) {
+	media, state := t.TempDir(), t.TempDir()
+	start := config.Default()
+	start.Device.Name = "Lobby north"
+	if err := config.Save(media, state, start); err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{
+		paths: paths{media: media, state: state},
+		log:   opslog.New(filepath.Join(state, opsLogName)),
+		cfg:   start,
+		hub:   httpd.NewHub(),
+	}
+	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
+	d.sup = browser.New(browser.Options{
+		Command: browser.CommandConfig{Override: browser.DisableCommand},
+		Log:     d.log,
+	})
+	// A paired device.
+	d.sync = syncer.New(syncer.Options{
+		Config: d.config,
+		State: func() identity.State {
+			return identity.State{DeviceToken: "the device token", ServerURL: "https://fleet.example.com"}
+		},
+	})
+
+	if err := d.saveName("Front desk"); err != nil {
+		t.Fatalf("a paired device refused the rename: %v", err)
+	}
+	if got := d.config().Device.Name; got != "Front desk" {
+		t.Errorf("the running name is %q", got)
+	}
+	data, err := os.ReadFile(config.MediaPath(media))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"Front desk"`) {
+		t.Errorf("portapixel.toml does not hold the new name:\n%s", data)
+	}
+
+	// The same name again writes nothing: a command that the server sends again
+	// must cost no flash.
+	info, err := os.Stat(config.MediaPath(media))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chtimes(config.MediaPath(media), info.ModTime().Add(-time.Hour), info.ModTime().Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.saveName("Front desk"); err != nil {
+		t.Fatal(err)
+	}
+	again, err := os.Stat(config.MediaPath(media))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.ModTime().Equal(info.ModTime().Add(-time.Hour)) {
+		t.Error("a rename to the name that the device has wrote the file again")
+	}
+
+	// The validator of the configuration still applies.
+	if err := d.saveName("   "); err == nil {
+		t.Error("the save path took an empty name")
+	}
+	if got := d.config().Device.Name; got != "Front desk" {
+		t.Errorf("a refused name changed the running name to %q", got)
 	}
 }

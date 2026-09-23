@@ -295,6 +295,9 @@ type dev struct {
 	savedURL     string
 	savedToken   string
 	saves        int
+	// names are the names that the rename command saved. nameErr fails the save.
+	names   []string
+	nameErr error
 	// free is the free space that the fake partition reports.
 	free uint64
 	// renameErr fails a rename, to prove that a swap cannot leave half a set.
@@ -367,6 +370,14 @@ func newDevIn(t *testing.T, f *fakeServer, media, state string) *dev {
 			d.savedURL, d.savedToken = url, token
 			d.cfg.Server.URL, d.cfg.Server.Token = url, token
 			d.saves++
+			return nil
+		},
+		SaveName: func(name string) error {
+			if d.nameErr != nil {
+				return d.nameErr
+			}
+			d.names = append(d.names, name)
+			d.cfg.Device.Name = name
 			return nil
 		},
 		Status: func() manifest.Status {

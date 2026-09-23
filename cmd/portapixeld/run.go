@@ -350,6 +350,7 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 		State:      d.deviceState,
 		SaveState:  d.updateState,
 		SaveServer: d.saveServer,
+		SaveName:   d.saveName,
 		// The fleet server holds a device token and its dashboard shows the whole
 		// report, so a heartbeat is trusted. It is not loopback, so it never carries
 		// the pairing code.
@@ -422,6 +423,23 @@ func (d *daemon) saveServer(url, token string) error {
 	// and the token never reached portapixel.toml. A device that lost its token could
 	// then not enroll again by itself. DELETE /api/pair has the same shape.
 	_, err := d.writeConfig(next, true)
+	return err
+}
+
+// saveName is the work of the fleet "rename" command. It writes device.name
+// through the normal save path, so the checks of an admin save apply. It is an
+// explicit remote action of the admin of the fleet, not a hand edit.
+// device.name is not a managed field, so a paired device takes it.
+//
+// A name that the device already has writes nothing. The server sends a command
+// again when an acknowledgement is lost, and each write costs flash.
+func (d *daemon) saveName(name string) error {
+	next := d.config()
+	if next.Device.Name == name {
+		return nil
+	}
+	next.Device.Name = name
+	_, err := d.writeConfig(next, false)
 	return err
 }
 
@@ -832,6 +850,7 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 	state := d.deviceState()
 	browserState := d.sup.State()
 	snap := d.lib.Snapshot()
+	nowPlayingSHA(browserState.NowPlaying, snap)
 
 	problems := make([]string, 0, len(snap.Problems))
 	for _, p := range snap.Problems {
@@ -886,6 +905,20 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 		in.PairingCode = state.PairingCode
 	}
 	return d.reporter.Status(in)
+}
+
+// nowPlayingSHA writes the hash of the file on the screen into the report. The
+// fleet server finds its library object with it: the name on the device is the
+// object name, which is not the name in the library.
+//
+// The hash comes from the snapshot, which holds only the hashes that the library
+// already knows. A local file that was not hashed yet gets no hash here: the
+// status call never reads a file. A URL item has no hash.
+func nowPlayingSHA(np *manifest.NowPlaying, snap library.Snapshot) {
+	if np == nil || np.Kind == playlist.KindURL {
+		return
+	}
+	np.SHA256 = snap.ItemSHA(np.Playlist, np.Item)
 }
 
 // ---------------------------------------------------------------- the playlist

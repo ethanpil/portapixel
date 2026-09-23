@@ -109,6 +109,10 @@ type Options struct {
 	// normal configuration save path. Pairing and unpairing are the two explicit
 	// saves that this package makes.
 	SaveServer func(url, token string) error
+	// SaveName writes device.name to portapixel.toml through the normal
+	// configuration save path, with its checks. The rename command of the server
+	// is the third explicit save of this package.
+	SaveName func(name string) error
 
 	// Status builds the health report without the loopback-only fields. The
 	// heartbeat carries the same struct that /api/status serves.

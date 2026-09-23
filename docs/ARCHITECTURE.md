@@ -226,8 +226,8 @@ type MediaRef struct {
 }
 type Command struct {
     ID   int64             `json:"id"`
-    Type string            `json:"type"` // reboot | restart-browser | screen-on | screen-off | rescan | update
-    Args map[string]string `json:"args,omitempty"`
+    Type string            `json:"type"` // reboot | restart-browser | screen-on | screen-off | rescan | update | rename
+    Args map[string]string `json:"args,omitempty"` // rename: {"name": "<new name>"}
 }
 type ScreenRule struct {
     OnTime  string   `json:"on_time"`
@@ -251,6 +251,18 @@ type Heartbeat struct {
 
 `Status` is the same struct that the device serves at `/api/status` (plan section 8,
 `health`). It lives in `internal/manifest` so the two ends share it.
+
+`rename` gives a screen a new display name. The device owns its name: mDNS, the host
+name and the fallback screen use it. The device saves `device.name` through the save
+path of the admin, and the heartbeat of the same poll reports it. The server writes
+`devices.name` from `Heartbeat.Name` only. `POST /api/admin/devices/{id}/rename`
+queues this command. Both ends apply `manifest.CleanName`: 1 to 64 characters, no
+control character. A group command cannot be `rename`.
+
+`Status.NowPlaying.SHA256` (`now_playing.sha256`) is the hash of the file on the
+screen. The server finds its library object with it, because the device reports the
+object name `<sha8>-<name>` and not the library name. It is empty for a URL item and
+for a local file that the device did not hash yet.
 
 `Acks` holds at most 100 command IDs. A command that the server delivered and that
 no heartbeat acknowledged goes out again after 10 minutes, three times in all, and
