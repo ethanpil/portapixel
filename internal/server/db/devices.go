@@ -173,11 +173,6 @@ func (s scanWithTail) Scan(dest ...any) error {
 	return s.row.Scan(append(dest, s.tail...)...)
 }
 
-// RenameDevice sets the display name.
-func (d *DB) RenameDevice(id, name string) error {
-	return d.affectOne(`UPDATE devices SET name = ? WHERE id = ?`, name, id)
-}
-
 // MoveDevice puts the device in a group. A groupID of 0 takes it out of every
 // group.
 func (d *DB) MoveDevice(id string, groupID int64) error {

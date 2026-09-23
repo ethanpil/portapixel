@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
+	"github.com/ethanpil/portapixel/internal/server/api"
 	"github.com/ethanpil/portapixel/internal/server/db"
 	"github.com/ethanpil/portapixel/internal/server/httpjson"
 	"github.com/ethanpil/portapixel/internal/server/media"
@@ -216,4 +217,50 @@ func (d Deps) getThumb(w http.ResponseWriter, r *http.Request) {
 	// A thumbnail of one object and one recipe never changes.
 	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
 	http.ServeContent(w, r, sha+".jpg", info.ModTime(), f)
+}
+
+// getFile serves the stored bytes of an object to a signed-in admin. The admin UI
+// uses it for the first frame of a video: the server makes a thumbnail of an image
+// only, because it converts nothing (D27).
+//
+// The answer is inert. internal/server.secureHeaders gives this path the sandbox
+// policy of a stored object. The media type comes from the row, which the upload
+// decided. api.SetDisposition makes anything that is not a picture or a video a
+// download. http.ServeContent gives the Range answers that a video element asks
+// for.
+func (d Deps) getFile(w http.ResponseWriter, r *http.Request) {
+	sha := r.PathValue("sha256")
+	if !store.IsSHA256(sha) {
+		httpjson.Error(w, http.StatusBadRequest,
+			"that is not a SHA-256 value of 64 lower case hex characters")
+		return
+	}
+	row, err := d.DB.MediaRow(sha)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	path, err := d.Media.Path(sha)
+	if err != nil {
+		httpjson.Error(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		httpjson.Error(w, http.StatusNotFound, "the media store holds no file for this object")
+		return
+	}
+	defer f.Close()
+
+	info, err := f.Stat()
+	if err != nil || info.IsDir() {
+		httpjson.Error(w, http.StatusNotFound, "the media store holds no file for this object")
+		return
+	}
+	w.Header().Set("Content-Type", row.MIME)
+	w.Header().Set("ETag", `"`+sha+`"`)
+	// The bytes of an object never change.
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	api.SetDisposition(w, row.MIME, row.OrigName)
+	http.ServeContent(w, r, sha, info.ModTime(), f)
 }

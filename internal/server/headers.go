@@ -85,13 +85,14 @@ func secureHeaders(https func(*http.Request) bool, next http.Handler) http.Handl
 // isObjectPath reports if a path serves bytes that a person uploaded or that came
 // from a release archive.
 //
-// The three routes are named here and not in their handlers, so that one reader can
+// The four routes are named here and not in their handlers, so that one reader can
 // see the whole list of paths that serve foreign bytes.
 func isObjectPath(path string) bool {
 	switch {
 	case strings.HasPrefix(path, api.MediaBase), strings.HasPrefix(path, api.ReleaseBase):
 		return true
-	case strings.HasPrefix(path, "/api/admin/media/") && strings.HasSuffix(path, "/thumb"):
+	case strings.HasPrefix(path, "/api/admin/media/") &&
+		(strings.HasSuffix(path, "/thumb") || strings.HasSuffix(path, "/file")):
 		return true
 	}
 	return false

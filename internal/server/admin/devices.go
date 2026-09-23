@@ -129,7 +129,13 @@ func (d Deps) getDevice(w http.ResponseWriter, r *http.Request) {
 	httpjson.Write(w, http.StatusOK, view)
 }
 
-// renameDevice sets the display name.
+// renameDevice queues a rename command for the device. It does not write the row.
+//
+// The device owns its name: mDNS, the host name and the fallback screen use it. So
+// a rename from this server is a command, the same one that the command dialog
+// sends, and the row changes when the heartbeat of the device reports the new
+// name. That is in the same poll round. A write of the row here would only last
+// until that heartbeat.
 func (d Deps) renameDevice(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
@@ -137,18 +143,18 @@ func (d Deps) renameDevice(w http.ResponseWriter, r *http.Request) {
 	if !httpjson.Read(w, r, &body) {
 		return
 	}
-	name := strings.TrimSpace(body.Name)
-	if name == "" {
-		httpjson.Fields(w, "the request has a field that this server cannot use",
-			db.Errors{{Field: "name", Message: "a screen needs a name"}})
-		return
-	}
-	if err := d.DB.RenameDevice(r.PathValue("id"), name); err != nil {
+	id := r.PathValue("id")
+	if _, err := d.DB.Device(id); err != nil {
 		fail(w, err)
 		return
 	}
-	d.Log.Log("device-rename", r.PathValue("id")+" is now "+name)
-	httpjson.Write(w, http.StatusOK, httpjson.OK)
+	cmdID, err := d.DB.QueueCommand(id, db.CommandRename, map[string]string{"name": body.Name})
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	d.Log.Log("command", db.CommandRename+" for "+id)
+	httpjson.Write(w, http.StatusOK, map[string]any{"id": cmdID})
 }
 
 // moveDevice puts the device in a group. A group_id of 0 takes it out of every

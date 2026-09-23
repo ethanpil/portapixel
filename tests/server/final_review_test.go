@@ -372,6 +372,13 @@ func TestAStoredObjectIsInert(t *testing.T) {
 			want: http.StatusOK, attach: false},
 		{name: "the thumbnail", path: "/api/admin/media/" + png + "/thumb",
 			want: http.StatusOK, attach: false},
+		{name: "the svg object to the admin", path: "/api/admin/media/" + sha + "/file",
+			want: http.StatusOK, attach: true},
+		{name: "the picture to the admin", path: "/api/admin/media/" + png + "/file",
+			want: http.StatusOK, attach: false},
+		{name: "a range of the picture to the admin", path: "/api/admin/media/" + png + "/file",
+			header: func(r *http.Request) { r.Header.Set("Range", "bytes=0-3") },
+			want:   http.StatusPartialContent, attach: false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

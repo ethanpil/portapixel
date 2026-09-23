@@ -113,6 +113,7 @@ func (d Deps) Routes(mux *http.ServeMux) {
 	auth("POST /api/admin/media", d.postMedia)
 	auth("DELETE /api/admin/media/{sha256}", d.deleteMedia)
 	auth("GET /api/admin/media/{sha256}/thumb", d.getThumb)
+	auth("GET /api/admin/media/{sha256}/file", d.getFile)
 
 	auth("GET /api/admin/tokens", d.getTokens)
 	auth("POST /api/admin/tokens", d.createToken)

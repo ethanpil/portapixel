@@ -115,6 +115,42 @@ func TestMediaThumbnailOfAFileThatIsNotAnImage(t *testing.T) {
 	}
 }
 
+// A video has no thumbnail (D27), so the admin UI draws its first frame from the
+// stored bytes. The route serves them with the type of the row and with Range, which
+// a video element needs for the part that holds the first frame.
+func TestMediaFileServesAVideoToTheAdmin(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	content := []byte("the bytes of a short video clip")
+	sha := f.uploadMedia("clip.mp4", content)
+
+	res := f.mustOK(f.adminCall(http.MethodGet, "/api/admin/media/"+sha+"/file", nil), "the file")
+	if got := res.header.Get("Content-Type"); got != "video/mp4" {
+		t.Errorf("the type is %q, want video/mp4", got)
+	}
+	if string(res.body) != string(content) {
+		t.Errorf("the body is %q", res.body)
+	}
+	if got := res.header.Get("Content-Disposition"); got != "" {
+		t.Errorf("a video goes out as %q; the page cannot draw a download", got)
+	}
+
+	part := f.call(http.MethodGet, "/api/admin/media/"+sha+"/file", nil, func(r *http.Request) {
+		r.Header.Set("Range", "bytes=4-8")
+	})
+	if part.status != http.StatusPartialContent || string(part.body) != "bytes" {
+		t.Errorf("the range answered %d with %q", part.status, part.body)
+	}
+
+	// A hash that the library does not hold, and a value that is not a hash.
+	if res := f.adminCall(http.MethodGet, "/api/admin/media/"+strings.Repeat("0", 64)+"/file", nil); res.status != http.StatusNotFound {
+		t.Errorf("an unknown hash answered %d", res.status)
+	}
+	if res := f.adminCall(http.MethodGet, "/api/admin/media/..%2fserver.toml/file", nil); res.status != http.StatusBadRequest && res.status != http.StatusNotFound {
+		t.Errorf("a path answered %d", res.status)
+	}
+}
+
 func TestMediaDeleteInUseGives409WithThePlaylists(t *testing.T) {
 	f := newFleet(t)
 	f.login()

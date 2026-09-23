@@ -36,6 +36,11 @@ const maxAcks = 100
 //
 // One machine that changed is never a conflict, however soon it answers. Only the
 // two of them in turn is one.
+//
+// The row takes the name that the heartbeat reports. The device owns its name:
+// mDNS, the host name and the fallback screen use it, and a person can change it
+// on the device. A name that breaks manifest.CleanName, or no name, keeps the name
+// of the row. The route writes the log line for it.
 func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) error {
 	if len(hb.Acks) > maxAcks {
 		return Errors{{Field: "acks", Message: fmt.Sprintf("a heartbeat may acknowledge %d commands at most", maxAcks)}}
@@ -49,11 +54,11 @@ func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) error {
 	defer tx.Rollback()
 
 	var (
-		stored, pendingHW, pendingAt string
-		needsConfirm                 int
+		name, stored, pendingHW, pendingAt string
+		needsConfirm                       int
 	)
-	err = tx.QueryRow(`SELECT hardware_id, pending_hardware_id, pending_hardware_at, needs_confirm
-		FROM devices WHERE id = ?`, id).Scan(&stored, &pendingHW, &pendingAt, &needsConfirm)
+	err = tx.QueryRow(`SELECT name, hardware_id, pending_hardware_id, pending_hardware_at, needs_confirm
+		FROM devices WHERE id = ?`, id).Scan(&name, &stored, &pendingHW, &pendingAt, &needsConfirm)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -66,11 +71,15 @@ func (d *DB) Heartbeat(id string, hb manifest.Heartbeat, ip string) error {
 		status = string(data)
 	}
 
+	if reported, ok := manifest.CleanName(hb.Name); ok {
+		name = reported
+	}
+
 	// The one cheap UPDATE of the hot path.
 	if _, err := tx.Exec(`UPDATE devices
-		SET last_seen = ?, status_json = ?, version = ?, sync_error = ?, last_ip = ?
+		SET last_seen = ?, status_json = ?, version = ?, sync_error = ?, last_ip = ?, name = ?
 		WHERE id = ?`,
-		d.stamp(now), status, hb.Version, hb.SyncError, ip, id); err != nil {
+		d.stamp(now), status, hb.Version, hb.SyncError, ip, name, id); err != nil {
 		return err
 	}
 

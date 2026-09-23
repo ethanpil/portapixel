@@ -2,8 +2,11 @@ package api
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"sync"
 
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/server/db"
@@ -64,5 +67,30 @@ func (d Deps) postHeartbeat(w http.ResponseWriter, r *http.Request) {
 		httpjson.Error(w, http.StatusInternalServerError, "the server could not write this heartbeat")
 		return
 	}
+	d.logName(dev, hb.Name)
 	httpjson.Write(w, http.StatusOK, httpjson.OK)
+}
+
+// refusedNames holds, for each device ID, the last reported name that broke the
+// rule of manifest.CleanName. A device reports its name at every poll, so a bad
+// name gets one log line and not one line a minute until the next restart.
+var refusedNames sync.Map
+
+// logName writes the name that a heartbeat reported to the ops log when it changed
+// the row, or when db.Heartbeat refused it. dev is the row before the heartbeat.
+func (d Deps) logName(dev db.Device, reported string) {
+	name, ok := manifest.CleanName(reported)
+	if !ok {
+		if last, seen := refusedNames.Swap(dev.ID, reported); !seen || last != reported {
+			// The value is not in the line: it can hold a control character.
+			d.Log.Log("device-name-refused", fmt.Sprintf(
+				"%s reports a name that breaks the rule (1 to %d characters, no control character); the name stays %s",
+				dev.ID, manifest.MaxNameLength, strconv.Quote(dev.Name)))
+		}
+		return
+	}
+	refusedNames.Delete(dev.ID)
+	if name != dev.Name {
+		d.Log.Log("device-rename", dev.ID+" reports the name "+strconv.Quote(name))
+	}
 }

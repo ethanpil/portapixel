@@ -77,18 +77,19 @@ func (d Deps) getMedia(w http.ResponseWriter, r *http.Request) {
 	// file that a person uploaded as a picture but that holds HTML would then be
 	// served as HTML. internal/server/media decided the type at the upload.
 	w.Header().Set("Content-Type", row.MIME)
-	setDisposition(w, row.MIME, row.OrigName)
+	SetDisposition(w, row.MIME, row.OrigName)
 	http.ServeContent(w, r, sha, info.ModTime(), f)
 }
 
-// setDisposition tells the browser to save a stored object instead of showing it,
-// unless the object is a picture or a video.
+// SetDisposition tells the browser to save a stored object instead of showing it,
+// unless the object is a picture or a video. The object route of the admin API
+// uses it too, so that the two routes have one rule.
 //
 // A picture and a video are what the admin UI draws, and the headers of
 // internal/server.secureHeaders already make an object inert. Everything else -
 // an SVG, an HTML file that somebody named .png, a release binary - is a download
 // and nothing else.
-func setDisposition(w http.ResponseWriter, mime, name string) {
+func SetDisposition(w http.ResponseWriter, mime, name string) {
 	if strings.HasPrefix(mime, "image/") && mime != "image/svg+xml" {
 		return
 	}
@@ -153,6 +154,6 @@ func (d Deps) getRelease(w http.ResponseWriter, r *http.Request) {
 	// A release file is a binary and a signature. Neither is content that a browser
 	// should show, so both go out as a download of unknown bytes.
 	w.Header().Set("Content-Type", "application/octet-stream")
-	setDisposition(w, "application/octet-stream", name)
+	SetDisposition(w, "application/octet-stream", name)
 	http.ServeContent(w, r, name, info.ModTime(), f)
 }

@@ -3,14 +3,26 @@ package db
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/manifest"
 )
+
+// nameRule is the rule of a display name in words, for a field error.
+var nameRule = fmt.Sprintf("a screen needs a name of 1 to %d characters with no control character",
+	manifest.MaxNameLength)
 
 // commandTypes holds the commands that a device runs (contract section 5). The
 // server refuses every other word: the device would not know it, and a word that
 // goes into the queue and never runs is worse than an error at the button.
-var commandTypes = []string{"reboot", "restart-browser", "screen-on", "screen-off", "rescan", "update"}
+var commandTypes = []string{"reboot", "restart-browser", "screen-on", "screen-off", "rescan", "update", CommandRename}
+
+// CommandRename gives a screen a new display name. The device owns its name, so
+// the server does not write the row: the next heartbeat reports the new name, and
+// Heartbeat writes it. Its one argument is "name".
+const CommandRename = "rename"
 
 // validCommand reports if name is a command that a device knows.
 func validCommand(name string) bool {
@@ -54,6 +66,14 @@ func (d *DB) QueueCommand(deviceID, kind string, args map[string]string) (int64,
 	if !validCommand(kind) {
 		return 0, Errors{{Field: "type", Message: "must be one of " + strings.Join(commandTypes, ", ")}}
 	}
+	if kind == CommandRename {
+		name, ok := manifest.CleanName(args["name"])
+		if !ok {
+			return 0, Errors{{Field: "name", Message: nameRule}}
+		}
+		// The clean value goes out, and nothing else: the device reads only "name".
+		args = map[string]string{"name": name}
+	}
 	argsJSON, err := encodeArgs(args)
 	if err != nil {
 		return 0, err
@@ -77,6 +97,11 @@ func (d *DB) QueueCommand(deviceID, kind string, args map[string]string) (int64,
 func (d *DB) QueueGroupCommand(groupID int64, kind string, args map[string]string) (int, error) {
 	if !validCommand(kind) {
 		return 0, Errors{{Field: "type", Message: "must be one of " + strings.Join(commandTypes, ", ")}}
+	}
+	// One name for each screen of a group gives many screens one name, and mDNS
+	// then has two answers for one name.
+	if kind == CommandRename {
+		return 0, Errors{{Field: "type", Message: "a group cannot take rename: each screen has a name of its own"}}
 	}
 	argsJSON, err := encodeArgs(args)
 	if err != nil {

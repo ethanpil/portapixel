@@ -252,6 +252,10 @@ func newSyncDevice(t *testing.T, server *fleet) *syncDevice {
 			change(&d.st)
 			return d.st.Save(d.state)
 		},
+		SaveName: func(name string) error {
+			d.cfg.Device.Name = name
+			return nil
+		},
 		Status: func() manifest.Status {
 			return manifest.Status{DeviceID: d.id.DeviceID, Name: d.cfg.Device.Name}
 		},

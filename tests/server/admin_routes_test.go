@@ -213,6 +213,7 @@ func adminRoutes(t *testing.T) []adminRoute {
 		{name: "the media list", method: http.MethodGet, path: "/api/admin/media"},
 		{name: "upload a file", method: http.MethodPost, path: "/api/admin/media", upload: true},
 		{name: "the thumbnail of a file", method: http.MethodGet, path: "/api/admin/media/%[5]s/thumb"},
+		{name: "the bytes of a file", method: http.MethodGet, path: "/api/admin/media/%[5]s/file"},
 
 		{name: "the token list", method: http.MethodGet, path: "/api/admin/tokens"},
 		{name: "make a token", method: http.MethodPost, path: "/api/admin/tokens",
@@ -259,7 +260,7 @@ func adminRoutes(t *testing.T) []adminRoute {
 func TestTheTableHoldsEveryAdminRoute(t *testing.T) {
 	// The number of routes of internal/server/admin.Routes. Raise it here and add
 	// the line to adminRoutes at the same time.
-	const routesOfTheAdminAPI = 51
+	const routesOfTheAdminAPI = 52
 
 	covered := map[string]bool{}
 	for _, c := range adminRoutes(t) {
