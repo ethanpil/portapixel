@@ -41,6 +41,7 @@ and CI reads the boot files inside it. No Raspberry Pi has started this image.
 | D6, D7: vendored Bootstrap for the two admin UIs | One hand-written stylesheet, `web/shared/pp.css`. No Bootstrap. | The wireframes give a full custom design (IBM Plex, moss green, `oklch` colours). Bootstrap below it would be more code, not less. Open decision for the maintainer. |
 | Fonts from Google Fonts (wireframes) | IBM Plex Sans and Mono as local `woff2` files in `web/shared/fonts/` | A device on a closed network cannot get remote fonts. The licence is OFL. |
 | D52: a sideload bundle names its version | The version comes from the staged binary, after the signature check. | The release assets are `portapixeld-<arch>`, `<name>.minisig` and `SHA256SUMS`. Not one of the three names holds a version, and a person who downloads them from GitHub has three loose files. Running a binary that minisign already proved is safe; a naming rule would be one more thing to get wrong. |
+| D37: a CC0 image set, 1920x1080 | Seven H.264 720p demo videos, 59 MB in total, in `os/default-media/`. Five come from Mixkit (Mixkit Stock Video Free License). Two have no recorded source. | The maintainer supplied them on 2026-09-22. They are not CC0. The maintainer must confirm that the terms permit them in a public image. |
 | Plan section 15: stage in `releases/<ver>.staging` | A download does. A sideload stages in `releases/.sideload.staging`. | A sideload does not know the version until the binary is verified (the row above). |
 
 ## 4. M0 results
