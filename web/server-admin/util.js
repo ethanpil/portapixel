@@ -79,6 +79,12 @@ export function thumbURL(sha256) {
   return `/api/admin/media/${encodeURIComponent(sha256)}/thumb`;
 }
 
+/** The stored bytes of one library object. The first frame of a video comes
+    from here: the server makes a thumbnail of an image only (D27). */
+export function fileURL(sha256) {
+  return `/api/admin/media/${encodeURIComponent(sha256)}/file`;
+}
+
 /** A 52x32 preview of one item: the thumbnail when there is one, else the icon
     of its kind. `url` may be null. */
 export function preview(kind, url, opts = {}) {
@@ -86,6 +92,55 @@ export function preview(kind, url, opts = {}) {
   if (url) return h('span', { class: cls }, h('img', { src: url, alt: '', loading: 'lazy' }));
   const name = kind === 'video' ? 'video' : (kind === 'url' ? 'url' : 'image');
   return h('span', { class: opts.wide ? `${cls} sv-blank` : 'sv-icon' }, icon(name, opts.wide ? 26 : 16));
+}
+
+/** The preview of one library object `m`, which may be null: its thumbnail,
+    else the first frame of a video when opts.frame is true, else the icon of
+    its kind.
+
+    Only a page that shows one object, or one grid of the library, sets
+    opts.frame. Each video element asks the server for a part of its file, and
+    the list of a large fleet draws its rows again at each change. */
+export function mediaPreview(kind, m, opts = {}) {
+  if (m && m.has_thumb) return preview(kind, thumbURL(m.sha256), opts);
+  if (kind === 'video' && m && opts.frame) {
+    const cls = opts.wide ? 'pp-thumb pp-thumb--wide' : 'pp-thumb pp-thumb--sm';
+    // Half a second in: at time 0 a video element often shows a black box. A
+    // file that this browser cannot decode, for example HEVC, gets the icon.
+    const video = h('video', {
+      src: `${fileURL(m.sha256)}#t=0.5`, preload: 'metadata', muted: true, playsinline: true,
+      style: { width: '100%', height: '100%', 'object-fit': 'cover' },
+      onError: () => box.replaceWith(preview(kind, null, opts)),
+    });
+    // The attribute sets the default only. A script that makes the element must
+    // also set the property.
+    video.muted = true;
+    const box = h('span', { class: cls }, video);
+    return box;
+  }
+  return preview(kind, null, opts);
+}
+
+/** The library, found by hash and by the name of the upload. */
+export function mediaIndex(list) {
+  const bySha = new Map();
+  const byName = new Map();
+  for (const m of list || []) {
+    bySha.set(m.sha256, m);
+    byName.set(m.orig_name, m);
+  }
+  return { bySha, byName };
+}
+
+/** The library object of the item that a screen reports, or null.
+    A screen reports the hash of the file in now_playing.sha256. Its file name
+    is the name of its own copy, <sha8>-<name>, which is never the name of the
+    upload. So the name is for a report with no hash only: an older release, or
+    a local file that the screen did not hash yet. */
+export function playingMedia(now, index) {
+  if (!now || !index) return null;
+  if (now.sha256) return index.bySha.get(now.sha256) || null;
+  return index.byName.get(now.item) || null;
 }
 
 /** A free-space bar with its number. */
@@ -109,7 +164,32 @@ export const COMMANDS = [
   { type: 'screen-off', label: 'Screen off', body: 'The panel goes dark now. Its own times bring it back.' },
   { type: 'rescan', label: 'Look for new files', body: 'The screen checks its own storage and syncs with this server again.' },
   { type: 'update', label: 'Install the approved version', body: 'The screen installs the version that the Versions page approved, and puts itself back on the old one if it cannot come up.' },
+  { type: 'rename', label: 'Rename the screen', body: 'The screen takes the new name at its next check-in. The name on this page changes when the screen reports it.', one: true },
 ];
+
+/** The commands that a group takes. A name belongs to one screen: one name on
+    many screens gives the network many screens with one mDNS name. */
+export const GROUP_COMMANDS = COMMANDS.filter((c) => !c.one);
+
+/** The words of one row of the command list. A rename names the new name. */
+export function commandLabel(cmd) {
+  const label = (COMMANDS.find((c) => c.type === cmd.type) || {}).label || cmd.type;
+  const name = cmd.type === 'rename' && cmd.args && cmd.args.name;
+  return name ? `${label} to "${name}"` : label;
+}
+
+/** The name that a rename command of this screen waits for, or ''.
+    `commands` is newest first, as the API gives it. The device owns its name,
+    so the row changes only when the screen reports the new name. A rename
+    that the screen acknowledged with the old name was refused on the screen,
+    and one that expired never arrived: neither waits. */
+export function waitingName(device, commands) {
+  const cmd = (commands || []).find((c) => c.type === 'rename');
+  const name = cmd && cmd.args && cmd.args.name;
+  if (!name || name === (device && device.name)) return '';
+  if (cmd.state === 'acked' || cmd.state === 'expired') return '';
+  return name;
+}
 
 /** The state of a command in words: {word, when, kind, note}.
     A command that the server delivered and that no heartbeat acknowledged goes

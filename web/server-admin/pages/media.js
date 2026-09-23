@@ -10,7 +10,7 @@ import {
   card, pageHead, errorText, guessKind,
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
-import { thumbURL, fmtDate, preview } from '../util.js';
+import { fmtDate, mediaPreview } from '../util.js';
 
 export function mount(main, ctx) {
   let media = [];
@@ -177,7 +177,8 @@ export function mount(main, ctx) {
 
     return h('div', { class: 'pp-tile' },
       h('span', { style: { display: 'block', position: 'relative' } },
-        preview(kind, m.has_thumb ? thumbURL(m.sha256) : null, { wide: true }),
+        // A video has no thumbnail (D27), so its tile shows its first frame.
+        mediaPreview(kind, m, { wide: true, frame: true }),
         h('span', { class: 'pp-thumb__label' },
           h('span', { class: 'pp-kind pp-kind--chip', text: kind }))),
       h('div', { class: 'pp-tile__body' },
@@ -199,13 +200,15 @@ export function mount(main, ctx) {
       wide: true,
       body: h('div', null,
         h('div', { style: { 'max-width': '420px', 'margin-bottom': '14px' } },
-          preview(kind, m.has_thumb ? thumbURL(m.sha256) : null, { wide: true })),
+          mediaPreview(kind, m, { wide: true, frame: true })),
         h('div', { class: 'pp-facts' },
           row('Kind', kind),
           row('Type', m.mime || 'not known'),
           row('Size', fmtBytes(m.size)),
           row('Picture size', m.width && m.height ? `${m.width}×${m.height}` : 'not known'),
-          row('Thumbnail', m.has_thumb ? 'yes' : 'no, so the screens and this page draw an icon'),
+          row('Thumbnail', m.has_thumb ? 'yes'
+            : (kind === 'video' ? 'no, so this page draws the first frame and the screen list draws an icon'
+              : 'no, so the screens and this page draw an icon')),
           row('Uploaded', fmtDate(m.uploaded_at)),
           row('Hash', h('span', { class: 'pp-mono', text: `${m.sha256.slice(0, 16)}…` })),
           row('In playlists', m.playlists && m.playlists.length ? m.playlists.join(', ') : 'none yet')),

@@ -58,3 +58,38 @@ export function deviceTime(iso, timezone) {
 export function mediaURL(playlist, file) {
   return `/media/${encodeURIComponent(playlist)}/${encodeURIComponent(file)}`;
 }
+
+/* One part of a media path as the daemon writes it: the characters that
+   library.urlEscape keeps, and %XX for every other byte. */
+const MEDIA_PART = /^(?:[A-Za-z0-9._~()@-]|%[0-9A-Fa-f]{2})+$/;
+
+/** A media address of this device, or null.
+    The daemon serves two shapes: /media/<playlist>/<file> for a local
+    playlist and /media/_fleet/media/<file> for an object of the fleet
+    server. Each part must be there, and no part may be "." or "..", also
+    in its escaped form: a browser reads "%2e%2e" as "..". Every other
+    value gives null. A protocol-relative address is one such value: it
+    goes to another host. */
+export function localMedia(value) {
+  const v = String(value || '');
+  const parts = v.split('/');
+  if (parts[0] !== '' || parts[1] !== 'media') return null;
+  const local = parts.length === 4;
+  const fleet = parts.length === 5 && parts[2] === '_fleet' && parts[3] === 'media';
+  if (!local && !fleet) return null;
+  return parts.slice(2).every(safePart) ? v : null;
+}
+
+function safePart(part) {
+  if (!MEDIA_PART.test(part)) return false;
+  let plain;
+  try { plain = decodeURIComponent(part); } catch { return false; }
+  return plain !== '.' && plain !== '..' && !/[/\\]/.test(plain);
+}
+
+/** The address of a video, half a second in. A video element with
+    preload="metadata" often shows a black box at time 0. The media fragment
+    makes the browser load and show a real frame. */
+export function frameURL(src) {
+  return `${src}#t=0.5`;
+}

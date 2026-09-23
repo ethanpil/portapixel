@@ -6,14 +6,17 @@
 */
 
 import {
-  h, fill, toast, banner, badge, statusDot, modal, confirmDialog, typedConfirm,
+  h, fill, toast, banner, badge, statusDot, confirmDialog, typedConfirm,
   factList, fmtAgo, fmtBytes, fmtDuration, progress, card, errorText,
   setText, setShown, fmtTemp, guessKind, dayChips, daysInWords,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
 import { mountRules } from '../rules.js';
 import { sendToScreen } from '../commands.js';
-import { stateInfo, parseStatus, preview, thumbURL, daysFromCSV, COMMANDS, commandState, fmtClock, fmtDate, isNever, ownPageURL } from '../util.js';
+import {
+  stateInfo, parseStatus, mediaPreview, mediaIndex, playingMedia, daysFromCSV, COMMANDS, commandState,
+  commandLabel, waitingName, fmtClock, fmtDate, isNever, ownPageURL,
+} from '../util.js';
 
 const POLL_MS = 10000;
 
@@ -21,7 +24,7 @@ export function mount(main, ctx, deviceID) {
   let view = null;              // the answer of GET /api/admin/devices/{id}
   let groups = [];
   let playlists = [];
-  let mediaByName = new Map();
+  let library = mediaIndex([]);
   let rules = null;             // the rule editor of this screen
   let overridesDirty = false;
   let gone = false;
@@ -87,7 +90,7 @@ export function mount(main, ctx, deviceID) {
     try {
       const out = await api('GET', '/api/admin/media');
       if (gone) return;
-      mediaByName = new Map((out.media || []).map((m) => [m.orig_name, m]));
+      library = mediaIndex(out.media);
       paintNow();
     } catch { /* the preview then shows the icon of the kind */ }
   }
@@ -110,12 +113,13 @@ export function mount(main, ctx, deviceID) {
       h('div', { style: { 'min-width': 'min(260px, 100%)' } }, nameEl, metaEl),
       h('div', { class: 'pp-btns' },
         ownPage,
-        h('button', { type: 'button', class: 'pp-btn', text: 'Rename', onClick: rename }))));
+        h('button', { type: 'button', class: 'pp-btn', text: 'Rename', onClick: () => queue('rename') }))));
   }
 
   function paintHead() {
     const d = dev();
     const info = stateInfo(d.state);
+    const waiting = waitingName(d, view && view.commands);
     setText(nameEl, d.name || d.id);
     document.title = `${d.name || d.id} — PortaPixel Control`;
     fill(metaEl,
@@ -124,36 +128,13 @@ export function mount(main, ctx, deviceID) {
       h('span', { text: d.group_name ? `${d.group_name} group` : 'no group' }),
       h('span', { text: '·' }),
       h('span', { class: 'pp-status' }, statusDot(info.kind),
-        h('span', { text: d.state === 'online' ? `checked in ${fmtAgo(d.last_seen)}` : info.word })));
+        h('span', { text: d.state === 'online' ? `checked in ${fmtAgo(d.last_seen)}` : info.word })),
+      // The screen owns its name. The name above changes when the screen reports
+      // the new one, which is at its next check-in.
+      waiting ? badge(`waiting for the screen to take the name "${waiting}"`, 'warn') : null);
     const url = ownPageURL(status());
     ownPage.hidden = !url;
     if (url) ownPage.href = url;
-  }
-
-  async function rename() {
-    const input = h('input', { class: 'pp-input', type: 'text', value: dev().name || '', autofocus: true, maxlength: '60' });
-    const ok = await modal({
-      title: 'Rename this screen',
-      body: h('div', null,
-        h('label', { class: 'pp-label' }, 'Name', input),
-        h('div', { class: 'pp-help', text: 'The name is only for this page and the fleet list. The screen keeps its ID.' })),
-      actions: [{ label: 'Cancel', value: false }, { label: 'Rename it', value: true, kind: 'primary' }],
-      onOpen: (dialog, buttons) => {
-        input.addEventListener('keydown', (e) => {
-          if (e.key === 'Enter') { e.preventDefault(); buttons[1].click(); }
-        });
-      },
-    });
-    if (!ok) return;
-    try {
-      await api('POST', `/api/admin/devices/${encodeURIComponent(deviceID)}/rename`, { name: input.value.trim() });
-      toast('Renamed.');
-      await load(false);
-      paintHead();
-      ctx.store.refresh();
-    } catch (err) {
-      toast(errorText(err), 'danger');
-    }
   }
 
   /* --------------------------------------------------------------- notices */
@@ -261,6 +242,19 @@ export function mount(main, ctx, deviceID) {
   /* ------------------------------------------------------------------ body */
 
   const nowSlot = h('div');
+  // The parts of "on screen now". They are built once: a video element that is
+  // replaced at each poll loads its file again each time.
+  const nowPreview = h('div', { style: { 'max-width': '360px' } });
+  const nowWhere = h('span', { class: 'pp-small' });
+  const nowWhen = h('span', { class: 'pp-small pp-mono pp-muted' });
+  const nowItem = h('div', { class: 'pp-small pp-mono', style: { 'margin-top': '4px' } });
+  const nowParts = [
+    nowPreview,
+    h('div', { class: 'pp-row', style: { 'justify-content': 'space-between', 'margin-top': '10px' } }, nowWhere, nowWhen),
+    nowItem,
+    h('div', { class: 'pp-help' }, 'This is the last report of the screen, not a live picture.'),
+  ];
+  let nowKey = null;
   const factsSlot = h('div');
   const historySlot = h('div');
   const groupPanel = h('div');
@@ -409,23 +403,25 @@ export function mount(main, ctx, deviceID) {
     const st = status();
     const now = st.now_playing;
     if (!now || !now.item) {
+      nowKey = null;
       fill(nowSlot, h('div', { class: 'pp-help', style: { 'margin-top': '0' } },
         dev().state === 'pending'
           ? 'It waits for approval. It plays what it holds meanwhile.'
           : 'It has reported nothing yet.'));
       return;
     }
+    if (!nowSlot.contains(nowPreview)) fill(nowSlot, nowParts);
     const kind = now.kind || guessKind(now.item);
-    const m = mediaByName.get(now.item);
-    fill(nowSlot,
-      h('div', { style: { 'max-width': '360px' } },
-        preview(kind, m && m.has_thumb ? thumbURL(m.sha256) : null, { wide: true })),
-      h('div', { class: 'pp-row', style: { 'justify-content': 'space-between', 'margin-top': '10px' } },
-        h('span', { class: 'pp-small' },
-          `${now.playlist || 'a playlist'} · item ${Number(now.index || 0) + 1}`),
-        h('span', { class: 'pp-small pp-mono pp-muted', text: `reported ${fmtAgo(dev().last_seen)}` })),
-      h('div', { class: 'pp-small pp-mono', style: { 'margin-top': '4px' }, title: now.item, text: now.item }),
-      h('div', { class: 'pp-help' }, 'This is the last report of the screen, not a live picture.'));
+    const m = playingMedia(now, library);
+    const key = `${kind}|${now.item}|${m ? m.sha256 : ''}`;
+    if (key !== nowKey) {
+      nowKey = key;
+      fill(nowPreview, mediaPreview(kind, m, { wide: true, frame: true }));
+    }
+    setText(nowWhere, `${now.playlist || 'a playlist'} · item ${Number(now.index || 0) + 1}`);
+    setText(nowWhen, `reported ${fmtAgo(dev().last_seen)}`);
+    setText(nowItem, now.item);
+    nowItem.title = now.item;
   }
 
   function paintFacts() {
@@ -461,7 +457,7 @@ export function mount(main, ctx, deviceID) {
     }
     fill(historySlot, list.slice(0, 8).map((cmd) => {
       const st = commandState(cmd);
-      const label = (COMMANDS.find((c) => c.type === cmd.type) || {}).label || cmd.type;
+      const label = commandLabel(cmd);
       return h('div', null,
         h('div', { class: 'sv-cmd' },
           h('span', null, label, ' ', badge(st.word, st.kind === 'danger' ? 'danger' : (st.kind === 'busy' ? 'warn' : 'plain'))),

@@ -16,7 +16,7 @@ import {
 import { api } from '/shared/api.js';
 import { sendToGroup } from '../commands.js';
 import {
-  stateInfo, parseStatus, freeSpace, preview, thumbURL, screenHref, download, csvCell,
+  stateInfo, parseStatus, freeSpace, mediaPreview, mediaIndex, playingMedia, screenHref, download, csvCell,
 } from '../util.js';
 
 /* The filter and the view live in the module, so a trip to one screen and back
@@ -36,7 +36,7 @@ const CHIPS = [
 
 export function mount(main, ctx) {
   let groups = [];
-  let mediaByName = new Map();   // file name -> library object, for the thumbnails
+  let library = mediaIndex([]);  // the library by hash and by name, for the thumbnails
   let gone = false;
 
   /* One entry for each screen: the nodes plus the function that patches them.
@@ -125,14 +125,16 @@ export function mount(main, ctx) {
     } catch { /* the filter simply stays at "all groups" */ }
   }
 
-  /* The thumbnail of "on screen now" is the library thumbnail of that file
-     name. The server takes no screenshots (D26), so this is as close to a
-     picture of the screen as the fleet gets. */
+  /* The thumbnail of "on screen now" is the library thumbnail of that file,
+     found by the hash that the screen reports. The server takes no screenshots
+     (D26), so this is as close to a picture of the screen as the fleet gets.
+     A video keeps the icon here: a first frame in each row would ask the
+     server for a part of each video at each change of a large fleet. */
   async function loadMedia() {
     try {
       const out = await api('GET', '/api/admin/media');
       if (gone) return;
-      mediaByName = new Map((out.media || []).map((m) => [m.orig_name, m]));
+      library = mediaIndex(out.media);
       // The rows hold their preview, so they are built again with the pictures.
       frame = null;
       paint();
@@ -444,9 +446,8 @@ export function mount(main, ctx) {
       return h('span', { class: 'sv-now__text pp-muted', text: state === 'pending' ? 'waiting for approval' : 'nothing reported' });
     }
     const kind = now.kind || guessKind(now.item);
-    const m = mediaByName.get(now.item);
     return [
-      preview(kind, m && m.has_thumb ? thumbURL(m.sha256) : null),
+      mediaPreview(kind, playingMedia(now, library)),
       h('span', { class: 'sv-now__text', title: now.item, text: now.item }),
     ];
   }
@@ -499,8 +500,7 @@ export function mount(main, ctx) {
         if (item !== lastItem) {
           lastItem = item;
           const kind = now.kind || guessKind(item);
-          const m = mediaByName.get(item);
-          fill(thumbSlot, preview(kind, m && m.has_thumb ? thumbURL(m.sha256) : null, { wide: true }));
+          fill(thumbSlot, mediaPreview(kind, playingMedia(now, library), { wide: true }));
         }
         setText(playing, now.item || (d.state === 'pending' ? 'waiting for approval' : 'nothing reported'));
         setText(seen, d.state === 'pending' ? 'not yet' : fmtAgo(d.last_seen));

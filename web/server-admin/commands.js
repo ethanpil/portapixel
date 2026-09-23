@@ -9,12 +9,14 @@ import {
   h, toast, modal, confirmDialog, errorText,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { COMMANDS } from './util.js';
+import { COMMANDS, GROUP_COMMANDS } from './util.js';
 
-/** Ask, then queue one command for one screen. Returns true when it is queued. */
+/** Ask, then queue one command for one screen. Returns true when it is queued.
+    screenName is the name that the screen has now. */
 export async function sendToScreen(deviceId, screenName, type) {
   const cmd = COMMANDS.find((c) => c.type === type);
   if (!cmd) return false;
+  if (type === 'rename') return renameScreen(deviceId, screenName, cmd);
   const ok = await confirmDialog({
     title: `${cmd.label} on ${screenName}?`,
     body: h('div', null,
@@ -35,7 +37,44 @@ export async function sendToScreen(deviceId, screenName, type) {
   }
 }
 
-/** Pick a group and a command, then queue it for every screen of that group. */
+/* The rename command takes the new name. The device owns its name, so this
+   server does not change the row: the screen takes the command at its next
+   check-in and reports the new name in the same check-in. */
+async function renameScreen(deviceId, screenName, cmd) {
+  const input = h('input', {
+    class: 'pp-input', type: 'text', value: screenName || '', maxlength: '64', autofocus: true,
+  });
+  const ok = await modal({
+    title: `Rename ${screenName}`,
+    body: h('div', null,
+      h('label', { class: 'pp-label' }, 'New name', input),
+      h('div', { class: 'pp-help', text: `${cmd.body} The screen also uses the name on its idle screen and for its address on the local network.` })),
+    actions: [{ label: 'Cancel', value: false }, { label: 'Queue it', value: true, kind: 'primary' }],
+    onOpen: (dialog, buttons) => {
+      input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); buttons[1].click(); }
+      });
+    },
+  });
+  if (!ok) return false;
+  const name = input.value.trim();
+  if (name === screenName) {
+    toast('That is the name that the screen has now.');
+    return false;
+  }
+  try {
+    await api('POST', `/api/admin/devices/${encodeURIComponent(deviceId)}/commands`, { type: 'rename', args: { name } });
+    toast(`The new name is queued for ${screenName}. The screen takes it at its next check-in.`);
+    return true;
+  } catch (err) {
+    const named = (err.fields || []).map((f) => f.message).join(' ');
+    toast(named || errorText(err), 'danger');
+    return false;
+  }
+}
+
+/** Pick a group and a command, then queue it for every screen of that group.
+    Rename is not in the list: one name belongs to one screen. */
 export async function sendToGroup(groups, groupId) {
   const usable = (groups || []).filter((g) => g.devices > 0);
   if (usable.length === 0) {
@@ -50,12 +89,12 @@ export async function sendToGroup(groups, groupId) {
   groupSelect.value = String(groupId || usable[0].id);
 
   const typeSelect = h('select', { class: 'pp-select' },
-    COMMANDS.map((c) => h('option', { value: c.type, text: c.label })));
+    GROUP_COMMANDS.map((c) => h('option', { value: c.type, text: c.label })));
 
   const note = h('div', { class: 'pp-help' });
   const paint = () => {
     const g = usable.find((x) => String(x.id) === groupSelect.value);
-    const cmd = COMMANDS.find((c) => c.type === typeSelect.value);
+    const cmd = GROUP_COMMANDS.find((c) => c.type === typeSelect.value);
     note.textContent = g && cmd
       ? `${g.devices} ${g.devices === 1 ? 'screen takes' : 'screens take'} this at the next check-in. ${cmd.body}`
       : '';

@@ -13,7 +13,7 @@ import {
   card, pageHead, setText, setShown, errorText,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
-import { deviceTime, notInThisBuild } from '../util.js';
+import { deviceTime, notInThisBuild, localMedia, frameURL } from '../util.js';
 
 /* status.warnings is a list of {code, message}. The codes are the contract with
    the daemon (internal/manifest/status.go). This page matched the first words of
@@ -441,18 +441,14 @@ export function mount(main, ctx) {
       return h('img', { src, alt: '', loading: 'lazy' });
     }
     if (kind === 'video' && src) {
-      return h('video', { src, muted: true, playsinline: true, preload: 'metadata' });
+      const video = h('video', { src: frameURL(src), muted: true, playsinline: true, preload: 'metadata' });
+      // The attribute sets the default only. A script that makes the element must
+      // also set the property.
+      video.muted = true;
+      return video;
     }
     return h('span', { class: 'pp-thumb__label' },
       h('span', { class: 'pp-kind pp-kind--chip', text: kind === 'url' ? 'Web page' : String(kind || 'item') }));
-  }
-
-  /* A media address of this device, or null. `/media/<playlist>/<file>` is the
-     only shape that the daemon serves, and a protocol-relative address would go
-     to another host. */
-  function localMedia(value) {
-    const v = String(value || '');
-    return /^\/media\/[^/]+\/[^/]+$/.test(v) ? v : null;
   }
 
   /* How long the item stays on the screen. An image with no time of its own
