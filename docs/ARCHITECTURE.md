@@ -255,9 +255,19 @@ type Heartbeat struct {
 `rename` gives a screen a new display name. The device owns its name: mDNS, the host
 name and the fallback screen use it. The device saves `device.name` through the save
 path of the admin, and the heartbeat of the same poll reports it. The server writes
-`devices.name` from `Heartbeat.Name` only. `POST /api/admin/devices/{id}/rename`
-queues this command. Both ends apply `manifest.CleanName`: 1 to 64 characters, no
-control character. A group command cannot be `rename`.
+`devices.name` from the enroll request and from `Heartbeat.Name`. A heartbeat changes
+the name only when its `hardware_id` is the stored one and the row has no conflict.
+`POST /api/admin/devices/{id}/rename` queues this command. A new rename expires each
+older rename of the device that has no acknowledgement. Both ends apply
+`manifest.CleanName`, and `config.Validate` applies it to `device.name`: 1 to 63
+characters (one DNS label), no control character, no line or paragraph separator,
+no bidi control and no invisible character. ZWNJ and ZWJ are permitted. A group
+command cannot be `rename`.
+
+The device refuses a `rename` (it logs and acknowledges it) while its configuration
+is not the file on PPMEDIA: a shadow copy, the defaults, a repaired file, or a hand
+edit that it refused or took only in part. The save writes the whole file, so it
+would remove the values of the person.
 
 `Status.NowPlaying.SHA256` (`now_playing.sha256`) is the hash of the file on the
 screen. The server finds its library object with it, because the device reports the

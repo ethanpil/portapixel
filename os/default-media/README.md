@@ -1,7 +1,7 @@
 # Default media
 
 These seven videos are the demo content. A new device plays them, so the screen
-shows moving pictures at the first boot instead of the words "No content yet".
+shows video at the first boot instead of the words "No content yet".
 The owner replaces them with real content.
 
 | File | What it shows | Length | Source | Licence |

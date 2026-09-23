@@ -95,6 +95,14 @@ The server can queue a command for a screen: reboot, restart the browser,
 turn the screen on, turn the screen off, or look for new files. A screen
 takes its queued commands at its next check-in.
 
+**Rename the screen** is also a command. The screen owns its name: its
+`.local` address and its idle screen use it. The screen saves the new name
+at its next check-in and reports it in that same check-in, and the server
+then shows it. A name that you change on the screen itself also reaches the
+server at the next check-in. A command that a screen does not take in 24
+hours expires, so a rename for a screen that stays off must be sent again.
+A name has 1 to 63 characters.
+
 ## Approved releases and the release mirror
 
 Screens paired to a server only ever install the version that an
