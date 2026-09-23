@@ -2,9 +2,11 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -734,5 +736,170 @@ func TestTheRenameCommandSavesThroughTheAdminPath(t *testing.T) {
 	}
 	if got := d.config().Device.Name; got != "Front desk" {
 		t.Errorf("a refused name changed the running name to %q", got)
+	}
+}
+
+// renameDaemon builds a paired daemon on a portapixel.toml made from start, as
+// the rename command finds it: the daemon runs the file that it read.
+func renameDaemon(t *testing.T, start config.Config) *daemon {
+	t.Helper()
+	media, state := t.TempDir(), t.TempDir()
+	if err := config.Save(media, state, start); err != nil {
+		t.Fatal(err)
+	}
+	d := &daemon{
+		paths:       paths{media: media, state: state},
+		log:         opslog.New(filepath.Join(state, opsLogName)),
+		cfg:         start,
+		cfgModified: configMTime(media),
+		hub:         httpd.NewHub(),
+	}
+	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
+	d.sup = browser.New(browser.Options{
+		Command: browser.CommandConfig{Override: browser.DisableCommand},
+		Log:     d.log,
+	})
+	d.sync = syncer.New(syncer.Options{
+		Config: d.config,
+		State: func() identity.State {
+			return identity.State{DeviceToken: "the device token", ServerURL: "https://fleet.example.com"}
+		},
+	})
+	return d
+}
+
+// handEdit changes portapixel.toml as a person does, and moves its time so the
+// daemon sees a new file.
+func handEdit(t *testing.T, d *daemon, old, new string) string {
+	t.Helper()
+	path := config.MediaPath(d.paths.media)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), old) {
+		t.Fatalf("portapixel.toml holds no %q", old)
+	}
+	edited := strings.Replace(string(data), old, new, 1)
+	if err := os.WriteFile(path, []byte(edited), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	later := time.Now().Add(time.Hour)
+	if err := os.Chtimes(path, later, later); err != nil {
+		t.Fatal(err)
+	}
+	return edited
+}
+
+// The rename writes the whole file from the running configuration. It must not do
+// that while the running configuration is not the file of the person: the write
+// would remove the values of the person (CONTEXT.md, section 5).
+func TestARenameDoesNotWriteOverAFileWithAFault(t *testing.T) {
+	start := config.Default()
+	start.Device.Name = "Lobby"
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, d *daemon) string
+	}{
+		{name: "a hand edit that the daemon refuses", setup: func(t *testing.T, d *daemon) string {
+			return handEdit(t, d, "rotation = 0 ", "rotation = 45 ")
+		}},
+		{name: "a file that Load repaired at the start", setup: func(t *testing.T, d *daemon) string {
+			d.cfgWarning, d.cfgCode = "rotation is bad", manifest.WarnConfigRepaired
+			data, _ := os.ReadFile(config.MediaPath(d.paths.media))
+			return string(data)
+		}},
+		{name: "a configuration from the shadow copy", setup: func(t *testing.T, d *daemon) string {
+			d.fromShadow, d.cfgWarning = true, "portapixel.toml does not parse"
+			data, _ := os.ReadFile(config.MediaPath(d.paths.media))
+			return string(data)
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			d := renameDaemon(t, start)
+			want := tt.setup(t, d)
+			if err := d.saveName("Front desk"); err == nil {
+				t.Fatal("the rename wrote the configuration over a file with a fault")
+			}
+			got, err := os.ReadFile(config.MediaPath(d.paths.media))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(got) != want {
+				t.Errorf("the rename changed portapixel.toml:\n%s", got)
+			}
+			if name := d.config().Device.Name; name != "Lobby" {
+				t.Errorf("the running name is %q", name)
+			}
+		})
+	}
+}
+
+// A good hand edit that the daemon did not read yet goes into the rename. Before
+// this, the rename wrote the file from the old running values, and the edit was
+// gone.
+func TestARenameTakesAnUnreadHandEditFirst(t *testing.T) {
+	start := config.Default()
+	start.Device.Name = "Lobby"
+	d := renameDaemon(t, start)
+	handEdit(t, d, `timezone = "UTC"`, `timezone = "Europe/Berlin"`)
+
+	if err := d.saveName("Front desk"); err != nil {
+		t.Fatalf("the rename failed: %v", err)
+	}
+	data, err := os.ReadFile(config.MediaPath(d.paths.media))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"Europe/Berlin"`, `"Front desk"`} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("portapixel.toml holds no %s:\n%s", want, data)
+		}
+	}
+	if got := d.config().Device.Timezone; got != "Europe/Berlin" {
+		t.Errorf("the running time zone is %q", got)
+	}
+}
+
+// The rename runs on the poll of the fleet client, and an unpair runs on a request
+// of the admin. Each one reads, changes and writes the whole configuration. With no
+// lock, one of the two changes was lost: the unpair came back as a pairing, or the
+// name went back.
+func TestARenameAndAnUnpairDoNotLoseEachOther(t *testing.T) {
+	start := config.Default()
+	start.Device.Name = "Lobby"
+	start.Server.URL = "https://fleet.example.com"
+	start.Server.Token = "the device token"
+	d := renameDaemon(t, start)
+
+	for i := range 40 {
+		if err := config.Save(d.paths.media, d.paths.state, start); err != nil {
+			t.Fatal(err)
+		}
+		d.adopt(start, false, "", "")
+		name := fmt.Sprintf("Name %d", i)
+
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			if err := d.saveName(name); err != nil {
+				t.Error(err)
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			if err := d.saveServer("", ""); err != nil {
+				t.Error(err)
+			}
+		}()
+		wg.Wait()
+
+		got := d.config()
+		if got.Server.URL != "" || got.Server.Token != "" || got.Device.Name != name {
+			t.Fatalf("round %d lost a change: url %q, token %q, name %q", i, got.Server.URL, got.Server.Token, got.Device.Name)
+		}
 	}
 }

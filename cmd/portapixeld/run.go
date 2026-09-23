@@ -118,6 +118,12 @@ type daemon struct {
 	// the write are one step. See updateState.
 	stateMu sync.Mutex
 
+	// cfgWriteMu holds one change of the configuration at a time: a save of the
+	// API, a save of the fleet client and the reload of a hand edit. Each one reads
+	// the configuration, changes it, writes it and adopts it. Two of them at the
+	// same time lose one change. An unpair could then pair the device again.
+	cfgWriteMu sync.Mutex
+
 	mu          sync.Mutex
 	cfg         config.Config
 	fromShadow  bool
@@ -410,6 +416,9 @@ func (d *daemon) updateState(change func(*identity.State)) error {
 // saves that the fleet client makes (CONTEXT: never write the configuration of the
 // user except through an explicit save).
 func (d *daemon) saveServer(url, token string) error {
+	d.cfgWriteMu.Lock()
+	defer d.cfgWriteMu.Unlock()
+
 	next := d.config()
 	if next.Server.URL == url && next.Server.Token == token {
 		return nil
@@ -422,9 +431,14 @@ func (d *daemon) saveServer(url, token string) error {
 	// own write: the UI showed a failure for a pairing that worked, and the address
 	// and the token never reached portapixel.toml. A device that lost its token could
 	// then not enroll again by itself. DELETE /api/pair has the same shape.
-	_, err := d.writeConfig(next, true)
+	_, err := d.writeConfigLocked(next, true)
 	return err
 }
+
+// errConfigNotClean refuses a rename while the running configuration is not the
+// file on PPMEDIA as the person wrote it.
+var errConfigNotClean = errors.New("portapixel.toml has a fault, or the device did not take the last edit of it; " +
+	"the device does not write the file until a person corrects it")
 
 // saveName is the work of the fleet "rename" command. It writes device.name
 // through the normal save path, so the checks of an admin save apply. It is an
@@ -433,13 +447,36 @@ func (d *daemon) saveServer(url, token string) error {
 //
 // A name that the device already has writes nothing. The server sends a command
 // again when an acknowledgement is lost, and each write costs flash.
+//
+// The save writes the whole file from the running configuration. So it first
+// takes a hand edit that the daemon did not read yet. It refuses when the running
+// configuration is not the file on PPMEDIA: a shadow copy, the defaults, a
+// repaired file, or a hand edit that the daemon refused or took only in part.
+// The write would then remove the values of the person (CONTEXT.md, section 5).
+// The local Settings page asks before it writes; a remote command cannot ask.
 func (d *daemon) saveName(name string) error {
-	next := d.config()
+	d.cfgWriteMu.Lock()
+	defer d.cfgWriteMu.Unlock()
+
+	d.mu.Lock()
+	known := d.cfgModified
+	d.mu.Unlock()
+	if modified := configMTime(d.paths.media); !modified.Equal(known) {
+		d.reloadConfigLocked(modified)
+	}
+
+	d.mu.Lock()
+	clean := !d.fromShadow && d.cfgWarning == "" && d.cfgCode == ""
+	next := d.cfg
+	d.mu.Unlock()
+	if !clean {
+		return errConfigNotClean
+	}
 	if next.Device.Name == name {
 		return nil
 	}
 	next.Device.Name = name
-	_, err := d.writeConfig(next, false)
+	_, err := d.writeConfigLocked(next, false)
 	return err
 }
 
@@ -1027,6 +1064,13 @@ func (d *daemon) saveConfig(incoming config.Config) (httpd.Applied, error) {
 // caller is /api/pair itself, which is the ONLY caller that may change
 // server.url and server.token while the device is paired.
 func (d *daemon) writeConfig(incoming config.Config, fromPairing bool) (httpd.Applied, error) {
+	d.cfgWriteMu.Lock()
+	defer d.cfgWriteMu.Unlock()
+	return d.writeConfigLocked(incoming, fromPairing)
+}
+
+// writeConfigLocked is writeConfig for a caller that holds cfgWriteMu.
+func (d *daemon) writeConfigLocked(incoming config.Config, fromPairing bool) (httpd.Applied, error) {
 	old := d.config()
 	next := config.MergeMasked(old, incoming)
 	// The identity comes from the hardware. An edit of device.id does nothing
@@ -1154,6 +1198,13 @@ func (d *daemon) watchConfig(done <-chan struct{}) {
 // keeps the configuration that runs. A file that breaks a rule does the same. The
 // person then gets a warning that names the field.
 func (d *daemon) reloadConfig(modified time.Time) {
+	d.cfgWriteMu.Lock()
+	defer d.cfgWriteMu.Unlock()
+	d.reloadConfigLocked(modified)
+}
+
+// reloadConfigLocked is reloadConfig for a caller that holds cfgWriteMu.
+func (d *daemon) reloadConfigLocked(modified time.Time) {
 	old := d.config()
 
 	d.mu.Lock()
