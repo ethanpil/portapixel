@@ -365,13 +365,20 @@ root_password() {
 
 # ----------------------------------------------------------------- 4. run it
 rc=0
-grow_media || rc=1
+grow_ok=1
+grow_media || { rc=1; grow_ok=0; }
 ssh_host_keys
 root_password || rc=1
 
 # Steps 2, 4 and 5 of plan section 14 belong to the daemon: the device id, the
 # default portapixel.toml and the default playlist (ARCHITECTURE section 4).
-if [ -x /opt/portapixel/current/portapixeld ]; then
+#
+# A failed grow can leave PPMEDIA unmounted. Provision would then write the
+# default videos into the empty mount point on PPROOT, where PPMEDIA hides them
+# at the next boot. So provision waits for the next boot in that case.
+if [ "$grow_ok" = 0 ] && ! mountpoint -q "$PP_MEDIA"; then
+	oplog firstboot.provision.skip "$PP_MEDIA is not mounted; the next boot provisions"
+elif [ -x /opt/portapixel/current/portapixeld ]; then
 	prc=0
 	/opt/portapixel/current/portapixeld provision \
 		--media "$PP_MEDIA" --state "$PP_STATE" --releases "$PP_RELEASES" || prc=$?
