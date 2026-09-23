@@ -21,7 +21,7 @@ export function mount(main, ctx) {
 
   fill(main,
     pageHead('Server health',
-      'What this host has and where it is tight. Worth a look before a big upload goes wrong.',
+      'Disk space, database and check-ins for this server.',
       h('button', { type: 'button', class: 'pp-btn', text: 'Read it again', onClick: () => load() })),
     body);
 
@@ -71,21 +71,21 @@ export function mount(main, ctx) {
                 kind: diskKind,
                 k: 'Room for an upload',
                 note: free <= reserve
-                  ? 'The free space is down to the reserve, so this server takes no more uploads. Make room, or move the data directory.'
-                  : `The store keeps ${fmtBytes(reserve)} of the disk back, so a full disk never stops the fleet. An upload larger than the rest is refused before it starts.`,
+                  ? 'Uploads are off because the disk is almost full. Free up some space.'
+                  : `The largest upload that fits, with ${fmtBytes(reserve)} kept free.`,
                 v: fmtBytes(Math.max(0, free - reserve)),
               }),
               row({
                 kind: view.media_writable ? 'ok' : 'alert',
                 k: 'The media store takes new files',
                 note: view.media_writable
-                  ? 'This is the answer of a real write into the store, not a guess from the permissions.'
-                  : `A write into the store failed: ${view.media_error || 'no reason given'}`,
+                  ? 'A test write just now worked.'
+                  : `A test write failed: ${view.media_error || 'no reason given'}. Check the disk and its permissions.`,
                 v: view.media_writable ? 'yes' : 'no',
               }),
               row({
                 k: 'Files in the library',
-                note: 'One file is one object, named by the hash of its bytes.',
+                note: 'The same file uploaded twice counts once.',
                 v: `${view.media_files} · ${fmtBytes(view.media_bytes)}`,
               }),
               row({
@@ -96,7 +96,7 @@ export function mount(main, ctx) {
               }),
               row({
                 k: 'Size of the database',
-                note: 'The write-ahead log is counted, because it can be larger than the database after a busy hour.',
+                note: 'Includes the write-ahead log files.',
                 v: fmtBytes(view.database_bytes),
               }),
               row({
@@ -107,7 +107,7 @@ export function mount(main, ctx) {
               }),
             ],
             foot: [
-              h('span', { text: 'The integrity check reads the whole database, so it takes a few seconds.' }),
+              h('span', { text: 'The check reads the whole database and takes a few seconds.' }),
               checkBtn(),
             ],
           }),
@@ -115,14 +115,14 @@ export function mount(main, ctx) {
             title: 'Backups',
             body: [
               h('div', { class: 'pp-small' },
-                'Everything except the media files lives in one database file. Copy it somewhere safe and the fleet can be rebuilt.'),
+                'Everything except the media is in one database file. Keep a copy somewhere safe.'),
               h('div', { class: 'pp-help' },
-                'It is at ', h('span', { class: 'pp-mono', text: `${view.data_dir}/portapixel.db` }),
-                '. Copy the ', h('span', { class: 'pp-mono', text: '-wal' }), ' file beside it as well, or stop the server first.'),
+                'Copy ', h('span', { class: 'pp-mono', text: `${view.data_dir}/portapixel.db` }),
+                ' and its ', h('span', { class: 'pp-mono', text: '-wal' }), ' file, or stop the server first.'),
               h('div', { class: 'pp-help' },
-                'The media files are the other half. They are under ',
+                'Copy the media files in ',
                 h('span', { class: 'pp-mono', text: `${view.data_dir}/media` }),
-                ' and every one of them is named by its own hash.'),
+                ' too.'),
             ],
           })),
 
@@ -136,7 +136,7 @@ export function mount(main, ctx) {
               { k: 'Never called', v: view.contacts.never_seen, kind: view.contacts.never_seen ? 'warn' : null },
               { k: 'Waiting for approval', v: view.contacts.pending, kind: view.contacts.pending ? 'warn' : null },
               { k: 'Clone conflicts', v: view.contacts.conflict, kind: view.contacts.conflict ? 'danger' : null },
-              ['Quietest screen', isNever(view.contacts.quietest_seen) ? 'none has called' : fmtAgo(view.contacts.quietest_seen)],
+              ['Quietest screen', isNever(view.contacts.quietest_seen) ? 'no check-ins yet' : fmtAgo(view.contacts.quietest_seen)],
             ]),
           }),
           card({
@@ -150,7 +150,7 @@ export function mount(main, ctx) {
               ['Built for', view.arch],
               ['Running for', fmtDuration(view.uptime_seconds)],
               ['Data directory', h('span', { class: 'pp-mono', style: { 'font-size': '11.5px' }, text: view.data_dir })],
-              ['Release key', view.has_release_key ? 'yes' : 'no, so it cannot mirror a release'],
+              ['Release key', view.has_release_key ? 'yes' : 'no, so it cannot serve updates'],
             ]),
           }))));
   }
@@ -164,7 +164,7 @@ export function mount(main, ctx) {
     return [
       factList(versions.map(([v, n]) => [v || 'not known', `${n} ${n === 1 ? 'screen' : 'screens'}`])),
       h('div', { class: 'pp-help' },
-        'The Versions page has the same numbers as a picture, with the release notes.'),
+        'The Versions page shows this as bars, with the release notes.'),
     ];
   }
 
@@ -182,11 +182,11 @@ export function mount(main, ctx) {
 
   function integrityNote() {
     if (!view.integrity) {
-      return 'Nobody has run the check on this server yet. It is worth one run after a power cut or a full disk.';
+      return 'Not checked yet. Run the check after a power cut or a full disk.';
     }
-    const when = isNever(view.integrity_at) ? '' : ` Last run at ${fmtClock(view.integrity_at)}.`;
-    if (view.integrity === 'ok') return `SQLite read every page and found nothing wrong.${when}`;
-    return `SQLite reported: ${view.integrity}. Restore the last copy of the database file.${when}`;
+    const when = isNever(view.integrity_at) ? '' : ` Checked at ${fmtClock(view.integrity_at)}.`;
+    if (view.integrity === 'ok') return `No problems found.${when}`;
+    return `SQLite reported: ${view.integrity}. Restore your last copy of the database.${when}`;
   }
 
   function checkBtn() {
@@ -224,16 +224,16 @@ export function mount(main, ctx) {
 
   function mirrorNote() {
     if (!view.has_release_key) {
-      return 'This build has no release key, so it cannot check the signature of a release and never serves one.';
+      return 'This build has no release key, so it cannot serve updates.';
     }
     if (!view.approved_version) {
-      return 'No version is approved, so no screen installs anything. Approve one on the Versions page.';
+      return 'No version is approved. Approve one on the Versions page to update screens.';
     }
     switch (view.mirror_state) {
-      case 'done': return 'The binaries are here and their signatures check out. Screens fetch them from this server.';
-      case 'working': return 'The server is downloading the binaries of the approved version.';
-      case 'failed': return `The copy failed: ${view.mirror_error || 'no reason given'}. The Versions page can start it again.`;
-      default: return 'The approved version is not on this server yet, so no screen can install it.';
+      case 'done': return 'Copied here and verified. Screens update from this server.';
+      case 'working': return 'Copying the approved version to this server.';
+      case 'failed': return `The copy failed: ${view.mirror_error || 'no reason given'}. Try again on the Versions page.`;
+      default: return 'Not copied here yet, so screens cannot install it.';
     }
   }
 
