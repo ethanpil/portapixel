@@ -1,8 +1,8 @@
 // Command portapixeld is the PortaPixel device daemon.
 //
-// It serves the admin UI, the player and the JSON API, and it supervises the
-// browser. This file holds the subcommands, the flags and the wiring. Every rule
-// lives in a package under internal/device (ARCHITECTURE section 4).
+// It serves the admin UI and the JSON API, and it supervises the player, mpv.
+// This file holds the subcommands, the flags and the wiring. Every rule lives in
+// a package under internal/device (ARCHITECTURE section 4).
 package main
 
 import (
@@ -23,9 +23,9 @@ const (
 	defaultReleases = "/opt/portapixel"
 )
 
-// BrowserCmdEnv names the environment variable that replaces the browser command.
-// It is for a development machine and for a test.
-const BrowserCmdEnv = "PORTAPIXEL_BROWSER_CMD"
+// PlayerCmdEnv names the environment variable that replaces the mpv program. It is
+// for a development machine and for a test.
+const PlayerCmdEnv = "PORTAPIXEL_PLAYER_CMD"
 
 // paths are the four directories that the daemon works in.
 type paths struct {

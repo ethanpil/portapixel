@@ -59,10 +59,8 @@ type Options struct {
 	// Blank switches the displays for the method "dpms". A nil value uses the DRM
 	// device of the machine.
 	Blank Blanker
-	// Browser is the player (mpv). It is suspended and resumed with the screen.
-	// The field keeps its old name, so that cmd/portapixeld builds until the new
-	// player is wired in. Rename it to Player in that change.
-	Browser Player
+	// Player is mpv. It is suspended and resumed with the screen.
+	Player Player
 	// CECDevices gives the CEC device nodes, for example /dev/cec0. A nil
 	// function reads /dev/cec*.
 	CECDevices func() []string
@@ -277,17 +275,17 @@ func (c *Controller) apply(on bool, reason string) error {
 // suspend stops the player. A player that is busy gives an error, which the API
 // reports: a command that says "done" and does nothing is worse than an error.
 func (c *Controller) suspend() error {
-	if c.opt.Browser == nil {
+	if c.opt.Player == nil {
 		return nil
 	}
-	return c.opt.Browser.Suspend()
+	return c.opt.Player.Suspend()
 }
 
 func (c *Controller) resume() error {
-	if c.opt.Browser == nil {
+	if c.opt.Player == nil {
 		return nil
 	}
-	return c.opt.Browser.Resume()
+	return c.opt.Player.Resume()
 }
 
 // screen switches the display itself. Every fault is a log line and nothing more.

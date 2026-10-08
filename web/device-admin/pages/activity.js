@@ -17,11 +17,10 @@ const LINES = 200;
    from the top, so a longer prefix goes before a shorter one. */
 const KINDS = [
   ['scheduler.', 'playback'],
-  ['browser.suspend', 'screen'],
-  ['browser.resume', 'screen'],
-  ['browser.display.', 'screen'],
-  ['browser.', 'player'],
-  ['player', 'player'],
+  ['player.suspend', 'screen'],
+  ['player.resume', 'screen'],
+  ['player.display.', 'screen'],
+  ['player.', 'player'],
   ['library.', 'files'],
   ['media.', 'files'],
   ['playlist.', 'files'],

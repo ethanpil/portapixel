@@ -7,32 +7,19 @@ import (
 	"time"
 )
 
-// The events of /api/player/events (ARCHITECTURE 7a).
-const (
-	// EventPlaylist tells the player to ask for the manifest again and start at
-	// item 0.
-	EventPlaylist = "playlist"
-	// EventGrace asks the player for a good moment to restart the browser. The
-	// player answers with POST /api/player/ready.
-	EventGrace = "grace"
-	// EventReload tells the player to load the page again now.
-	EventReload = "reload"
-)
-
 // keepAlive is the time between two comment lines on an idle stream. A proxy or a
-// phone network closes a connection that says nothing, and the player would then
-// miss a playlist change until its own reconnect.
+// phone network closes a connection that says nothing, and the page would then
+// miss events until its own reconnect.
 const keepAlive = 20 * time.Second
 
-// hubQueue is how many events one subscriber may fall behind. The player is on
-// the same machine and reads at once; a queue of four covers a moment of load,
-// and after that the oldest event goes, because the newest event is the one that
-// matters.
+// hubQueue is how many events one subscriber may fall behind. A queue of four
+// covers a moment of load, and after that the oldest event goes, because the
+// newest event is the one that matters.
 const hubQueue = 4
 
-// Hub is the server-sent-event stream of the player. EventSource reconnects by
-// itself, so there is no retry logic on either end: that was the whole reason to
-// use it in place of a long poll (plan section 8).
+// Hub is a server-sent-event stream: the progress of an install onto a disk.
+// EventSource reconnects by itself, so there is no retry logic on either end:
+// that was the whole reason to use it in place of a long poll (plan section 8).
 type Hub struct {
 	mu     sync.Mutex
 	subs   map[int]chan sseEvent
@@ -69,9 +56,8 @@ func NewReplayHub() *Hub {
 // server.
 //
 // http.Server.Shutdown waits for each request to end and does not cancel a
-// request context. The stream of the player never ends by itself, so without this
-// every stop of the daemon — a service restart, an update, a reboot — cost the
-// full shutdown grace.
+// request context. A stream never ends by itself, so without this a stop of the
+// daemon in the middle of a stream cost the full shutdown grace.
 func (h *Hub) Close() {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -99,7 +85,7 @@ func (h *Hub) Reset() {
 	h.mu.Unlock()
 }
 
-// Send gives one event to every player that listens. data may be nil.
+// Send gives one event to every stream that is open. data may be nil.
 func (h *Hub) Send(name string, data any) {
 	payload := []byte("{}")
 	if data != nil {
@@ -132,15 +118,15 @@ func (h *Hub) Send(name string, data any) {
 	}
 }
 
-// Listeners gives the number of open streams. The status page shows it, and a
-// test uses it to wait for the player.
+// Listeners gives the number of open streams. A test uses it to wait for a
+// stream.
 func (h *Hub) Listeners() int {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return len(h.subs)
 }
 
-// serve is the handler of GET /api/player/events.
+// serve is the handler of an event stream.
 func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	flusher, canFlush := w.(http.Flusher)
 	if !canFlush {
@@ -168,7 +154,7 @@ func (h *Hub) serve(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
-	// A first comment makes the browser call the stream open, so the player knows
+	// A first comment makes the browser call the stream open, so the page knows
 	// that it is connected.
 	w.Write([]byte(": connected\n\n"))
 	if last.name != "" {

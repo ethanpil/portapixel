@@ -12,7 +12,7 @@
 //	"$TMP/ppd.exe" provision --media "$TMP/pp/media" --state "$TMP/pp/state"
 //	"$TMP/ppd.exe" run --media "$TMP/pp/media" --state "$TMP/pp/state" \
 //	    --run "$TMP/pp/run" --releases "$TMP/pp/releases" \
-//	    --listen 127.0.0.1:8098 --browser-cmd none
+//	    --listen 127.0.0.1:8098 --player-cmd none
 //
 // Then start this one and open http://localhost:8099/ :
 //

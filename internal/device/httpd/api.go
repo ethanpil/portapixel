@@ -10,8 +10,8 @@ import (
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/config"
-	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/device/player"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/playlist"
 )
@@ -25,12 +25,12 @@ const defaultOpslogLines = 200
 
 // GET /api/status
 //
-// No session: the fallback screen on the device and a person with a browser both
-// read it. The pairing code goes to the device itself only (D46).
+// No session: the login page and a monitor read it. The pairing code goes to the
+// device itself only (D46).
 func (d Deps) getStatus(w http.ResponseWriter, r *http.Request) {
-	// This route needs no session: the fallback screen and the login page read it
-	// (D46). An admin with a session still gets the whole report, so the change-me
-	// warnings and the fleet fields stay on the dashboard.
+	// This route needs no session: the login page reads it (D46). An admin with a
+	// session still gets the whole report, so the change-me warnings and the fleet
+	// fields stay on the dashboard.
 	loopback := httpguard.IsLoopback(r.RemoteAddr)
 	writeJSON(w, http.StatusOK, d.Status(loopback, loopback || d.Sessions.Valid(r)))
 }
@@ -268,12 +268,12 @@ func (d Deps) postRescan(w http.ResponseWriter, r *http.Request) {
 
 // POST /api/commands/{name}
 //
-// A browser that is busy answers 503. A command that reports success and then
+// A player that is busy answers 503. A command that reports success and then
 // does nothing is worse than an error: the person looks at the screen and waits.
 func (d Deps) postCommand(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	if err := d.Command(name); err != nil {
-		if errors.Is(err, browser.ErrBusy) {
+		if errors.Is(err, player.ErrBusy) {
 			writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}

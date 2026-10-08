@@ -7,19 +7,18 @@ import (
 
 // The security headers of every answer of the daemon.
 //
-// Why they are here and not only on the admin UI: the daemon serves the admin UI,
-// the player and the content of a removable medium from ONE origin, on plain HTTP
-// (D22). A file that a person copied onto the card is therefore same-origin with
-// the admin session and with the player secret.
+// Why they are here and not only on the admin UI: the daemon serves the admin UI
+// and the content of a removable medium from ONE origin, on plain HTTP (D22). A
+// file that a person copied onto the card is therefore same-origin with the admin
+// session.
 const (
-	// AppCSP is the policy of the pages that this binary holds: the admin UI and
-	// the player. Everything comes from this device.
+	// AppCSP is the policy of the pages that this binary holds: the admin UI.
+	// Everything comes from this device.
 	//
-	// "img-src" adds data: and blob: for the QR code of the fallback screen and for
-	// a preview that the admin UI builds. "style-src" adds 'unsafe-inline' because
-	// index.html carries one style attribute and the player sets element styles for
-	// its transitions. "script-src 'self'" holds: both pages load one module file
-	// and neither has an inline script, an event attribute or eval.
+	// "img-src" adds data: and blob: for a preview that the admin UI builds.
+	// "style-src" adds 'unsafe-inline' because the admin UI sets element styles.
+	// "script-src 'self'" holds: the page loads one module file and has no inline
+	// script, no event attribute and no eval.
 	AppCSP = "default-src 'self'; " +
 		"img-src 'self' data: blob:; " +
 		"media-src 'self'; " +
@@ -35,7 +34,7 @@ const (
 	//
 	// "sandbox" with no keyword gives the answer an opaque origin and no scripts. An
 	// SVG with a <script> in it that somebody OPENS is then inert: it cannot read the
-	// admin session, the configuration or the player secret. The same file still
+	// admin session or the configuration. The same file still
 	// draws in an <img> tag and in a CSS background, because a browser does not apply
 	// the policy of an answer that it loads as a picture.
 	//
@@ -52,8 +51,8 @@ const mediaPrefix = "/media/"
 // so a refusal of the Host allowlist or of the header check carries them as well.
 //
 // "nosniff" stops a browser from guessing a type for a file whose extension this
-// device does not know. "no-referrer" stops the player URL, which carries the
-// player secret in ?k=, from reaching an external page in a Referer header.
+// device does not know. "no-referrer" stops the address of a page of this device
+// from reaching an external page in a Referer header.
 // "DENY" plus "frame-ancestors 'none'" stops a page on another site from putting
 // the admin UI in a frame and stealing a click.
 func securityHeaders(next http.Handler) http.Handler {

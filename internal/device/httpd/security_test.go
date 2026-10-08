@@ -9,8 +9,8 @@ import (
 	"time"
 )
 
-// Every answer of the daemon carries the three headers. The admin UI, the player
-// and the content of the card share ONE origin on plain HTTP, so a header that
+// Every answer of the daemon carries the three headers. The admin UI and the
+// content of the card share ONE origin on plain HTTP, so a header that
 // only some answers carry is a header that the interesting answer does not.
 func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 	f := newFx(t)
@@ -28,7 +28,6 @@ func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 		opts   []func(*request)
 	}{
 		{name: "the admin UI", method: http.MethodGet, target: "/"},
-		{name: "the player page", method: http.MethodGet, target: "/player"},
 		{name: "the status", method: http.MethodGet, target: "/api/status"},
 		{name: "a media file", method: http.MethodGet, target: "/media/lobby/a.jpg"},
 		{name: "the licence list", method: http.MethodGet, target: "/licenses"},
@@ -60,7 +59,7 @@ func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 
 // A file from the card is INERT. /media/ needs no session by design, so a file
 // that somebody planted, for example a page with a script and a picture name,
-// must never run on the origin of the admin UI and of the player. The sandbox
+// must never run on the origin of the admin UI. The sandbox
 // policy gives it an opaque origin and no scripts, and nosniff keeps the media
 // type of the name. An SVG can hold a script as well. It is not a media kind,
 // so /media/ does not serve it at all.
@@ -137,7 +136,7 @@ func TestMediaFilesGetTheSandboxPolicy(t *testing.T) {
 // planted file can never become one of its sources.
 func TestTheAppPolicyIsOnThePages(t *testing.T) {
 	f := newFx(t)
-	for _, target := range []string{"/", "/player"} {
+	for _, target := range []string{"/"} {
 		got := f.do(http.MethodGet, target, nil).Header().Get("Content-Security-Policy")
 		if got != AppCSP {
 			t.Errorf("%s: the policy is %q, want the application policy", target, got)

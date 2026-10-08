@@ -122,7 +122,7 @@ func (f *fake) status(w http.ResponseWriter, r *http.Request, daemon string) {
 		"message": "The root password is still the default one. Change it on the Settings page.",
 	})
 
-	// A development machine runs with --browser-cmd none, so nothing ever
+	// A development machine runs with --player-cmd none, so nothing ever
 	// plays. Pretend that the first playlist is on the screen and that its
 	// items follow each other, so the preview and the countdown have work.
 	if out["now_playing"] == nil {

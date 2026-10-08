@@ -14,7 +14,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"os/user"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -26,7 +25,7 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/audio"
-	"github.com/ethanpil/portapixel/internal/device/browser"
+	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/health"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
 	"github.com/ethanpil/portapixel/internal/device/identity"
@@ -34,6 +33,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/device/mdns"
 	"github.com/ethanpil/portapixel/internal/device/netcfg"
+	"github.com/ethanpil/portapixel/internal/device/player"
 	"github.com/ethanpil/portapixel/internal/device/power"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
@@ -96,21 +96,19 @@ type daemon struct {
 
 	lib      *library.Library
 	sched    *scheduler.Scheduler
-	sup      *browser.Supervisor
+	sup      *player.Supervisor
 	screen   *power.Controller
 	audio    *audio.Applier
 	announce *mdns.Announcer
 	update   *updater.Manager
 	install  *installer.Installer
 	sync     *syncer.Syncer
-	hub      *httpd.Hub
 	// installHub is the progress stream of an install onto a disk. It replays its
 	// last event, because the admin UI opens the stream after the POST answered.
 	installHub *httpd.Hub
 	reporter   *health.Reporter
 
-	secret string
-	port   int
+	port int
 
 	// stateMu holds one change of state.json at a time: the read, the change and
 	// the write are one step. See updateState.
@@ -142,22 +140,21 @@ func runCommand(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	p := addPathFlags(fs)
 	listen := fs.String("listen", "", "the listen address, for example 127.0.0.1:8099. Empty uses [web].port on every address.")
-	browserCmd := fs.String("browser-cmd", os.Getenv(BrowserCmdEnv),
-		"replace the whole browser command. \"none\" switches the browser off. %u is the URL.")
+	playerCmd := fs.String("player-cmd", os.Getenv(PlayerCmdEnv),
+		"replace the mpv program. Its own arguments come after the arguments of the daemon. \"none\" switches the player off.")
 	// The kiosk account exists on the device only. A development machine cannot
 	// run a process as another user, so the default there is empty.
 	defaultKiosk := "kiosk"
 	if runtime.GOOS != "linux" {
 		defaultKiosk = ""
 	}
-	kioskUser := fs.String("kiosk-user", defaultKiosk, "the unprivileged account that runs the browser. Empty runs it as this user.")
-	kioskCache := fs.String("kiosk-cache", "/var/cache/kiosk", "the size capped tmpfs for the browser profile and cache")
-	drmRoot := fs.String("drm-root", browser.DefaultDRMRoot, "where the kernel reports the display connectors")
+	kioskUser := fs.String("kiosk-user", defaultKiosk, "the unprivileged account that runs mpv. Empty runs it as this user.")
+	drmRoot := fs.String("drm-root", player.DefaultDRMRoot, "where the kernel reports the graphics cards and the display connectors")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
 
-	d, err := newDaemon(*p, *listen, *browserCmd, *kioskUser, *kioskCache, *drmRoot)
+	d, err := newDaemon(*p, *listen, *playerCmd, *kioskUser, *drmRoot)
 	if err != nil {
 		return fail("%v", err)
 	}
@@ -167,7 +164,7 @@ func runCommand(args []string) int {
 // newDaemon builds every part and wires them together. It never fails on
 // something that the network or the media partition does: a device must come up
 // and report its own faults (D38, plan 3.3).
-func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot string) (*daemon, error) {
+func newDaemon(p paths, listen, playerCmd, kioskUser, drmRoot string) (*daemon, error) {
 	// The health directory under the run directory holds the marker of this boot.
 	// The one under the release root holds the .bad markers of the gate, which must
 	// survive a reboot (see internal/updater/doc.go).
@@ -185,9 +182,7 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 	d := &daemon{
 		paths:      p,
 		log:        opslog.New(filepath.Join(p.state, opsLogName)),
-		hub:        httpd.NewHub(),
 		installHub: httpd.NewReplayHub(),
-		secret:     httpd.NewSecret(),
 	}
 
 	// 1. The identity comes from the hardware at each boot (D21).
@@ -241,36 +236,34 @@ func newDaemon(p paths, listen, browserCmd, kioskUser, kioskCache, drmRoot strin
 	// 5. The health report.
 	d.reporter = health.New(health.Sources{MediaRoot: p.media, StateDir: p.state})
 
-	// 6. The browser.
-	command := browser.CommandConfig{
-		Override:   browserCmd,
-		KioskUser:  kioskUser,
-		CacheDir:   kioskCache,
-		RuntimeDir: runtimeDir(kioskUser),
-	}
-	d.sup = browser.New(browser.Options{
-		Command:         command,
+	// 6. The player: mpv on DRM/KMS, as the kiosk account.
+	d.sup = player.New(player.Options{
+		Command: player.CommandConfig{
+			Override:  playerCmd,
+			KioskUser: kioskUser,
+			RunDir:    p.run,
+		},
 		Log:             d.log,
 		Now:             d.localNow,
-		PlayerURL:       d.playerURL,
-		Active:          d.activePlaylist,
+		Manifest:        d.playerManifest,
+		Fallback:        d.fallbackInfo,
 		Display:         d.displaySettings,
 		Reboot:          d.reboot,
-		Grace:           func() { d.hub.Send(httpd.EventGrace, nil) },
 		NightlyRestart:  func() string { return d.config().Playback.NightlyRestart },
 		Watchdog:        d.watchdogSettings,
 		ScreenOffCovers: d.sched.ScreenOffCovers,
 		DRMRoot:         drmRoot,
 	})
 
-	// 7. The screen power (D31). The off order is the display first and the browser
-	// second, which is why one package owns both.
+	// 7. The screen power (D31). The off order is the player first and the display
+	// second: mpv holds the DRM device, and the DPMS call needs it. One package owns
+	// both steps for that reason.
 	d.screen = power.New(power.Options{
 		Method:     func() string { return d.config().Display.PowerMethod },
 		ShouldBeOn: d.sched.ScreenShouldBeOn,
 		Now:        d.localNow,
-		Run:        powerRunner{kiosk: kioskRunner{cmd: command}},
-		Browser:    d.sup,
+		Run:        rootRunner{},
+		Player:     d.sup,
 		Log:        d.log,
 	})
 
@@ -530,11 +523,6 @@ func (d *daemon) serve(listen string) int {
 	}
 	d.log.Log("httpd.listen", address)
 	slog.Info("portapixeld is up", "address", address, "device", d.id.DeviceID, "version", version.Version)
-	// The address of the player, with the boot secret taken out. The secret gates
-	// the whole player API (D46), and a log line is a line that a person copies
-	// into a support message. A developer who needs the true URL reads it from the
-	// browser command line.
-	slog.Info("the player is at", "url", browser.RedactURL(d.playerURL(-1)))
 
 	done := make(chan struct{})
 	var group sync.WaitGroup
@@ -590,10 +578,10 @@ func (d *daemon) serve(listen string) int {
 	// a worker that has already gone. A POST /api/commands/restart-browser after the
 	// supervisor stopped reports success and does nothing.
 	//
-	// The SSE stream of the player never ends by itself, and Shutdown does not
-	// cancel a request context, so the hub ends its streams first. Without that
-	// every stop of the daemon cost the whole grace time.
-	d.hub.Close()
+	// An install stream never ends by itself, and Shutdown does not cancel a
+	// request context, so the hub ends its streams first. Without that, a stop of
+	// the daemon during an install cost the whole grace time.
+	d.installHub.Close()
 	ctx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 	defer cancel()
 	server.Shutdown(ctx)
@@ -610,20 +598,14 @@ func (d *daemon) deps() httpd.Deps {
 		Library:        d.lib,
 		Sessions:       httpguard.NewSessions(),
 		Limiter:        httpguard.NewLimiter(),
-		Hub:            d.hub,
-		PlayerSecret:   d.secret,
 		Hosts:          d.hosts,
 		Password:       func() string { return d.config().Web.Password },
 		Status:         d.status,
 		Config:         d.configView,
 		SaveConfig:     d.saveConfig,
 		ActivePlaylist: d.sched.Active,
-		PlayerManifest: d.playerManifest,
-		Heartbeat:      d.sup.Heartbeat,
-		PlayerReady:    d.sup.Ready,
 		Command:        d.command,
 		Rescan:         d.rescan,
-		AdminURL:       d.adminURL,
 		SetRootPassword: func(password string) error {
 			return setRootPassword(d.paths.state, password)
 		},
@@ -733,10 +715,10 @@ func (d *daemon) deviceState() identity.State {
 	return d.state
 }
 
-// localNow gives the time in the time zone of the device. The schedules and the
-// nightly restart are local times (D40).
+// localNow gives the time in the time zone of the device. The schedules, the
+// nightly restart and the clock of the fallback screen are local times (D40).
 //
-// scheduler.Location caches the zone object. The browser supervisor asks for the
+// scheduler.Location caches the zone object. The player supervisor asks for the
 // time once a second for months, and time.LoadLocation reads files.
 func (d *daemon) localNow() time.Time {
 	return time.Now().In(scheduler.Location(d.config().Device.Timezone))
@@ -805,12 +787,16 @@ func (d *daemon) refreshHosts() {
 
 // adminURL is the address that a person types, and the QR code on the fallback
 // screen carries. The mDNS name is the address that works from any computer on
-// the network.
+// the network. With no name and no address there is no URL, and the fallback
+// screen shows no QR code.
 func (d *daemon) adminURL() string {
 	cfg := d.config()
 	host := netcfg.MDNSName(cfg, d.id.DeviceID)
 	if ips := health.LocalIPs(); host == "" && len(ips) > 0 {
 		host = ips[0]
+	}
+	if host == "" {
+		return ""
 	}
 	if d.port != 80 {
 		host += ":" + strconv.Itoa(d.port)
@@ -818,22 +804,42 @@ func (d *daemon) adminURL() string {
 	return "http://" + host + "/"
 }
 
-// playerURL is the address that the browser opens. The secret in it gates the
-// player API (D46).
-func (d *daemon) playerURL(resume int) string {
-	url := "http://127.0.0.1:" + strconv.Itoa(d.port) + "/player?k=" + d.secret
-	if resume >= 0 {
-		url += "&resume=" + strconv.Itoa(resume)
+// fallbackInfo gives the data of the fallback screen (D18): the same facts that
+// the page of the browser player showed. The player adds the clock and the
+// burn-in step, and draws the screen again when a fact changes.
+//
+// The report is the loopback one: the screen is the device itself, so it shows
+// the pairing code (D46).
+func (d *daemon) fallbackInfo() fallback.Info {
+	st := d.status(true, true)
+	var lines []string
+	if !st.ClockSynced {
+		lines = append(lines, "Waiting for the clock.")
 	}
-	return url
+	if st.ConfigFromShadow {
+		lines = append(lines, "The configuration comes from the backup copy on the device.")
+	}
+	for _, w := range st.Warnings {
+		if w.Message != "" && w.Code != manifest.WarnClockUnsynced && w.Code != manifest.WarnConfigShadow {
+			lines = append(lines, w.Message)
+		}
+	}
+	return fallback.Info{
+		Name:        st.Name,
+		DeviceID:    st.DeviceID,
+		URL:         d.adminURL(),
+		IPs:         st.IPs,
+		PairingCode: st.PairingCode,
+		Warning:     strings.Join(lines, "   •   "),
+	}
 }
 
 // watchdogSettings gives the live thresholds of the recovery ladder (D30). The
 // supervisor asks at each check, so a save or a hand edit of [watchdog] takes
 // effect with no restart.
-func (d *daemon) watchdogSettings() browser.WatchdogSettings {
+func (d *daemon) watchdogSettings() player.WatchdogSettings {
 	w := d.config().Watchdog
-	return browser.WatchdogSettings{
+	return player.WatchdogSettings{
 		Enabled:              w.Enabled,
 		HeartbeatTimeout:     time.Duration(w.HeartbeatTimeout) * time.Second,
 		RestartWindow:        time.Duration(w.RestartWindow) * time.Minute,
@@ -841,9 +847,13 @@ func (d *daemon) watchdogSettings() browser.WatchdogSettings {
 	}
 }
 
-func (d *daemon) displaySettings() browser.DisplaySettings {
+func (d *daemon) displaySettings() player.DisplaySettings {
 	cfg := d.config()
-	return browser.DisplaySettings{Rotation: cfg.Display.Rotation, VideoMode: cfg.Display.VideoMode}
+	return player.DisplaySettings{
+		Rotation:    cfg.Display.Rotation,
+		VideoMode:   cfg.Display.VideoMode,
+		VideoOutput: cfg.Display.VideoOutput,
+	}
 }
 
 // status builds the health report.
@@ -855,9 +865,9 @@ func (d *daemon) displaySettings() browser.DisplaySettings {
 func (d *daemon) status(loopback, trusted bool) manifest.Status {
 	cfg := d.config()
 	state := d.deviceState()
-	browserState := d.sup.State()
+	playerState := d.sup.State()
 	snap := d.lib.Snapshot()
-	nowPlayingSHA(browserState.NowPlaying, snap)
+	nowPlayingSHA(playerState.NowPlaying, snap)
 
 	problems := make([]string, 0, len(snap.Problems))
 	for _, p := range snap.Problems {
@@ -881,13 +891,15 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 		ConfigWarningCode: code,
 		DeviceID:          d.id.DeviceID,
 		HardwareChanged:   state.HardwareChanged,
-		PlayerState:       browserState.Browser,
-		DisplayConnected:  browserState.DisplayConnected,
+		PlayerState:       playerState.Player,
+		VideoOutput:       playerState.VideoOutput,
+		Hwdec:             playerState.Hwdec,
+		DisplayConnected:  playerState.DisplayConnected,
 		// The power controller is what switched the display, so it is the truth
-		// about the screen. The browser is suspended as part of a transition, and
+		// about the screen. The player is suspended as part of a transition, and
 		// nothing else suspends it.
 		ScreenOn:       d.screen.ScreenOn(),
-		NowPlaying:     browserState.NowPlaying,
+		NowPlaying:     playerState.NowPlaying,
 		Paired:         fleet.Paired,
 		ServerURL:      fleet.ServerURL,
 		LastSync:       fleet.LastSync,
@@ -928,11 +940,6 @@ func nowPlayingSHA(np *manifest.NowPlaying, snap library.Snapshot) {
 
 // ---------------------------------------------------------------- the playlist
 
-// activePlaylist tells the browser what must play now.
-func (d *daemon) activePlaylist() browser.Active {
-	return browser.Active{Playlist: d.sched.Active()}
-}
-
 // playerManifest builds the manifest of the active playlist.
 func (d *daemon) playerManifest() library.PlayerManifest {
 	cfg := d.config()
@@ -955,16 +962,16 @@ func (d *daemon) newSeed() {
 	d.mu.Unlock()
 }
 
-// libraryChanged runs after each scan of the media root. The player asks for the
-// manifest again.
+// libraryChanged runs after each scan of the media root. The player compares the
+// new manifest with the list of mpv and replaces the list only when it changed.
 func (d *daemon) libraryChanged() {
 	if d.sup == nil {
-		return // the first scan, before the browser exists
+		return // the first scan, before the player exists
 	}
-	d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": d.sched.Active()})
+	d.sup.PlaylistChanged()
 }
 
-// watchSchedule turns a playlist change into an event for the player.
+// watchSchedule gives the player a new playlist when the schedule changes.
 func (d *daemon) watchSchedule(done <-chan struct{}) {
 	changes, cancel := d.sched.Subscribe()
 	defer cancel()
@@ -973,9 +980,9 @@ func (d *daemon) watchSchedule(done <-chan struct{}) {
 		select {
 		case <-done:
 			return
-		case name := <-changes:
+		case <-changes:
 			d.newSeed()
-			d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": name})
+			d.sup.PlaylistChanged()
 		}
 	}
 }
@@ -1205,13 +1212,12 @@ func (d *daemon) adopt(cfg config.Config, fromShadow bool, warning, code string)
 }
 
 // applyChanges does the work of a change that takes effect at once, and restarts
-// the browser for a change that it takes on its command line.
+// the player for a change that mpv takes on its command line.
 //
-// One playlist event for the whole apply. A change of two playback fields sent
-// two events. Two events that arrive together made the player start two play
-// loops: double speed and two video decoders.
+// One playlist message for the whole apply: a change of two playback fields must
+// not load the playlist two times.
 func (d *daemon) applyChanges(changes []config.Change) {
-	browserRestart := false
+	playerRestart := false
 	tellPlayer := false
 	sound := false
 	for _, c := range changes {
@@ -1220,7 +1226,7 @@ func (d *daemon) applyChanges(changes []config.Change) {
 		}
 		switch c.Class {
 		case config.Player:
-			browserRestart = true
+			playerRestart = true
 		case config.Live:
 			// The scheduler and the library read the configuration themselves.
 			// Only the player needs to be told.
@@ -1231,16 +1237,15 @@ func (d *daemon) applyChanges(changes []config.Change) {
 	}
 	d.sched.Evaluate()
 	if tellPlayer {
-		d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": d.sched.Active()})
+		d.sup.PlaylistChanged()
 	}
-	// The sound comes before the browser restart. Chromium reads the default ALSA
-	// device when it starts, so /etc/asound.conf must hold the new card before the
-	// new process runs (D11). Apply writes that file first and sets the mixer
-	// after it.
+	// The sound comes before the player restart. mpv opens the default ALSA device
+	// when it starts, so /etc/asound.conf must hold the new card before the new
+	// process runs (D11). Apply writes that file first and sets the mixer after it.
 	if sound && d.audio != nil {
 		d.audio.Apply(d.config().Audio)
 	}
-	if browserRestart {
+	if playerRestart {
 		d.sup.DisplayChanged()
 	}
 }
@@ -1316,7 +1321,7 @@ func configMTime(mediaRoot string) time.Time {
 
 // command runs a device command from the API or from the fleet queue.
 //
-// A command that the browser could not take gives browser.ErrBusy, and the API
+// A command that the player could not take gives player.ErrBusy, and the API
 // answers 503. A command that says "done" and does nothing is worse than an error:
 // the person looks at the screen and waits.
 func (d *daemon) command(name string) error {
@@ -1324,7 +1329,7 @@ func (d *daemon) command(name string) error {
 	case "reboot":
 		go d.reboot("the admin asked for a reboot")
 	case "restart-browser":
-		return d.sup.Restart("the admin asked for a browser restart")
+		return d.sup.Restart("the admin asked for a player restart")
 	case "screen-on":
 		// The power controller owns the order and the manual override: the command
 		// holds until the next edge of the screen schedule (D31).
@@ -1385,7 +1390,7 @@ func setRootPassword(stateDir, password string) error {
 	}
 	// chpasswd reads LINES of "user:password". A newline in the value therefore sets
 	// the password of a SECOND account. A value that carried a newline and then
-	// "kiosk:letmein" gave a login to the account that runs the browser, which is
+	// "kiosk:letmein" gave a login to the account that runs the player, which is
 	// the one isolation boundary of the device (D43). A colon would cut the value at
 	// the wrong place.
 	if strings.IndexFunc(password, isControlOrColon) >= 0 {
@@ -1412,8 +1417,9 @@ func isControlOrColon(r rune) bool {
 // section 15). updater.MarkerPath names the file, so the daemon, the gate and the
 // tests cannot spell it three ways.
 //
-// "Up" is the HTTP server and the browser. A device that waits for a display is
-// up: a headless boot with the television off must not roll an update back.
+// "Up" is the HTTP server and the first picture of mpv: content or the fallback
+// screen. A device that waits for a display is up: a headless boot with the
+// television off must not roll an update back.
 //
 // The marker lives in the run directory, which is a tmpfs. What it proves is
 // "the release that runs NOW came up", so its life is one boot, and a reboot
@@ -1458,17 +1464,4 @@ func (d *daemon) writeHealthMarker(done <-chan struct{}) {
 			return
 		}
 	}
-}
-
-// runtimeDir gives XDG_RUNTIME_DIR of the browser account. cage and Wayland need
-// it, and /run is a tmpfs, so the OpenRC service makes the directory at each boot.
-func runtimeDir(kioskUser string) string {
-	if kioskUser == "" {
-		return ""
-	}
-	u, err := user.Lookup(kioskUser)
-	if err != nil {
-		return ""
-	}
-	return "/run/user/" + u.Uid
 }

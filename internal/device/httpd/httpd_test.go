@@ -16,15 +16,13 @@ import (
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/config"
-	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/device/player"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
 )
-
-const testSecret = "0123456789abcdef0123456789abcdef"
 
 // fx is the test device: a real library over a temporary media root, a real
 // session store and limiter, and fake functions for everything else.
@@ -33,20 +31,14 @@ type fx struct {
 	h     http.Handler
 	media string
 	state string
-	hub   *Hub
 
 	cfg        config.Config
 	saved      *config.Config
 	applied    Applied
 	commands   []string
 	rootPW     string
-	beats      []browser.Heartbeat
-	readyHits  int
 	cookie     *http.Cookie
 	commandErr error
-	// noSecret builds the handler with no player secret. A daemon that never
-	// made one must answer no player call at all.
-	noSecret bool
 
 	// The fleet client. fleet is nil for a build that carries none, and then the
 	// pairing routes answer 501. serverName is the name of the server that
@@ -62,7 +54,7 @@ type fx struct {
 
 func newFx(t *testing.T) *fx {
 	t.Helper()
-	f := &fx{t: t, media: t.TempDir(), state: t.TempDir(), hub: NewHub()}
+	f := &fx{t: t, media: t.TempDir(), state: t.TempDir()}
 	f.cfg = config.Default()
 	f.cfg.Web.Password = "letmein"
 	f.cfg.Network.WifiSSID = "Office"
@@ -80,10 +72,6 @@ func (f *fx) rebuild() {
 	lib := library.New(library.Options{MediaRoot: f.media, StateDir: f.state, Log: log})
 	lib.Rescan()
 
-	secret := testSecret
-	if f.noSecret {
-		secret = ""
-	}
 	// The fleet client of the fixture. A nil set of functions is a build with no
 	// fleet client, and then every pairing route answers 501.
 	var pairState func() PairState
@@ -103,15 +91,13 @@ func (f *fx) rebuild() {
 		managed = func() (string, bool) { return f.serverName, f.serverName != "" }
 	}
 	f.h = New(Deps{
-		MediaRoot:    f.media,
-		Log:          log,
-		Library:      lib,
-		Sessions:     httpguard.NewSessions(),
-		Limiter:      httpguard.NewLimiter(),
-		Hub:          f.hub,
-		PlayerSecret: secret,
-		Hosts:        func() []string { return []string{"localhost", "127.0.0.1", "lobby.local"} },
-		Password:     func() string { return f.cfg.Web.Password },
+		MediaRoot: f.media,
+		Log:       log,
+		Library:   lib,
+		Sessions:  httpguard.NewSessions(),
+		Limiter:   httpguard.NewLimiter(),
+		Hosts:     func() []string { return []string{"localhost", "127.0.0.1", "lobby.local"} },
+		Password:  func() string { return f.cfg.Web.Password },
 		Status: func(loopback, trusted bool) manifest.Status {
 			st := manifest.Status{DeviceID: "px-1a2b3c4d", Name: f.cfg.Device.Name}
 			if loopback {
@@ -146,11 +132,6 @@ func (f *fx) rebuild() {
 			return f.applied, nil
 		},
 		ActivePlaylist: func() string { return "default" },
-		PlayerManifest: func() library.PlayerManifest {
-			return library.PlayerManifest{Fallback: true}
-		},
-		Heartbeat:   func(hb browser.Heartbeat) { f.beats = append(f.beats, hb) },
-		PlayerReady: func() { f.readyHits++ },
 		Command: func(name string) error {
 			f.commands = append(f.commands, name)
 			return f.commandErr
@@ -158,7 +139,6 @@ func (f *fx) rebuild() {
 		// The daemon also looks for a release bundle here. A test needs the scan
 		// only (D52).
 		Rescan:          lib.Rescan,
-		AdminURL:        func() string { return "http://lobby.local/" },
 		SetRootPassword: func(pw string) error { f.rootPW = pw; return nil },
 		PairState:       pairState,
 		Pair:            pair,
@@ -172,7 +152,6 @@ type request struct {
 	host       string
 	remote     string
 	noCSRF     bool
-	secret     string
 	headers    map[string]string
 	rawBody    io.Reader
 	noCookie   bool
@@ -210,9 +189,6 @@ func (f *fx) do(method, target string, body any, opts ...func(*request)) *httpte
 	r.RemoteAddr = req.remote
 	if method != http.MethodGet && method != http.MethodHead && !req.noCSRF {
 		r.Header.Set(httpguard.HeaderName, httpguard.HeaderValue)
-	}
-	if req.secret != "" {
-		r.Header.Set(PlayerHeader, req.secret)
 	}
 	if req.rangeBytes != "" {
 		r.Header.Set("Range", req.rangeBytes)
@@ -310,41 +286,6 @@ func TestCSRFHeader(t *testing.T) {
 	// A GET needs no header.
 	if w := f.do(http.MethodGet, "/api/status", nil, func(r *request) { r.noCSRF = true }); w.Code != http.StatusOK {
 		t.Errorf("a GET with no header gave %d", w.Code)
-	}
-}
-
-func TestPlayerEndpointsNeedLoopbackAndSecret(t *testing.T) {
-	f := newFx(t)
-	tests := []struct {
-		name   string
-		remote string
-		secret string
-		want   int
-	}{
-		{"loopback with the secret", "127.0.0.1:52000", testSecret, http.StatusOK},
-		{"loopback with no secret", "127.0.0.1:52000", "", http.StatusForbidden},
-		{"loopback with a wrong secret", "127.0.0.1:52000", "0000", http.StatusForbidden},
-		{"the network with the secret", "192.168.1.30:52000", testSecret, http.StatusForbidden},
-		{"the network with no secret", "192.168.1.30:52000", "", http.StatusForbidden},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			w := f.do(http.MethodGet, "/api/player/manifest", nil, func(r *request) {
-				r.remote = tt.remote
-				r.secret = tt.secret
-			})
-			if w.Code != tt.want {
-				t.Errorf("got %d, want %d: %s", w.Code, tt.want, w.Body)
-			}
-			mustJSON(t, w)
-		})
-	}
-
-	// The SSE stream carries the secret in the query, because EventSource cannot
-	// set a header.
-	w := f.do(http.MethodGet, "/api/player/manifest?k="+testSecret, nil)
-	if w.Code != http.StatusOK {
-		t.Errorf("the secret in the query gave %d", w.Code)
 	}
 }
 
@@ -706,48 +647,16 @@ func TestRoutesOfTheLaterMilestones(t *testing.T) {
 	}
 }
 
-// ------------------------------------------------------------------ player
+// ------------------------------------------------------------- event streams
 
-func TestPlayerProtocol(t *testing.T) {
-	f := newFx(t)
-	withSecret := func(r *request) { r.secret = testSecret }
+func TestEventStream(t *testing.T) {
+	hub := NewHub()
 
-	// The manifest.
-	got := body(t, f.do(http.MethodGet, "/api/player/manifest", nil, withSecret))
-	if got["fallback"] != true {
-		t.Errorf("manifest = %v", got)
-	}
-
-	// A heartbeat.
-	w := f.do(http.MethodPost, "/api/player/heartbeat", map[string]any{
-		"playlist": "default", "index": 1, "name": "promo.mp4", "kind": "video",
-		"state": "playing", "frames": 18211, "position": 12.4,
-	}, withSecret)
-	if w.Code != http.StatusOK {
-		t.Fatalf("heartbeat gave %d: %s", w.Code, w.Body)
-	}
-	if len(f.beats) != 1 || f.beats[0].Frames != 18211 || f.beats[0].Name != "promo.mp4" {
-		t.Fatalf("the daemon got %+v", f.beats)
-	}
-
-	// The answer to a grace request.
-	if w := f.do(http.MethodPost, "/api/player/ready", nil, withSecret); w.Code != http.StatusOK {
-		t.Fatalf("ready gave %d", w.Code)
-	}
-	if f.readyHits != 1 {
-		t.Errorf("ready hits = %d", f.readyHits)
-	}
-}
-
-func TestPlayerEvents(t *testing.T) {
-	f := newFx(t)
-
-	// httptest.NewRecorder cannot stream, so this test uses a real server. The
-	// client is the loopback address, which the player endpoints need.
-	server := httptest.NewServer(f.h)
+	// httptest.NewRecorder cannot stream, so this test uses a real server.
+	server := httptest.NewServer(http.HandlerFunc(hub.serve))
 	defer server.Close()
 
-	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/player/events?k="+testSecret, nil)
+	req, err := http.NewRequest(http.MethodGet, server.URL+"/api/install-to-disk/events", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -765,10 +674,10 @@ func TestPlayerEvents(t *testing.T) {
 
 	// Wait for the subscription and then send an event.
 	deadline := time.Now().Add(5 * time.Second)
-	for f.hub.Listeners() == 0 && time.Now().Before(deadline) {
+	for hub.Listeners() == 0 && time.Now().Before(deadline) {
 		time.Sleep(5 * time.Millisecond)
 	}
-	f.hub.Send(EventPlaylist, map[string]string{"playlist": "evening"})
+	hub.Send("progress", map[string]string{"phase": "copy"})
 
 	buf := make([]byte, 512)
 	n, err := res.Body.Read(buf)
@@ -779,7 +688,7 @@ func TestPlayerEvents(t *testing.T) {
 	if !strings.Contains(text, ": connected") {
 		t.Errorf("the stream did not open with a comment: %q", text)
 	}
-	if !strings.Contains(text, "event: playlist") {
+	if !strings.Contains(text, "event: progress") {
 		// The first read may hold the comment only. Read once more.
 		n, err = res.Body.Read(buf)
 		if err != nil {
@@ -787,26 +696,8 @@ func TestPlayerEvents(t *testing.T) {
 		}
 		text = string(buf[:n])
 	}
-	if !strings.Contains(text, "event: playlist") || !strings.Contains(text, `"playlist":"evening"`) {
+	if !strings.Contains(text, "event: progress") || !strings.Contains(text, `"phase":"copy"`) {
 		t.Errorf("the event did not arrive: %q", text)
-	}
-}
-
-func TestQRCode(t *testing.T) {
-	f := newFx(t)
-	w := f.do(http.MethodGet, "/api/player/qr.svg", nil, func(r *request) { r.secret = testSecret })
-	if w.Code != http.StatusOK {
-		t.Fatalf("qr.svg gave %d: %s", w.Code, w.Body)
-	}
-	if ct := w.Header().Get("Content-Type"); ct != "image/svg+xml" {
-		t.Errorf("content type = %q", ct)
-	}
-	svg := w.Body.String()
-	if !strings.HasPrefix(svg, "<svg") || !strings.HasSuffix(svg, "</svg>") {
-		t.Errorf("the answer is not an SVG: %.80s", svg)
-	}
-	if !strings.Contains(svg, "viewBox") || !strings.Contains(svg, "<path") {
-		t.Errorf("the SVG holds no image: %.200s", svg)
 	}
 }
 
@@ -1099,15 +990,15 @@ func TestPutConfigDoesNotTouchTheRunningConfig(t *testing.T) {
 	}
 }
 
-// A command that the browser could not take must not answer "done". The person
+// A command that the player could not take must not answer "done". The person
 // looks at the screen and waits for something that will never happen.
-func TestCommandReportsABusyBrowser(t *testing.T) {
+func TestCommandReportsABusyPlayer(t *testing.T) {
 	f := newFx(t)
 	f.login()
-	f.commandErr = browser.ErrBusy
+	f.commandErr = player.ErrBusy
 	w := f.do(http.MethodPost, "/api/commands/restart-browser", nil)
 	if w.Code != http.StatusServiceUnavailable {
-		t.Fatalf("a busy browser gave %d: %s", w.Code, w.Body)
+		t.Fatalf("a busy player gave %d: %s", w.Code, w.Body)
 	}
 	mustJSON(t, w)
 
@@ -1117,33 +1008,13 @@ func TestCommandReportsABusyBrowser(t *testing.T) {
 	}
 }
 
-// A daemon with no player secret must answer no player call at all. Two empty
-// values are equal to a plain constant-time compare, so a secret that never got
-// made would have opened every player endpoint.
-func TestPlayerSecretIsNeverEmpty(t *testing.T) {
-	if len(NewSecret()) != SecretBytes*2 {
-		t.Fatalf("the player secret is %d characters, want %d", len(NewSecret()), SecretBytes*2)
-	}
-	if NewSecret() == NewSecret() {
-		t.Fatal("two secrets are the same")
-	}
-
-	f := newFx(t)
-	f.noSecret = true
-	f.rebuild()
-	w := f.do(http.MethodGet, "/api/player/manifest", nil, func(r *request) { r.secret = "" })
-	if w.Code != http.StatusForbidden {
-		t.Fatalf("a call with no secret against a daemon with no secret gave %d", w.Code)
-	}
-}
-
-// The stream of the player never ends by itself, and Shutdown does not cancel a
-// request context, so every stop of the daemon cost the whole grace time.
+// A stream never ends by itself, and Shutdown does not cancel a request context,
+// so a stop of the daemon during a stream cost the whole grace time.
 func TestHubCloseEndsTheStreams(t *testing.T) {
 	h := NewHub()
 	done := make(chan struct{})
 	w := httptest.NewRecorder()
-	r := httptest.NewRequest(http.MethodGet, "/api/player/events", nil)
+	r := httptest.NewRequest(http.MethodGet, "/api/install-to-disk/events", nil)
 	go func() {
 		h.serve(w, r)
 		close(done)

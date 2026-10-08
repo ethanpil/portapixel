@@ -595,7 +595,7 @@ func startDaemon(t *testing.T, binary, root string) func() {
 		}
 	}
 	cmd := exec.Command(binary, "run",
-		"--browser-cmd", "none",
+		"--player-cmd", "none",
 		"--kiosk-user", "",
 		// Port 0: the race test starts the daemon twenty times, and a fixed port
 		// can still be in the TIME_WAIT state of the round before.

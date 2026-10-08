@@ -11,11 +11,11 @@ import (
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/config"
-	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/health"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
 	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/device/player"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/manifest"
@@ -154,11 +154,10 @@ func TestReloadConfigKeepsTheRunningSettings(t *testing.T) {
 		paths: paths{media: media, state: state},
 		log:   opslog.New(filepath.Join(state, opsLogName)),
 		cfg:   good,
-		hub:   httpd.NewHub(),
 	}
 	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
-	d.sup = browser.New(browser.Options{
-		Command: browser.CommandConfig{Override: browser.DisableCommand},
+	d.sup = player.New(player.Options{
+		Command: player.CommandConfig{Override: player.DisableCommand},
 		Log:     d.log,
 	})
 
@@ -238,7 +237,6 @@ func TestPairedDeviceShowsOnlyFleetContent(t *testing.T) {
 				paths:    paths{media: media, state: state},
 				log:      opslog.New(filepath.Join(state, opsLogName)),
 				cfg:      cfg,
-				hub:      httpd.NewHub(),
 				reporter: health.New(health.Sources{MediaRoot: media, StateDir: state}),
 			}
 			d.lib = library.New(library.Options{
@@ -445,9 +443,9 @@ func TestHealthMarkerGoesToTheRunDirectoryOneTime(t *testing.T) {
 		paths: paths{releases: releases, state: state, run: run},
 		log:   opslog.New(filepath.Join(state, opsLogName)),
 	}
-	// A daemon with no browser counts as up, which is what --browser-cmd none does.
-	d.sup = browser.New(browser.Options{
-		Command: browser.CommandConfig{Override: browser.DisableCommand},
+	// A daemon with no player counts as up, which is what --player-cmd none does.
+	d.sup = player.New(player.Options{
+		Command: player.CommandConfig{Override: player.DisableCommand},
 		Log:     d.log,
 	})
 
@@ -521,7 +519,7 @@ func waitForMarker(t *testing.T, path, what string) string {
 // password of a SECOND account.
 //
 // A value that carried a newline and then "kiosk:letmein" gave a login to the
-// account that runs the browser, which is the one isolation boundary of the device
+// account that runs the player, which is the one isolation boundary of the device
 // (D43). The route needs an admin session, so this is an escalation inside a
 // privileged role; the local admin is still not meant to be able to set any system
 // account.
@@ -572,11 +570,10 @@ func TestThePairingWriteIsNotRefusedByItsOwnGuard(t *testing.T) {
 		paths: paths{media: media, state: state},
 		log:   opslog.New(filepath.Join(state, opsLogName)),
 		cfg:   start,
-		hub:   httpd.NewHub(),
 	}
 	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
-	d.sup = browser.New(browser.Options{
-		Command: browser.CommandConfig{Override: browser.DisableCommand},
+	d.sup = player.New(player.Options{
+		Command: player.CommandConfig{Override: player.DisableCommand},
 		Log:     d.log,
 	})
 	// A device that IS paired. This is the state at the moment that Pair saves.
@@ -679,11 +676,10 @@ func TestTheRenameCommandSavesThroughTheAdminPath(t *testing.T) {
 		paths: paths{media: media, state: state},
 		log:   opslog.New(filepath.Join(state, opsLogName)),
 		cfg:   start,
-		hub:   httpd.NewHub(),
 	}
 	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
-	d.sup = browser.New(browser.Options{
-		Command: browser.CommandConfig{Override: browser.DisableCommand},
+	d.sup = player.New(player.Options{
+		Command: player.CommandConfig{Override: player.DisableCommand},
 		Log:     d.log,
 	})
 	// A paired device.
@@ -750,11 +746,10 @@ func renameDaemon(t *testing.T, start config.Config) *daemon {
 		log:         opslog.New(filepath.Join(state, opsLogName)),
 		cfg:         start,
 		cfgModified: configMTime(media),
-		hub:         httpd.NewHub(),
 	}
 	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
-	d.sup = browser.New(browser.Options{
-		Command: browser.CommandConfig{Override: browser.DisableCommand},
+	d.sup = player.New(player.Options{
+		Command: player.CommandConfig{Override: player.DisableCommand},
 		Log:     d.log,
 	})
 	d.sync = syncer.New(syncer.Options{

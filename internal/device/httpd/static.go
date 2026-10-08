@@ -1,7 +1,6 @@
 package httpd
 
 import (
-	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -11,9 +10,6 @@ import (
 	"github.com/ethanpil/portapixel/internal/playlist"
 	"github.com/ethanpil/portapixel/web"
 )
-
-// PlayerIndex is the file that the browser opens at /player.
-const PlayerIndex = "index.html"
 
 // The media type registration and the directory rule live in package web, because
 // the daemon and the fleet server serve the same file tree. This package had copies
@@ -29,35 +25,10 @@ func (d Deps) sharedAssets() http.Handler {
 	return http.StripPrefix("/shared/", web.NoListing(http.FileServerFS(web.Shared)))
 }
 
-// playerIndex serves the player SPA at /player. The browser opens
-// /player?k=<secret>, so this is the one route that must answer a file for a URL
-// with no file name in it.
-func (d Deps) playerIndex() http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		data, err := fs.ReadFile(web.Player, PlayerIndex)
-		if err != nil {
-			// The player is not built into this binary yet. Say so in words: a
-			// black screen with a 404 on it teaches nobody anything.
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte("PortaPixel: the player is not in this build yet.\n"))
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Write(data)
-	})
-}
-
-// playerAssets serves the files of the player at /player/.
-func (d Deps) playerAssets() http.Handler {
-	return http.StripPrefix("/player/", web.NoListing(http.FileServerFS(web.Player)))
-}
-
 // serveMedia serves the files of the media root at /media/.
 //
-// http.ServeContent gives us Range requests, so a browser can seek in a video and
-// a fleet client can continue a download (D24). There are no directory listings:
+// http.ServeContent gives us Range requests, so the preview of the admin UI can
+// seek in a video and a fleet client can continue a download (D24). There are no directory listings:
 // the media partition is the user's own content, and the API is how a program
 // looks at it.
 //
@@ -106,8 +77,9 @@ func (d Deps) serveMedia(w http.ResponseWriter, r *http.Request) {
 // the denylist did not know gives the secrets of the device to the network, with
 // no session at all.
 //
-// So /media/ serves a picture and a video and nothing else. The player needs
-// nothing else, and the API is how a program reads a configuration or a playlist.
+// So /media/ serves a picture and a video and nothing else. The previews of the
+// admin UI need nothing else, and the API is how a program reads a configuration
+// or a playlist.
 // The one reserved directory that may serve is _fleet/media/, which holds the
 // objects of the fleet server.
 func servableMedia(rel string) bool {

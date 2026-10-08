@@ -2,14 +2,11 @@ package httpd
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"strings"
 
 	"github.com/ethanpil/portapixel/internal/config"
-	"github.com/ethanpil/portapixel/internal/device/browser"
 	"github.com/ethanpil/portapixel/internal/device/installer"
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/httpguard"
@@ -17,11 +14,6 @@ import (
 	"github.com/ethanpil/portapixel/internal/opslog"
 	"github.com/ethanpil/portapixel/internal/updater"
 )
-
-// PlayerHeader carries the boot secret when the player calls the API. EventSource
-// cannot set a header, so the SSE URL carries the secret in ?k= instead
-// (ARCHITECTURE 7a).
-const PlayerHeader = "X-PortaPixel-Player"
 
 // NotImplemented is the answer of a route that the route table names but that
 // v0.1 does not have. The admin UI is written against the whole table, so the
@@ -53,11 +45,6 @@ type Deps struct {
 	Library   *library.Library
 	Sessions  *httpguard.Sessions
 	Limiter   *httpguard.Limiter
-	Hub       *Hub
-
-	// PlayerSecret gates /api/player/*. It is 32 random hex characters, made at
-	// each start of the daemon.
-	PlayerSecret string
 
 	// Hosts gives the Host header allowlist. It is a function, because the
 	// addresses and the names change while the daemon runs.
@@ -75,12 +62,6 @@ type Deps struct {
 	SaveConfig func(incoming config.Config) (Applied, error)
 	// ActivePlaylist gives the name of the playlist that plays now.
 	ActivePlaylist func() string
-	// PlayerManifest builds the manifest of the active playlist.
-	PlayerManifest func() library.PlayerManifest
-	// Heartbeat takes one player heartbeat.
-	Heartbeat func(browser.Heartbeat)
-	// PlayerReady is the answer of the player to a grace request.
-	PlayerReady func()
 	// Command runs a device command: reboot, restart-browser, screen-on,
 	// screen-off, rescan.
 	Command func(name string) error
@@ -88,8 +69,6 @@ type Deps struct {
 	// It is the work of POST /api/rescan, which is the documented curl hook after
 	// a person copied files onto the stick (plan section 5, D52).
 	Rescan func() library.Snapshot
-	// AdminURL is the address that the QR code on the fallback screen carries.
-	AdminURL func() string
 	// SetRootPassword changes the root password of the system.
 	SetRootPassword func(password string) error
 
@@ -121,23 +100,6 @@ type Deps struct {
 	ShareRoot string
 }
 
-// SecretBytes is the length of the boot secret before it becomes hexadecimal. It
-// is the length that httpguard gives a session token: the player secret opens the
-// same kind of door, so it gets the same strength.
-const SecretBytes = 32
-
-// NewSecret makes the boot secret of the player endpoints.
-func NewSecret() string {
-	var b [SecretBytes]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand does not fail on any system that we run on. A secret from a
-		// source that failed would be a secret of zeros, so the daemon must not
-		// start with one.
-		panic("httpd: the system gave no random bytes for the player secret: " + err.Error())
-	}
-	return hex.EncodeToString(b[:])
-}
-
 // New builds the router with the hardening around it.
 func New(d Deps) http.Handler {
 	mux := http.NewServeMux()
@@ -161,12 +123,10 @@ func New(d Deps) http.Handler {
 		}
 	}
 
-	// Static files. No session: the player must work before anybody logs in, and
-	// the admin UI has to be able to show its own login form.
+	// Static files. No session: the admin UI has to be able to show its own login
+	// form.
 	mux.Handle("GET /", d.adminUI())
 	mux.Handle("GET /shared/", d.sharedAssets())
-	mux.Handle("GET /player", d.playerIndex())
-	mux.Handle("GET /player/", d.playerAssets())
 	mux.HandleFunc("GET /media/", d.serveMedia)
 
 	// Open API.
@@ -217,16 +177,6 @@ func New(d Deps) http.Handler {
 	auth("POST /api/pair", d.postPair)
 	auth("DELETE /api/pair", d.deletePair)
 
-	// The player API: the device itself, with the boot secret.
-	player := func(pattern string, h http.HandlerFunc) {
-		api(pattern, httpguard.LoopbackOnly(d.requireSecret(h)))
-	}
-	player("GET /api/player/manifest", d.getPlayerManifest)
-	player("POST /api/player/heartbeat", d.postHeartbeat)
-	player("GET /api/player/events", d.Hub.serve)
-	player("POST /api/player/ready", d.postPlayerReady)
-	player("GET /api/player/qr.svg", d.getQR)
-
 	// The catch-all. Go 1.22 gives the more specific pattern to a request, so every
 	// real route wins over it.
 	//
@@ -270,26 +220,6 @@ func notFound(w http.ResponseWriter, r *http.Request) {
 
 func methodNotAllowed(w http.ResponseWriter, r *http.Request) {
 	writeError(w, http.StatusMethodNotAllowed, "this route does not take this method")
-}
-
-// requireSecret checks the boot secret of the player endpoints (D46). The secret
-// comes in the header, or in ?k= for the SSE stream, which cannot set a header.
-//
-// httpguard.PasswordEqual does the comparison: it takes constant time and it
-// refuses an empty value on either side. One helper owns that rule, so a second
-// copy of it cannot drift.
-func (d Deps) requireSecret(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		given := r.Header.Get(PlayerHeader)
-		if given == "" {
-			given = r.URL.Query().Get("k")
-		}
-		if !httpguard.PasswordEqual(given, d.PlayerSecret) {
-			writeError(w, http.StatusForbidden, "this endpoint needs the player secret")
-			return
-		}
-		next(w, r)
-	}
 }
 
 // notImplemented answers a route of a later milestone.

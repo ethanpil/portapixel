@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"strings"
 
 	"github.com/ethanpil/portapixel/internal/config"
+	"github.com/ethanpil/portapixel/internal/device/player"
 	"github.com/ethanpil/portapixel/internal/playlist"
 	"github.com/ethanpil/portapixel/web"
 )
@@ -35,6 +37,8 @@ func selftestCommand(args []string) int {
 	// 1. The web assets.
 	check("the player is in the binary", web.Exists(web.Player, "index.html"), "web/player/index.html is missing")
 	check("the shared stylesheet is in the binary", web.Exists(web.Shared, "pp.css"), "web/shared/pp.css is missing")
+	check("the transition script is in the binary", strings.Contains(string(player.TransitionScript()), "on_unload"),
+		"internal/device/player/transitions.lua is missing")
 
 	// 2. The configuration template. Render it, parse it again, and check it: a
 	// template that cannot be parsed would break the first boot of every device.

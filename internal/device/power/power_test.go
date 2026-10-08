@@ -102,7 +102,7 @@ func TestTransitionOrder(t *testing.T) {
 				Method:     func() string { return tt.method },
 				Run:        r,
 				Blank:      r,
-				Browser:    r,
+				Player:     r,
 				CECDevices: func() []string { return []string{"/dev/cec0"} },
 			})
 			// The CEC path needs the device that the probe found. A fixed method
@@ -154,7 +154,7 @@ func checkSequence(t *testing.T, what, got string, want []string) {
 func TestADisplayFaultStillStopsThePlayer(t *testing.T) {
 	r := newRecorder()
 	r.fails["dpms"] = true
-	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Browser: r})
+	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Player: r})
 
 	if err := c.Set(false, "a test"); err != nil {
 		t.Fatalf("off: %v", err)
@@ -189,7 +189,7 @@ func TestManualCommandHoldsUntilTheNextEdge(t *testing.T) {
 		Method:     func() string { return MethodNone },
 		ShouldBeOn: func(time.Time) bool { return on },
 		Run:        r,
-		Browser:    r,
+		Player:     r,
 		Tick:       time.Hour,
 	})
 	c.Start()
@@ -228,10 +228,10 @@ func TestManualCommandHoldsUntilTheNextEdge(t *testing.T) {
 func TestNoScheduleKeepsTheScreenOn(t *testing.T) {
 	r := newRecorder()
 	c := New(Options{
-		Method:  func() string { return MethodNone },
-		Run:     r,
-		Browser: r,
-		Tick:    time.Hour,
+		Method: func() string { return MethodNone },
+		Run:    r,
+		Player: r,
+		Tick:   time.Hour,
 	})
 	c.Start()
 	for range 5 {
@@ -252,7 +252,7 @@ func TestStartFollowsTheSchedule(t *testing.T) {
 		Method:     func() string { return MethodNone },
 		ShouldBeOn: func(time.Time) bool { return false },
 		Run:        r,
-		Browser:    r,
+		Player:     r,
 	})
 	c.Start()
 	if c.ScreenOn() {
@@ -306,7 +306,7 @@ func TestAutoPicksTheMethod(t *testing.T) {
 				Method:     func() string { return MethodAuto },
 				Run:        r,
 				Blank:      r,
-				Browser:    r,
+				Player:     r,
 				CECDevices: func() []string { return tt.devices },
 			})
 
@@ -333,7 +333,7 @@ func TestCECOnSendsActiveSource(t *testing.T) {
 		Method:     func() string { return MethodAuto },
 		Run:        r,
 		Blank:      r,
-		Browser:    r,
+		Player:     r,
 		CECDevices: func() []string { return []string{"/dev/cec1"} },
 	})
 	if err := c.Set(false, "a test"); err != nil {
@@ -393,7 +393,7 @@ func TestSetWaitsForATransitionThatRuns(t *testing.T) {
 		Now:        time.Now,
 		Run:        r,
 		Blank:      blocking,
-		Browser:    r,
+		Player:     r,
 	})
 	c.Start()
 
@@ -452,7 +452,7 @@ func (b *blockingBlanker) On() error { return b.inner.On() }
 // black for the whole day.
 func TestAPlayerThatRefusesKeepsTheOldState(t *testing.T) {
 	r := newRecorder()
-	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Browser: r})
+	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Player: r})
 
 	// Off first, which works, so the state is a known one.
 	if err := c.Set(false, "a test"); err != nil {
@@ -486,7 +486,7 @@ func TestAPlayerThatRefusesKeepsTheOldState(t *testing.T) {
 func TestAPlayerThatRefusesToStopLeavesTheDisplayOn(t *testing.T) {
 	r := newRecorder()
 	r.playerErr = errors.New("the player is busy; ask again in a moment")
-	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Browser: r})
+	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Player: r})
 
 	if err := c.Set(false, "a test"); err == nil {
 		t.Fatal("Set(false) answered no error while the player refused")
