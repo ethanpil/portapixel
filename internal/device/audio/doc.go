@@ -11,7 +11,7 @@
 //     once.
 //   - The output goes to /etc/asound.conf, which names the default card of ALSA.
 //     Chromium reads the default device when it STARTS, so a change of the output
-//     is of the class "browser" in internal/config: the browser must restart
+//     is of the class "player" in internal/config: the player must restart
 //     before a person hears the new card (internal/config/change.go).
 //
 // The card comes from a name pattern in /proc/asound/cards: "hdmi" takes the
