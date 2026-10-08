@@ -8,19 +8,20 @@ import (
 	"time"
 )
 
-// recorder is the fake program runner and the fake browser in one object, so that
-// a test can read the ORDER of the two. The order is the whole point of this
-// package: wlr-randr talks to the compositor of the browser session.
+// recorder is the fake program runner, the fake player and the fake DRM display
+// in one object, so that a test can read the ORDER of the three. The order is the
+// whole point of this package: only the DRM master may switch a display, and the
+// player is the master while it runs.
 type recorder struct {
 	steps []string
 	// answers maps a program name to the output that it gives. A name that is not
 	// in the map gives no output and no error.
 	answers map[string]string
-	// fails names the programs that fail.
+	// fails names the programs that fail. The name "dpms" makes the Blanker fail.
 	fails map[string]bool
-	// browserErr is what Suspend and Resume give back. browser.ErrBusy is the real
-	// one: the command queue of the browser is full while a cold launch runs.
-	browserErr error
+	// playerErr is what Suspend and Resume give back. The real player gives an
+	// error when its command queue is full while a cold launch runs.
+	playerErr error
 }
 
 func newRecorder() *recorder {
@@ -36,59 +37,71 @@ func (r *recorder) Run(ctx context.Context, name string, args ...string) ([]byte
 }
 
 func (r *recorder) Suspend() error {
-	r.steps = append(r.steps, "browser suspend")
-	return r.browserErr
+	r.steps = append(r.steps, "player suspend")
+	return r.playerErr
 }
 
 func (r *recorder) Resume() error {
-	r.steps = append(r.steps, "browser resume")
-	return r.browserErr
+	r.steps = append(r.steps, "player resume")
+	return r.playerErr
+}
+
+func (r *recorder) Off() error {
+	r.steps = append(r.steps, "dpms off")
+	if r.fails["dpms"] {
+		return errors.New("the display says no")
+	}
+	return nil
+}
+
+func (r *recorder) On() error {
+	r.steps = append(r.steps, "dpms on")
+	if r.fails["dpms"] {
+		return errors.New("the display says no")
+	}
+	return nil
 }
 
 // joined gives the steps as one line, so a test can look for a sequence.
 func (r *recorder) joined() string { return strings.Join(r.steps, " | ") }
 
-const randrOutput = "HDMI-A-1 \"Acme 27\"\n  Make: Acme\n"
-
-// The off path must switch the display BEFORE it stops the browser, and the on
-// path must start the browser first. A browser that stopped first takes the
-// compositor with it, and wlr-randr then has nothing to talk to: the display
-// stays on all night.
+// The off path must stop the player BEFORE it switches the display, and the on
+// path must switch the display before it starts the player. The player is the
+// DRM master while it runs. A DPMS call while the player runs fails, or it fights
+// the player for the device.
 func TestTransitionOrder(t *testing.T) {
 	tests := []struct {
 		name   string
 		method string
-		answer string
 		off    []string
 		on     []string
 	}{
 		{
-			name:   "dpms switches the output and then stops the browser",
+			name:   "dpms stops the player and then switches the display",
 			method: MethodDPMS,
-			answer: randrOutput,
-			off:    []string{"wlr-randr --output HDMI-A-1 --off", "browser suspend"},
-			on:     []string{"browser resume", "wlr-randr --output HDMI-A-1 --on"},
+			off:    []string{"player suspend", "dpms off"},
+			on:     []string{"dpms on", "player resume"},
 		},
 		{
-			name:   "cec sends standby and then stops the browser",
+			name:   "cec stops the player and then sends standby",
 			method: MethodCEC,
-			off:    []string{"cec-ctl -d /dev/cec0 --playback --to 0 --standby", "browser suspend"},
-			on:     []string{"browser resume", "cec-ctl -d /dev/cec0 --playback --to 0 --image-view-on"},
+			off:    []string{"player suspend", "cec-ctl -d /dev/cec0 --playback --to 0 --standby"},
+			on:     []string{"cec-ctl -d /dev/cec0 --playback --to 0 --image-view-on", "player resume"},
 		},
 		{
-			name:   "none stops the browser and runs no program",
+			name:   "none stops the player and runs no program",
 			method: MethodNone,
-			off:    []string{"browser suspend"},
-			on:     []string{"browser resume"},
+			off:    []string{"player suspend"},
+			on:     []string{"player resume"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newRecorder()
-			r.answers[randrTool] = tt.answer
 			c := New(Options{
 				Method:     func() string { return tt.method },
 				Run:        r,
+				Blank:      r,
 				Browser:    r,
 				CECDevices: func() []string { return []string{"/dev/cec0"} },
 			})
@@ -101,6 +114,9 @@ func TestTransitionOrder(t *testing.T) {
 				t.Fatalf("off: %v", err)
 			}
 			checkSequence(t, "off", r.joined(), tt.off)
+			if got, want := len(r.steps), len(tt.off); got != want {
+				t.Errorf("off ran %d steps (%q), want %d", got, r.joined(), want)
+			}
 			if c.ScreenOn() {
 				t.Error("ScreenOn is true after the screen went off")
 			}
@@ -110,6 +126,9 @@ func TestTransitionOrder(t *testing.T) {
 				t.Fatalf("on: %v", err)
 			}
 			checkSequence(t, "on", r.joined(), tt.on)
+			if got, want := len(r.steps), len(tt.on); got != want {
+				t.Errorf("on ran %d steps (%q), want %d", got, r.joined(), want)
+			}
 			if !c.ScreenOn() {
 				t.Error("ScreenOn is false after the screen came on")
 			}
@@ -130,22 +149,33 @@ func checkSequence(t *testing.T, what, got string, want []string) {
 	}
 }
 
-// A display that does not switch must not keep a browser running. The fault is a
-// log line; the browser still stops.
-func TestADisplayFaultStillStopsTheBrowser(t *testing.T) {
+// A display that does not switch must not keep a player running. The fault is a
+// log line; the player is stopped and stays stopped.
+func TestADisplayFaultStillStopsThePlayer(t *testing.T) {
 	r := newRecorder()
-	r.answers[randrTool] = randrOutput
-	r.fails[randrTool] = true
-	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Browser: r})
+	r.fails["dpms"] = true
+	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Browser: r})
 
 	if err := c.Set(false, "a test"); err != nil {
 		t.Fatalf("off: %v", err)
 	}
-	if !strings.Contains(r.joined(), "browser suspend") {
-		t.Errorf("steps = %q, want a browser suspend", r.joined())
+	if !strings.Contains(r.joined(), "player suspend") {
+		t.Errorf("steps = %q, want a player suspend", r.joined())
 	}
 	if c.ScreenOn() {
 		t.Error("ScreenOn is true after the screen went off")
+	}
+
+	// A display that does not come on must not keep the player stopped.
+	r.steps = nil
+	if err := c.Set(true, "a test"); err != nil {
+		t.Fatalf("on: %v", err)
+	}
+	if !strings.Contains(r.joined(), "player resume") {
+		t.Errorf("steps = %q, want a player resume", r.joined())
+	}
+	if !c.ScreenOn() {
+		t.Error("ScreenOn is false after the screen came on")
 	}
 }
 
@@ -228,8 +258,8 @@ func TestStartFollowsTheSchedule(t *testing.T) {
 	if c.ScreenOn() {
 		t.Error("ScreenOn is true after a start inside the off window")
 	}
-	if !strings.Contains(r.joined(), "browser suspend") {
-		t.Errorf("steps = %q, want a browser suspend", r.joined())
+	if !strings.Contains(r.joined(), "player suspend") {
+		t.Errorf("steps = %q, want a player suspend", r.joined())
 	}
 }
 
@@ -271,11 +301,11 @@ func TestAutoPicksTheMethod(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			r := newRecorder()
 			r.answers[cecTool] = tt.probe
-			r.answers[randrTool] = randrOutput
 			r.fails[cecTool] = tt.fails
 			c := New(Options{
 				Method:     func() string { return MethodAuto },
 				Run:        r,
+				Blank:      r,
 				Browser:    r,
 				CECDevices: func() []string { return tt.devices },
 			})
@@ -302,6 +332,7 @@ func TestCECOnSendsActiveSource(t *testing.T) {
 	c := New(Options{
 		Method:     func() string { return MethodAuto },
 		Run:        r,
+		Blank:      r,
 		Browser:    r,
 		CECDevices: func() []string { return []string{"/dev/cec1"} },
 	})
@@ -340,31 +371,6 @@ func TestPhysicalAddress(t *testing.T) {
 	}
 }
 
-func TestFirstOutput(t *testing.T) {
-	tests := []struct {
-		name string
-		text string
-		want string
-		ok   bool
-	}{
-		{"one output", "HDMI-A-1 \"Acme\"\n  Make: Acme\n", "HDMI-A-1", true},
-		{"windows line ends", "DP-1 \"x\"\r\n  Make: y\r\n", "DP-1", true},
-		{"only indented lines", "  Make: Acme\n", "", false},
-		{"nothing", "", "", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := firstOutput(tt.text)
-			if (err == nil) != tt.ok {
-				t.Fatalf("err = %v, want ok = %v", err, tt.ok)
-			}
-			if got != tt.want {
-				t.Errorf("firstOutput() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 // A manual command that meets a transition of the schedule must wait for it and
 // then act on the state that the transition left.
 //
@@ -374,19 +380,19 @@ func TestFirstOutput(t *testing.T) {
 // hours away.
 func TestSetWaitsForATransitionThatRuns(t *testing.T) {
 	r := newRecorder()
-	r.answers[randrTool] = randrOutput
 
 	// The display call of the loop blocks until the test lets it go.
 	inCall := make(chan struct{})
 	release := make(chan struct{})
-	blocking := &blockingRunner{inner: r, inCall: inCall, release: release}
+	blocking := &blockingBlanker{inner: r, inCall: inCall, release: release}
 
 	want := true
 	c := New(Options{
 		Method:     func() string { return MethodDPMS },
 		ShouldBeOn: func(time.Time) bool { return want },
 		Now:        time.Now,
-		Run:        blocking,
+		Run:        r,
+		Blank:      blocking,
 		Browser:    r,
 	})
 	c.Start()
@@ -416,36 +422,37 @@ func TestSetWaitsForATransitionThatRuns(t *testing.T) {
 	}
 }
 
-// blockingRunner holds the first call inside the runner, so that a test can make
-// two goroutines meet in the middle of a transition.
-type blockingRunner struct {
-	inner   Runner
+// blockingBlanker holds the first Off call, so that a test can make two
+// goroutines meet in the middle of a transition.
+type blockingBlanker struct {
+	inner   Blanker
 	inCall  chan struct{}
 	release chan struct{}
 	held    bool
 }
 
-func (b *blockingRunner) Run(ctx context.Context, name string, args ...string) ([]byte, error) {
-	if !b.held && name == randrTool && len(args) > 1 {
+func (b *blockingBlanker) Off() error {
+	if !b.held {
 		b.held = true
 		close(b.inCall)
 		<-b.release
 	}
-	return b.inner.Run(ctx, name, args...)
+	return b.inner.Off()
 }
 
-// A browser that refuses the message means that the transition did NOT happen. The
+func (b *blockingBlanker) On() error { return b.inner.On() }
+
+// A player that refuses the message means that the transition did NOT happen. The
 // state must stay where it was, so that the next tick of the loop tries again.
 //
 // This branch recorded the new state and wrote "power.on" anyway. The command queue
-// of the browser is full while a cold launch runs, so the screen-on at on_time got
-// ErrBusy. step() then saw the state that the schedule wanted and returned. Nothing
-// ever tried again: /api/status said screen_on true and the screen was black for
-// the whole day.
-func TestABrowserThatRefusesKeepsTheOldState(t *testing.T) {
+// of the player is full while a cold launch runs, so the screen-on at on_time got
+// an error. step() then saw the state that the schedule wanted and returned.
+// Nothing ever tried again: /api/status said screen_on true and the screen was
+// black for the whole day.
+func TestAPlayerThatRefusesKeepsTheOldState(t *testing.T) {
 	r := newRecorder()
-	r.answers["wlr-randr"] = randrOutput
-	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Browser: r})
+	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Browser: r})
 
 	// Off first, which works, so the state is a known one.
 	if err := c.Set(false, "a test"); err != nil {
@@ -455,21 +462,39 @@ func TestABrowserThatRefusesKeepsTheOldState(t *testing.T) {
 		t.Fatal("the screen is still on")
 	}
 
-	// The browser is busy. Going on must fail and must change nothing.
-	r.browserErr = errors.New("the browser is busy; ask again in a moment")
+	// The player is busy. Going on must fail and must change nothing.
+	r.playerErr = errors.New("the player is busy; ask again in a moment")
 	if err := c.Set(true, "the screen schedule"); err == nil {
-		t.Fatal("Set(true) answered no error while the browser refused")
+		t.Fatal("Set(true) answered no error while the player refused")
 	}
 	if c.ScreenOn() {
-		t.Error("the controller recorded the screen as on after a browser that refused")
+		t.Error("the controller recorded the screen as on after a player that refused")
 	}
 
-	// The browser answers again, so the next attempt works.
-	r.browserErr = nil
+	// The player answers again, so the next attempt works.
+	r.playerErr = nil
 	if err := c.Set(true, "the screen schedule"); err != nil {
 		t.Fatalf("the second attempt = %v", err)
 	}
 	if !c.ScreenOn() {
 		t.Error("the screen is not on after an attempt that worked")
+	}
+}
+
+// A player that refuses to stop must leave the display alone. The display call
+// would fail or fight the player, and the state stays "on" for the next tick.
+func TestAPlayerThatRefusesToStopLeavesTheDisplayOn(t *testing.T) {
+	r := newRecorder()
+	r.playerErr = errors.New("the player is busy; ask again in a moment")
+	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Browser: r})
+
+	if err := c.Set(false, "a test"); err == nil {
+		t.Fatal("Set(false) answered no error while the player refused")
+	}
+	if strings.Contains(r.joined(), "dpms") {
+		t.Errorf("steps = %q, want no display call", r.joined())
+	}
+	if !c.ScreenOn() {
+		t.Error("the controller recorded the screen as off after a player that refused")
 	}
 }

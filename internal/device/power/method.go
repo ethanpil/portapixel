@@ -8,12 +8,8 @@ import (
 	"strings"
 )
 
-// The names of the two programs. cec-ctl is in the v4l-utils package and
-// wlr-randr is the wlroots tool that the image already carries for the rotation.
-const (
-	cecTool   = "cec-ctl"
-	randrTool = "wlr-randr"
-)
+// The name of the CEC program. cec-ctl is in the v4l-utils package.
+const cecTool = "cec-ctl"
 
 // ---------------------------------------------------------------------- CEC
 //
@@ -131,52 +127,6 @@ func (c *Controller) cec(ctx context.Context, device, address string, on bool) e
 		return nil
 	}
 	return c.run(ctx, cecTool, cecActiveSourceArgs(device, address))
-}
-
-// --------------------------------------------------------------------- DPMS
-//
-// wlr-randr talks to the compositor of the kiosk session, so it works only while
-// the browser runs. That is why the off path switches the display before it stops
-// the browser (D31, and the block comment of apply).
-
-// dpms switches the display over the compositor.
-func (c *Controller) dpms(ctx context.Context, on bool) error {
-	if c.opt.Run == nil {
-		return errors.New("no program runner is wired")
-	}
-	output, err := c.dpmsOutput(ctx)
-	if err != nil {
-		return err
-	}
-	state := "--off"
-	if on {
-		state = "--on"
-	}
-	return c.run(ctx, randrTool, []string{"--output", output, state})
-}
-
-// dpmsOutput gives the name of the display, for example HDMI-A-1. The device has
-// one display (D10), so the first output that wlr-randr names is the display.
-func (c *Controller) dpmsOutput(ctx context.Context) (string, error) {
-	out, err := c.opt.Run.Run(ctx, randrTool)
-	if err != nil {
-		return "", fmt.Errorf("%s did not answer: %w", randrTool, err)
-	}
-	return firstOutput(string(out))
-}
-
-// firstOutput takes the name of the first output out of the text of wlr-randr.
-// The tool starts each output at the left margin and indents everything under it.
-func firstOutput(text string) (string, error) {
-	for _, line := range strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n") {
-		if line == "" || line[0] == ' ' || line[0] == '\t' {
-			continue
-		}
-		if fields := strings.Fields(line); len(fields) > 0 {
-			return fields[0], nil
-		}
-	}
-	return "", fmt.Errorf("%s named no output", randrTool)
 }
 
 // run runs one program and puts its output in the error message. A tool that

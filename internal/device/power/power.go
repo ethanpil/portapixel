@@ -21,21 +21,25 @@ const (
 // have a resolution of one minute, so 30 seconds crosses every boundary in time.
 const tick = 30 * time.Second
 
-// commandTimeout is how long one cec-ctl or wlr-randr call may take. Both talk to
-// a local device or a local socket and answer at once. A call that hangs must not
-// hold the loop, because the loop also drives the browser.
+// commandTimeout is how long one cec-ctl call may take. It talks to a local
+// device and answers at once. A call that hangs must not hold the loop, because
+// the loop also drives the player.
 const commandTimeout = 15 * time.Second
 
-// Runner runs one program and gives its output. The daemon gives a runner that
-// starts the program in the kiosk session; a test gives a fake, so nothing here
-// needs Linux, a display or root rights.
+// Runner runs one program and gives its output. A test gives a fake, so nothing
+// here needs Linux, a display or root rights. Only cec-ctl goes through it.
 type Runner interface {
 	Run(ctx context.Context, name string, args ...string) ([]byte, error)
 }
 
-// Screen is the browser. The screen-off step stops it: a browser with no picture
-// only holds memory (D31).
-type Screen interface {
+// Player is the player of the media (mpv). The screen-off step stops it: a player
+// with no picture only holds memory (D31), and it owns the DRM device, which the
+// DPMS call needs.
+//
+// Suspend must return only AFTER the player process has exited. Then its handle
+// of the DRM device is closed, and the DPMS call can take the device. Resume
+// starts the player again.
+type Player interface {
 	Suspend() error
 	Resume() error
 }
@@ -50,10 +54,15 @@ type Options struct {
 	ShouldBeOn func(t time.Time) bool
 	// Now gives the local time of the device.
 	Now func() time.Time
-	// Run runs cec-ctl and wlr-randr.
+	// Run runs cec-ctl. It is not used for DPMS.
 	Run Runner
-	// Browser is suspended and resumed with the screen.
-	Browser Screen
+	// Blank switches the displays for the method "dpms". A nil value uses the DRM
+	// device of the machine.
+	Blank Blanker
+	// Browser is the player (mpv). It is suspended and resumed with the screen.
+	// The field keeps its old name, so that cmd/portapixeld builds until the new
+	// player is wired in. Rename it to Player in that change.
+	Browser Player
 	// CECDevices gives the CEC device nodes, for example /dev/cec0. A nil
 	// function reads /dev/cec*.
 	CECDevices func() []string
@@ -72,8 +81,8 @@ type Controller struct {
 	// and applied under it, so a command from a person and the schedule loop cannot
 	// read the same old state and both act on it.
 	//
-	// It is not mu. A transition talks to cec-ctl or wlr-randr and can take seconds,
-	// and /api/status must answer in that time.
+	// It is not mu. A transition talks to cec-ctl or to the DRM device and can take
+	// seconds, and /api/status must answer in that time.
 	applyMu sync.Mutex
 
 	mu sync.Mutex
@@ -105,6 +114,9 @@ func New(opt Options) *Controller {
 	}
 	if opt.CECDevices == nil {
 		opt.CECDevices = cecDevices
+	}
+	if opt.Blank == nil {
+		opt.Blank = newDRMBlanker()
 	}
 	if opt.Tick <= 0 {
 		opt.Tick = tick
@@ -217,40 +229,44 @@ func (c *Controller) Set(on bool, reason string) error {
 // applyMu: the decision to make a transition and the transition itself are one
 // step.
 //
-// The order is the reason that this package exists. Going off, the display is
-// switched first and the browser second: the DPMS path talks to the compositor of
-// the browser session, so a browser that stopped first takes the compositor with
-// it and the display stays on. Going on, the browser starts first, so a
-// compositor exists when the display call runs.
+// The order is the reason that this package exists. The player owns the DRM
+// device while it runs, and only the DRM master may switch the display. Going
+// off, the player stops first and the display call second. Going on, the display
+// call comes first and the player starts second. A player that runs during the
+// display call keeps the display on, or it takes the device away from the call.
 func (c *Controller) apply(on bool, reason string) error {
 	if on {
+		// The display call has no error to give: a display that stays dark is a fault
+		// to report, and the player must still start.
+		c.screen(true)
 		if err := c.resume(); err != nil {
-			// The browser refused the message, so the transition did NOT happen. Keep
-			// the old state, so that the next tick of the loop tries again.
+			// The player refused the message, so the transition did NOT happen. Keep
+			// the old state, so that the next tick of the loop tries again. The display
+			// call is safe to repeat.
 			//
-			// This branch recorded the new state and wrote "power.on" anyway. The
-			// command queue of the browser is full while a cold launch runs, and the
-			// screen-on at on_time then got ErrBusy. step() saw the state that the
-			// schedule wanted, returned, and never tried again: /api/status said
-			// screen_on true, the browser stayed suspended and the screen was black
-			// for the whole day.
+			// This branch recorded the new state and wrote "power.on" anyway. The command
+			// queue of the player is full while a cold launch runs, and the screen-on at
+			// on_time then got ErrBusy. step() saw the state that the schedule wanted,
+			// returned, and never tried again: /api/status said screen_on true, the
+			// player stayed suspended and the screen was black for the whole day.
 			c.log("power.on.fail", reason+": "+err.Error()+"; the loop tries again")
 			return err
 		}
-		c.screen(true)
 		c.mu.Lock()
 		c.on = true
 		c.mu.Unlock()
 		c.log("power.on", reason)
 		return nil
 	}
-	// Going off, the display call comes first and it has no error to give. A browser
-	// that refuses to stop keeps the state at on, so the next tick tries again.
-	c.screen(false)
+	// A player that refuses to stop keeps the state at on, so the next tick tries
+	// again. The display has not changed yet.
 	if err := c.suspend(); err != nil {
 		c.log("power.off.fail", reason+": "+err.Error()+"; the loop tries again")
 		return err
 	}
+	// A display that stays on is a fault to report. It is not a reason to start the
+	// player again: with no player the screen is black.
+	c.screen(false)
 	c.mu.Lock()
 	c.on = false
 	c.mu.Unlock()
@@ -258,7 +274,7 @@ func (c *Controller) apply(on bool, reason string) error {
 	return nil
 }
 
-// suspend stops the browser. A browser that is busy gives an error, which the API
+// suspend stops the player. A player that is busy gives an error, which the API
 // reports: a command that says "done" and does nothing is worse than an error.
 func (c *Controller) suspend() error {
 	if c.opt.Browser == nil {
@@ -276,7 +292,7 @@ func (c *Controller) resume() error {
 
 // screen switches the display itself. Every fault is a log line and nothing more.
 // A display that stays on is a fault to report; it is not a reason to keep a
-// browser running through the night.
+// player running through the night.
 func (c *Controller) screen(on bool) {
 	method := c.pick()
 	if method == MethodNone {
@@ -293,7 +309,11 @@ func (c *Controller) screen(on bool) {
 		c.mu.Unlock()
 		err = c.cec(ctx, device, address, on)
 	case MethodDPMS:
-		err = c.dpms(ctx, on)
+		if on {
+			err = c.opt.Blank.On()
+		} else {
+			err = c.opt.Blank.Off()
+		}
 	}
 	if err != nil {
 		state := "off"
