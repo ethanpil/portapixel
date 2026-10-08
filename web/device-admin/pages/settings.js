@@ -7,7 +7,7 @@
    Three things the form has to get right:
      - A secret comes back as the mask. Sending the mask back keeps the value
        that the device has, and sending an empty field clears it.
-     - The device says what a save needs: nothing, a browser restart or a
+     - The device says what a save needs: nothing, a player restart or a
        reboot. The answer of the save is what the page reports.
      - A paired device keeps its hardware settings and gives up the rest (D48).
 */
@@ -200,10 +200,10 @@ export function mount(main, ctx) {
   const cShuffle = toggle('Shuffle the items', 'A new order each time the playlist starts.');
   const cNightly = clock();
 
-  // Watchdog. The device watches the player and the browser, and it restarts or
-  // reboots when they stop (D30).
+  // Watchdog. The device watches the player, and it restarts the player or
+  // reboots when the player stops (D30).
   const cWatchdog = toggle('Watch the screen and recover on its own',
-    'Off means that a frozen page stays on the screen until somebody looks at it. Leave it on.');
+    'Off means that a frozen picture stays on the screen until somebody looks at it. Leave it on.');
   const cHeartbeat = number({ min: '10', max: '600', step: '5' });
   const cRestarts = number({ min: '0', max: '20', step: '1' });
   const cWindow = number({ min: '1', max: '1440', step: '5' });
@@ -339,19 +339,19 @@ export function mount(main, ctx) {
             field('playback.image_duration', 'Default image time (seconds)', cImageDuration),
             field('playback.nightly_restart', 'Nightly restart', cNightly)),
           cShuffle,
-          h('div', { class: 'pp-help', text: 'The nightly restart clears anything a long-running browser has collected. Leave it on unless it lands in an hour that the screen is needed.' }),
+          h('div', { class: 'pp-help', text: 'The nightly restart clears anything a long-running player has collected. Leave it on unless it lands in an hour that the screen is needed.' }),
         ],
       }),
       card({
         title: 'Watchdog',
         body: [
           cWatchdog,
-          field('watchdog.heartbeat_timeout', 'Restart the browser after this much silence (seconds)', cHeartbeat,
-            'The page reports in every 5 seconds. 30 seconds is six missed reports. 10 to 600.'),
+          field('watchdog.heartbeat_timeout', 'Restart the player after this much silence (seconds)', cHeartbeat,
+            'The device asks the player for its state every 2 seconds. No answer, or a video that does not move, for this long restarts the player. 10 to 600.'),
           h('div', { class: 'pp-fields' },
             field('watchdog.restarts_before_reboot', 'Reboot after this many restarts', cRestarts),
             field('watchdog.restart_window', 'Counted inside (minutes)', cWindow)),
-          h('div', { class: 'pp-help', text: 'When a browser restart does not help, the device reboots itself. Set the number of restarts to 0 and it never reboots on its own.' }),
+          h('div', { class: 'pp-help', text: 'When a player restart does not help, the device reboots itself. Set the number of restarts to 0 and it never reboots on its own.' }),
         ],
       }),
       card({

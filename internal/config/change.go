@@ -81,7 +81,7 @@ func ChangeClass(old, next Config) []Change {
 	add("playback.nightly_restart", Live, old.Playback.NightlyRestart != next.Playback.NightlyRestart)
 	add("schedule", Live, !sameRules(old.Schedule, next.Schedule))
 
-	// [watchdog]. The browser supervisor reads these four values at each check
+	// [watchdog]. The player supervisor reads these four values at each check
 	// through a function, so a new threshold is live (D30).
 	add("watchdog.enabled", Live, old.Watchdog.Enabled != next.Watchdog.Enabled)
 	add("watchdog.heartbeat_timeout", Live, old.Watchdog.HeartbeatTimeout != next.Watchdog.HeartbeatTimeout)

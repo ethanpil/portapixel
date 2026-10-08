@@ -85,26 +85,28 @@ type Playback struct {
 	TransitionMS    int    `toml:"transition_ms" json:"transition_ms"`
 	ImageDuration   int    `toml:"image_duration" json:"image_duration"`
 	Shuffle         bool   `toml:"shuffle" json:"shuffle"`
-	// NightlyRestart is the time of the daily browser restart. An empty value
+	// NightlyRestart is the time of the daily player restart. An empty value
 	// stops it (D30).
 	NightlyRestart string `toml:"nightly_restart" json:"nightly_restart"`
 }
 
-// Watchdog is the [watchdog] table: the recovery ladder of the browser (D30,
+// Watchdog is the [watchdog] table: the recovery ladder of the player (D30,
 // plan 3.3). Every step of the ladder is tunable here, and the whole ladder can
 // be switched off.
 //
-// The nightly browser restart is the fourth step, and it is not here: it is
+// The nightly player restart is the fourth step, and it is not here: it is
 // playback.nightly_restart, because it is a time of day and not a threshold.
 type Watchdog struct {
-	// Enabled switches the whole ladder off when it is false. The browser still
-	// starts again when it dies, and a page that stops sending heartbeats then
-	// stays on the screen.
+	// Enabled switches the whole ladder off when it is false. The player still
+	// starts again when it ends, and a player that freezes then stays on the
+	// screen.
 	Enabled bool `toml:"enabled" json:"enabled"`
-	// HeartbeatTimeout is the silence of the player, in seconds, that means "the
-	// page is dead". The player sends a heartbeat every 5 seconds.
+	// HeartbeatTimeout is the time, in seconds, that the player may stay silent or
+	// frozen. The daemon asks mpv for its state every 2 seconds. No answer, a
+	// video that does not move, or an image that stays longer than its duration
+	// plus this time, restarts the player.
 	HeartbeatTimeout int `toml:"heartbeat_timeout" json:"heartbeat_timeout"`
-	// RestartsBeforeReboot is how many browser restarts inside RestartWindow make
+	// RestartsBeforeReboot is how many player restarts inside RestartWindow make
 	// the device reboot. 0 means that the device never reboots by itself.
 	RestartsBeforeReboot int `toml:"restarts_before_reboot" json:"restarts_before_reboot"`
 	// RestartWindow is the length of that window, in minutes.

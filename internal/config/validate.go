@@ -156,8 +156,8 @@ func (c Config) Validate() Errors {
 	}
 	clockTime("playback.nightly_restart", c.Playback.NightlyRestart)
 
-	// [watchdog]. The lower bound of the timeout is six heartbeats; under that, a
-	// device on a slow card would restart the browser while it still draws. The
+	// [watchdog]. The lower bound of the timeout is five polls; under that, a
+	// device on a slow card would restart the player while it still draws. The
 	// upper bounds keep a typed value from making the ladder inert without saying
 	// so: 20 restarts and a window of one day are both far outside any real use.
 	if c.Watchdog.HeartbeatTimeout < 10 || c.Watchdog.HeartbeatTimeout > 600 {
@@ -256,7 +256,7 @@ func hasControl(value string) bool {
 
 // ParseClock reads a 24-hour time in the form HH:MM and gives the minutes after
 // midnight. It is the one clock format of the product: the schedule rules, the
-// screen times and the nightly browser restart all use it. Each of them asked
+// screen times and the nightly player restart all use it. Each of them asked
 // the same question with its own code before, and the answers were different.
 //
 // The format is exact. Five characters, two digits, a colon, two digits. A value
