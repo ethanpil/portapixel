@@ -79,7 +79,7 @@ func (f *fake) handle(w http.ResponseWriter, r *http.Request, daemon string) boo
 	case r.URL.Path == "/api/update/check":
 		writeJSON(w, map[string]any{
 			"current": "dev", "available": "1.5.1", "source": "github",
-			"notes": "Faster startup, and a stall is fixed when a web page item times out. Two days old, so try it on one screen first.",
+			"notes": "Faster startup, and a stall is fixed when a video file is cut short. Two days old, so try it on one screen first.",
 		})
 	case r.URL.Path == "/api/update/apply":
 		writeJSON(w, map[string]any{"ok": true})

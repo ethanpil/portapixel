@@ -53,9 +53,9 @@ func heartbeatFor(s screen) manifest.Heartbeat {
 		st.LastSyncResult = "error"
 		st.SyncError = "needs 3.4 GB, has 1.1 GB"
 		hb.SyncError = "needs 3.4 GB, has 1.1 GB"
-	case "px-9a02f451": // Meeting room 3: a web page is on the screen.
+	case "px-9a02f451": // Meeting room 3: a room sign is on the screen.
 		st.NowPlaying = &manifest.NowPlaying{
-			Playlist: "room-signs", Index: 0, Item: "https://dashboards.example.com/rooms", Kind: "url",
+			Playlist: "room-signs", Index: 0, Item: "room-signs.jpg", Kind: "image",
 			Since: now.Add(-2 * time.Minute),
 		}
 	case "px-2f81c604": // Front window: a video plays.

@@ -63,8 +63,8 @@ func fakeReleases(db *sql.DB, now time.Time) error {
 		days                           int
 		approved                       bool
 	}{
-		{"1.5.1", "Faster startup, and a stall is fixed when a web page item times out. Two days old, so try it on one screen first.", "idle", "", 2, false},
-		{"1.5.0", "Web page items reload on an interval. The overnight screen-off skips the nightly restart.", "done", "", 45, true},
+		{"1.5.1", "Faster startup, and a stall is fixed when a video file is cut short. Two days old, so try it on one screen first.", "idle", "", 2, false},
+		{"1.5.0", "A fade goes through black. The overnight screen-off skips the nightly restart.", "done", "", 45, true},
 		{"1.4.2", "Fixes HDMI sound picking the wrong output on some x86 boxes.", "failed", "the release page did not answer", 69, false},
 		{"1.4.1", "Withdrawn: it rolled back on three screens during testing.", "idle", "", 78, false},
 	}
