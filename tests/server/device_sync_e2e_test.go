@@ -38,7 +38,7 @@ func TestDeviceSyncsFromTheRealServer(t *testing.T) {
 
 	playlistID, err := server.db.SavePlaylist(db.Playlist{
 		Title:      "Lobby loop",
-		Transition: "crossfade",
+		Transition: "fade",
 		Items: []db.PlaylistItem{
 			// The name carries the extension, which is what says image or video.
 			{SHA256: first, Name: "welcome.jpg", Duration: 15},

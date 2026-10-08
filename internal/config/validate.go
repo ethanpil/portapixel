@@ -80,7 +80,6 @@ func (c Config) Validate() Errors {
 	if _, ok := manifest.CleanName(c.Device.Name); !ok {
 		add("device.name", "must be "+manifest.NameRule)
 	}
-	oneOf("device.tier", c.Device.Tier, "auto", "low", "high")
 	if c.Device.Timezone == "" {
 		add("device.timezone", "must be an IANA time zone name, for example UTC")
 	} else if _, err := time.LoadLocation(c.Device.Timezone); err != nil {

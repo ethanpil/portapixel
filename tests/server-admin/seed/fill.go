@@ -215,7 +215,7 @@ func makePlaylists(c *client, media map[string]string) (map[string]int64, error)
 		var saved struct {
 			ID int64 `json:"id"`
 		}
-		body := map[string]any{"title": w.title, "transition": "crossfade", "items": w.items}
+		body := map[string]any{"title": w.title, "transition": "fade", "items": w.items}
 		if err := c.call("POST", "/api/admin/playlists", body, &saved); err != nil {
 			return nil, fmt.Errorf("playlist %s: %w", w.title, err)
 		}

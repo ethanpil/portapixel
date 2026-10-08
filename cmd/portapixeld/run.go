@@ -1262,7 +1262,7 @@ func (d *daemon) applyChanges(changes []config.Change) {
 			sound = true
 		}
 		switch c.Class {
-		case config.Browser:
+		case config.Player:
 			browserRestart = true
 		case config.Live:
 			// The scheduler and the library read the configuration themselves.
@@ -1332,16 +1332,16 @@ func renamePlaylistRefs(cfg config.Config, old, next string) (config.Config, int
 	return cfg, count
 }
 
-// highestClass gives the class that the UI must report: a reboot beats a browser
-// restart, and a browser restart beats a live change.
+// highestClass gives the class that the UI must report: a reboot beats a player
+// restart, and a player restart beats a live change.
 func highestClass(changes []config.Change) string {
 	out := string(config.Live)
 	for _, c := range changes {
 		switch c.Class {
 		case config.Reboot:
 			return string(config.Reboot)
-		case config.Browser:
-			out = string(config.Browser)
+		case config.Player:
+			out = string(config.Player)
 		}
 	}
 	return out

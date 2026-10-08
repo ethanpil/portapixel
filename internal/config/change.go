@@ -5,8 +5,8 @@ import "slices"
 // Class says how a changed key takes effect.
 //
 // The rule behind the three classes: a key is Live when the daemon reads it
-// again while it runs. A key is Browser when cog gets the value on its command
-// line, so only a new browser process can use the new value. A key is Reboot
+// again while it runs. A key is Player when the player gets the value when it
+// starts, so only a new player process can use the new value. A key is Reboot
 // when a boot service or the kernel uses the value, so only a boot can apply it.
 // Guessing wrong in the safe direction (a bigger class) costs a few seconds of
 // black screen; guessing wrong in the other direction makes a setting that looks
@@ -14,9 +14,9 @@ import "slices"
 type Class string
 
 const (
-	Live    Class = "live"
-	Browser Class = "browser"
-	Reboot  Class = "reboot"
+	Live   Class = "live"
+	Player Class = "player"
+	Reboot Class = "reboot"
 )
 
 // Change is one key that is different, with the way to apply it.
@@ -27,7 +27,7 @@ type Change struct {
 
 // ChangeClass compares two configurations and says how to apply each change.
 // The settings page uses the answer: it applies the live changes at once and
-// tells the user which changes need a browser restart or a reboot.
+// tells the user which changes need a player restart or a reboot.
 //
 // device.id is not in the list. The daemon takes it from the hardware at each
 // boot, so an edit does nothing (D21).
@@ -40,10 +40,9 @@ func ChangeClass(old, next Config) []Change {
 	}
 
 	// [device]. mDNS announces a new name at once. The scheduler reads the time
-	// zone at each evaluation. The tier makes zram swap, which the boot sets up.
+	// zone at each evaluation.
 	add("device.name", Live, old.Device.Name != next.Device.Name)
 	add("device.timezone", Live, old.Device.Timezone != next.Device.Timezone)
-	add("device.tier", Reboot, old.Device.Tier != next.Device.Tier)
 
 	// [network]. A boot service renders /etc/network/interfaces and
 	// wpa_supplicant.conf before the network starts. A change to the network of
@@ -56,20 +55,20 @@ func ChangeClass(old, next Config) []Change {
 	add("network.wifi_psk", Reboot, old.Network.WifiPSK != next.Network.WifiPSK)
 	add("network.wifi_country", Reboot, old.Network.WifiCountry != next.Network.WifiCountry)
 
-	// [display]. cog gets the rotation and the output mode when it starts, so a
-	// new browser process applies them. The power method and the screen schedule
-	// are the daemon's work.
-	add("display.rotation", Browser, old.Display.Rotation != next.Display.Rotation)
-	add("display.video_mode", Browser, old.Display.VideoMode != next.Display.VideoMode)
+	// [display]. The player gets the rotation and the output mode when it starts,
+	// so a new player process applies them. The power method and the screen
+	// schedule are the daemon's work.
+	add("display.rotation", Player, old.Display.Rotation != next.Display.Rotation)
+	add("display.video_mode", Player, old.Display.VideoMode != next.Display.VideoMode)
 	add("display.power_method", Live, old.Display.PowerMethod != next.Display.PowerMethod)
 	add("display.on_time", Live, old.Display.OnTime != next.Display.OnTime)
 	add("display.off_time", Live, old.Display.OffTime != next.Display.OffTime)
 	add("display.power_days", Live, !slices.Equal(old.Display.PowerDays, next.Display.PowerDays))
 
-	// [audio]. Chromium reads the default device of ALSA when it starts, so only a
-	// new browser process uses a new output (internal/device/audio). The volume
+	// [audio]. The player reads the default device of ALSA when it starts, so only
+	// a new player process uses a new output (internal/device/audio). The volume
 	// goes to the ALSA mixer at once.
-	add("audio.output", Browser, old.Audio.Output != next.Audio.Output)
+	add("audio.output", Player, old.Audio.Output != next.Audio.Output)
 	add("audio.volume", Live, old.Audio.Volume != next.Audio.Volume)
 
 	// [playback] and [[schedule]]. The player asks for the manifest again.

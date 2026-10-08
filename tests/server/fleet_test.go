@@ -64,7 +64,7 @@ func (f *fleet) uploadMedia(name string, body []byte) string {
 func (f *fleet) makePlaylist(title string, items ...map[string]any) int64 {
 	f.t.Helper()
 	res := f.mustOK(f.adminCall(http.MethodPost, "/api/admin/playlists", map[string]any{
-		"title": title, "transition": "crossfade", "items": items,
+		"title": title, "transition": "fade", "items": items,
 	}), "make the playlist "+title)
 	var out struct {
 		ID   int64  `json:"id"`

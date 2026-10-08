@@ -30,7 +30,6 @@ func TestChangeClass(t *testing.T) {
 	}{
 		{name: "name", change: func(c *Config) { c.Device.Name = "Lobby" }, wantField: "device.name", wantClass: Live},
 		{name: "timezone", change: func(c *Config) { c.Device.Timezone = "Europe/Berlin" }, wantField: "device.timezone", wantClass: Live},
-		{name: "tier", change: func(c *Config) { c.Device.Tier = "low" }, wantField: "device.tier", wantClass: Reboot},
 
 		{name: "network mode", change: func(c *Config) { c.Network.Mode = "static" }, wantField: "network.mode", wantClass: Reboot},
 		{name: "address", change: func(c *Config) { c.Network.Address = "10.0.0.5/24" }, wantField: "network.address", wantClass: Reboot},
@@ -39,14 +38,14 @@ func TestChangeClass(t *testing.T) {
 		{name: "wifi name", change: func(c *Config) { c.Network.WifiSSID = "Office" }, wantField: "network.wifi_ssid", wantClass: Reboot},
 		{name: "wifi key", change: func(c *Config) { c.Network.WifiPSK = "secret" }, wantField: "network.wifi_psk", wantClass: Reboot},
 
-		{name: "rotation", change: func(c *Config) { c.Display.Rotation = 90 }, wantField: "display.rotation", wantClass: Browser},
-		{name: "video mode", change: func(c *Config) { c.Display.VideoMode = "1920x1080" }, wantField: "display.video_mode", wantClass: Browser},
+		{name: "rotation", change: func(c *Config) { c.Display.Rotation = 90 }, wantField: "display.rotation", wantClass: Player},
+		{name: "video mode", change: func(c *Config) { c.Display.VideoMode = "1920x1080" }, wantField: "display.video_mode", wantClass: Player},
 		{name: "power method", change: func(c *Config) { c.Display.PowerMethod = "cec" }, wantField: "display.power_method", wantClass: Live},
 		{name: "on time", change: func(c *Config) { c.Display.OnTime = "07:30" }, wantField: "display.on_time", wantClass: Live},
 		{name: "off time", change: func(c *Config) { c.Display.OffTime = "22:00" }, wantField: "display.off_time", wantClass: Live},
 		{name: "power days", change: func(c *Config) { c.Display.PowerDays = []string{"mon"} }, wantField: "display.power_days", wantClass: Live},
 
-		{name: "audio output", change: func(c *Config) { c.Audio.Output = "analog" }, wantField: "audio.output", wantClass: Browser},
+		{name: "audio output", change: func(c *Config) { c.Audio.Output = "analog" }, wantField: "audio.output", wantClass: Player},
 		{name: "volume", change: func(c *Config) { c.Audio.Volume = 50 }, wantField: "audio.volume", wantClass: Live},
 
 		{name: "default playlist", change: func(c *Config) { c.Playback.DefaultPlaylist = "lobby" }, wantField: "playback.default_playlist", wantClass: Live},
@@ -126,7 +125,7 @@ func TestChangeClassManyChanges(t *testing.T) {
 	old := Default()
 	next := Default()
 	next.Device.Name = "Lobby"    // live
-	next.Display.Rotation = 90    // browser
+	next.Display.Rotation = 90    // player
 	next.Network.Mode = "static"  // reboot
 	next.Network.Address = "a/24" // reboot
 	next.Audio.Volume = 10        // live
@@ -139,7 +138,7 @@ func TestChangeClassManyChanges(t *testing.T) {
 	for _, c := range changes {
 		count[c.Class]++
 	}
-	if count[Live] != 2 || count[Browser] != 1 || count[Reboot] != 2 {
+	if count[Live] != 2 || count[Player] != 1 || count[Reboot] != 2 {
 		t.Fatalf("the classes are %v", count)
 	}
 }

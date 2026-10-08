@@ -29,7 +29,6 @@ func Render(cfg Config) []byte {
 	line(&b, "id", Quote(cfg.Device.ID), "Comes from the hardware at each boot. An edit does nothing.")
 	line(&b, "timezone", Quote(cfg.Device.Timezone), "IANA name, for example \"America/New_York\".")
 	comment(&b, "The schedules use it. The web UI asks you to set it.")
-	line(&b, "tier", Quote(cfg.Device.Tier), "auto | low | high. low degrades transitions and adds zram.")
 
 	b.WriteString("\n[network]\n")
 	line(&b, "mode", Quote(cfg.Network.Mode), "dhcp | static")
@@ -62,7 +61,7 @@ func Render(cfg Config) []byte {
 	b.WriteString("\n[playback]\n")
 	line(&b, "default_playlist", Quote(cfg.Playback.DefaultPlaylist), "")
 	line(&b, "transition", Quote(cfg.Playback.Transition), strings.Join(Transitions, " | "))
-	line(&b, "transition_ms", strconv.Itoa(cfg.Playback.TransitionMS), "")
+	line(&b, "transition_ms", strconv.Itoa(cfg.Playback.TransitionMS), "The length of a fade.")
 	line(&b, "image_duration", strconv.Itoa(cfg.Playback.ImageDuration), "Seconds for an image that has no duration.")
 	line(&b, "shuffle", boolText(cfg.Playback.Shuffle), "")
 	line(&b, "nightly_restart", Quote(cfg.Playback.NightlyRestart), "The daily browser restart. \"\" stops it.")

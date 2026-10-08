@@ -39,7 +39,6 @@ type Device struct {
 	// reference copy for the person who reads the card (D21).
 	ID       string `toml:"id" json:"id"`
 	Timezone string `toml:"timezone" json:"timezone"`
-	Tier     string `toml:"tier" json:"tier"` // auto | low | high
 }
 
 // Network is the [network] table. The daemon renders
@@ -147,8 +146,9 @@ type Logging struct {
 	Persist bool `toml:"persist" json:"persist"`
 }
 
-// Transitions are the transition names that a playlist may use (D14).
-var Transitions = []string{"crossfade", "push-left", "push-right", "push-up", "push-down", "cut"}
+// Transitions are the transition names that a playlist may use (D14). "fade"
+// goes through black, and playback.transition_ms is the length of the fade.
+var Transitions = []string{"cut", "fade"}
 
 // IsTransition reports if name is a transition that the player knows.
 func IsTransition(name string) bool { return slices.Contains(Transitions, name) }
@@ -161,7 +161,6 @@ func Default() Config {
 			Name:     "PortaPixel",
 			ID:       "px-00000000",
 			Timezone: "UTC",
-			Tier:     "auto",
 		},
 		Network: Network{
 			Mode: "dhcp",
@@ -176,7 +175,7 @@ func Default() Config {
 		},
 		Playback: Playback{
 			DefaultPlaylist: "default",
-			Transition:      "crossfade",
+			Transition:      "fade",
 			TransitionMS:    500,
 			ImageDuration:   10,
 			Shuffle:         false,

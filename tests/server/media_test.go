@@ -294,7 +294,7 @@ func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 	}
 	res.json(t, &p)
 
-	if p.Name != "safety-loop" || p.Title != "Safety loop" || p.Transition != "crossfade" {
+	if p.Name != "safety-loop" || p.Title != "Safety loop" || p.Transition != "fade" {
 		t.Fatalf("the playlist is %+v", p)
 	}
 	if len(p.Items) != 2 {

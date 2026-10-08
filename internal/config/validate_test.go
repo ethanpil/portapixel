@@ -28,7 +28,6 @@ var validateCases = []validateCase{
 	{name: "a name of 64 characters", change: func(c *Config) { c.Device.Name = strings.Repeat("a", 64) }, wantField: "device.name"},
 	{name: "a name with a tab", change: func(c *Config) { c.Device.Name = "Lobby\tnorth" }, wantField: "device.name"},
 	{name: "a name with a bidi control", change: func(c *Config) { c.Device.Name = "Lobby" + string(rune(0x202E)) }, wantField: "device.name"},
-	{name: "bad tier", change: func(c *Config) { c.Device.Tier = "medium" }, wantField: "device.tier"},
 	{name: "empty timezone", change: func(c *Config) { c.Device.Timezone = "" }, wantField: "device.timezone"},
 	{name: "bad timezone", change: func(c *Config) { c.Device.Timezone = "Mars/Olympus" }, wantField: "device.timezone"},
 	{name: "a real timezone is good", change: func(c *Config) { c.Device.Timezone = "America/New_York" }},
@@ -370,7 +369,7 @@ func TestValidate(t *testing.T) {
 
 func TestValidateReportsEveryFault(t *testing.T) {
 	cfg := Default()
-	cfg.Device.Tier = "medium"
+	cfg.Display.Rotation = 45
 	cfg.Audio.Volume = 200
 	cfg.Web.Port = 0
 	errs := cfg.Validate()
@@ -378,7 +377,7 @@ func TestValidateReportsEveryFault(t *testing.T) {
 		t.Fatalf("got %d errors, want 3: %v", len(errs), errs)
 	}
 	text := errs.Error()
-	for _, want := range []string{"device.tier", "audio.volume", "web.port"} {
+	for _, want := range []string{"display.rotation", "audio.volume", "web.port"} {
 		if !strings.Contains(text, want) {
 			t.Errorf("the message does not name %q: %s", want, text)
 		}

@@ -13,7 +13,6 @@ func full() Config {
 	cfg.Device.Name = "Lobby screen"
 	cfg.Device.ID = "px-12345678"
 	cfg.Device.Timezone = "America/New_York"
-	cfg.Device.Tier = "low"
 	cfg.Network.Mode = "static"
 	cfg.Network.Address = "192.168.1.50/24"
 	cfg.Network.Gateway = "192.168.1.1"
@@ -29,7 +28,7 @@ func full() Config {
 	cfg.Audio.Output = "hdmi"
 	cfg.Audio.Volume = 40
 	cfg.Playback.DefaultPlaylist = "lobby"
-	cfg.Playback.Transition = "push-left"
+	cfg.Playback.Transition = "cut"
 	cfg.Playback.TransitionMS = 300
 	cfg.Playback.ImageDuration = 20
 	cfg.Playback.Shuffle = true
@@ -143,7 +142,7 @@ func TestRenderHoldsEveryKey(t *testing.T) {
 	// Every key of the plan template must be in the output, as a live key or as
 	// a comment. If a key is not in this file, it does not exist.
 	keys := []string{
-		"name", "id", "timezone", "tier",
+		"name", "id", "timezone",
 		"mode", "address", "gateway", "dns", "wifi_ssid", "wifi_psk",
 		"rotation", "video_mode", "power_method", "on_time", "off_time", "power_days",
 		"output", "volume",

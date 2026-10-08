@@ -282,7 +282,7 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:     "a good transition",
-			playlist: Playlist{Meta: Meta{Transition: "push-up"}, Items: []Item{{File: "a.jpg"}}},
+			playlist: Playlist{Meta: Meta{Transition: "fade"}, Items: []Item{{File: "a.jpg"}}},
 		},
 		{
 			name: "the second item is bad",

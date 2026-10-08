@@ -265,7 +265,7 @@ func TestManagedFieldTable(t *testing.T) {
 		"schedule", "display.on_time", "display.off_time", "display.power_days",
 	}
 	local := []string{
-		"device.name", "device.timezone", "device.tier",
+		"device.name", "device.timezone",
 		"network.mode", "network.address", "network.gateway", "network.dns",
 		"network.wifi_ssid", "network.wifi_psk", "network.wifi_country",
 		"display.rotation", "display.video_mode", "display.power_method",

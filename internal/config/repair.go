@@ -35,8 +35,6 @@ func Repair(cfg Config) (Config, Errors) {
 		switch field := e.Field; {
 		case field == "device.name":
 			out.Device.Name = def.Device.Name
-		case field == "device.tier":
-			out.Device.Tier = def.Device.Tier
 		case field == "device.timezone":
 			out.Device.Timezone = def.Device.Timezone
 

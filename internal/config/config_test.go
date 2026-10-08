@@ -49,7 +49,6 @@ func TestParse(t *testing.T) {
 name = "Lobby"
 id = "px-12345678"
 timezone = "America/New_York"
-tier = "low"
 [network]
 mode = "static"
 address = "192.168.1.50/24"
@@ -99,7 +98,7 @@ auto = true
 persist = true
 `,
 			check: func(t *testing.T, cfg Config) {
-				if cfg.Device.Tier != "low" || cfg.Network.Mode != "static" {
+				if cfg.Device.Name != "Lobby" || cfg.Network.Mode != "static" {
 					t.Errorf("device or network is wrong: %+v", cfg)
 				}
 				if len(cfg.Network.DNS) != 2 || cfg.Network.DNS[1] != "1.1.1.1" {
@@ -183,7 +182,7 @@ func TestIsTransition(t *testing.T) {
 			t.Errorf("IsTransition(%q) = false", name)
 		}
 	}
-	for _, name := range []string{"", "fade", "CUT", "push", "push-left "} {
+	for _, name := range []string{"", "crossfade", "push-left", "FADE", "fade "} {
 		if IsTransition(name) {
 			t.Errorf("IsTransition(%q) = true", name)
 		}

@@ -38,9 +38,9 @@ type ConfigView struct {
 }
 
 // Applied is the answer of PUT /api/config. It says what the device did with the
-// change: applied it, or waits for a browser restart or a reboot.
+// change: applied it, or waits for a player restart or a reboot.
 type Applied struct {
-	Applied string          `json:"applied"` // live | browser | reboot
+	Applied string          `json:"applied"` // live | player | reboot
 	Changes []config.Change `json:"changes"`
 }
 
