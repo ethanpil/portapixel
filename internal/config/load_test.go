@@ -196,6 +196,45 @@ func TestLoadRepairsInsteadOfDropping(t *testing.T) {
 	}
 }
 
+// TestLoadAcceptsAnOldFile covers a portapixel.toml that an older build wrote.
+// The key device.tier does not exist now, and the old transition words are not
+// transitions now. Load must ignore the first and repair the second to "fade",
+// and it must keep every other value that the person wrote.
+func TestLoadAcceptsAnOldFile(t *testing.T) {
+	for _, old := range []string{"crossfade", "push-left", "push-right", "push-up", "push-down"} {
+		t.Run(old, func(t *testing.T) {
+			mediaRoot, stateDir := dirs(t)
+
+			cfg := Default()
+			cfg.Device.Name = "Lobby"
+			cfg.Network.WifiSSID = "Guest"
+			cfg.Network.WifiPSK = "a wifi secret"
+			file := string(Render(cfg))
+			file = strings.Replace(file, "[device]\n", "[device]\ntier = \"low\"\n", 1)
+			file = strings.Replace(file, `transition = "fade"`, `transition = "`+old+`"`, 1)
+			if !strings.Contains(file, "tier = ") || !strings.Contains(file, `"`+old+`"`) {
+				t.Fatalf("the test file has no old value:\n%s", file)
+			}
+			write(t, MediaPath(mediaRoot), file)
+
+			got := Load(mediaRoot, stateDir)
+
+			if got.FromDefault || got.FromShadow {
+				t.Fatalf("Load threw the file away: %+v", got)
+			}
+			if len(got.Repaired) != 1 || got.Repaired[0].Field != "playback.transition" {
+				t.Fatalf("Repaired = %v, want playback.transition only", got.Repaired)
+			}
+			if got.Config.Playback.Transition != "fade" {
+				t.Errorf("transition = %q, want fade", got.Config.Playback.Transition)
+			}
+			if got.Config.Device.Name != "Lobby" || got.Config.Network.WifiPSK != "a wifi secret" {
+				t.Errorf("Load lost a value that the person wrote: %+v", got.Config)
+			}
+		})
+	}
+}
+
 // TestLoadNeverWritesToTheMediaRoot holds the rule that the media partition is
 // the property of the person. Load reads it and writes nothing there, whatever
 // it finds.
