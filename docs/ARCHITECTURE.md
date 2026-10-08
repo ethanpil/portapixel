@@ -58,7 +58,7 @@ internal/slug             One safe-name rule. A playlist directory, a host name 
 internal/device/identity  Device ID derivation and repair semantics (D21).
 internal/device/library   Scan media root, parse playlists, hash cache, item warnings.
 internal/device/scheduler Rule evaluation each minute, clock-sync gate (D17, D40).
-internal/device/browser   cage + Chromium supervisor, navigation ladder, watchdog, URL items, kiosk mode.
+internal/device/browser   cage + Chromium supervisor, navigation ladder, watchdog.
 internal/device/power     CEC or DPMS, screen schedule, manual override (D31).
 internal/device/syncer    Fleet client: enroll, poll, download, fleet playlists, commands.
 internal/device/mdns      Announce _http._tcp as <name>.local (D20).
@@ -200,17 +200,15 @@ type Manifest struct {
 type Playlist struct {
     Name       string `json:"name"` // directory-safe slug
     Title      string `json:"title"`
-    Transition string `json:"transition,omitempty"`
+    Transition string `json:"transition,omitempty"` // "cut" | "fade"; empty = the device setting
     Shuffle    *bool  `json:"shuffle,omitempty"`
     Items      []Item `json:"items"`
 }
 type Item struct {
-    SHA256         string `json:"sha256,omitempty"` // media item
-    URL            string `json:"url,omitempty"`    // url item
-    Duration       int    `json:"duration,omitempty"`
-    Mute           bool   `json:"mute,omitempty"`
-    MaxDuration    int    `json:"max_duration,omitempty"`
-    RefreshSeconds int    `json:"refresh_seconds,omitempty"`
+    SHA256      string `json:"sha256,omitempty"` // the media object
+    Duration    int    `json:"duration,omitempty"`
+    Mute        bool   `json:"mute,omitempty"`
+    MaxDuration int    `json:"max_duration,omitempty"`
 }
 type Rule struct {
     Playlist string   `json:"playlist"`
@@ -252,6 +250,14 @@ type Heartbeat struct {
 `Status` is the same struct that the device serves at `/api/status` (plan section 8,
 `health`). It lives in `internal/manifest` so the two ends share it.
 
+The content model. An item is an image or a video, and nothing else: there are no
+web page items and no single-URL kiosk mode. `internal/playlist` holds the one
+extension table (`Kind`, `MediaType`): images `jpg jpeg png gif webp avif bmp`, videos
+`mp4 m4v mov webm mkv ogv`. The device library, `/media/` and the server media types
+all use it. A transition is `"cut"` or `"fade"` (`config.Transitions`). A fade goes
+through black, and `playback.transition_ms` is its length. The server schema
+migration 2 removed the url items and changed each old transition word to `"fade"`.
+
 `rename` gives a screen a new display name. The device owns its name: mDNS, the host
 name and the fallback screen use it. The device saves `device.name` through the save
 path of the admin, and the heartbeat of the same poll reports it. The server writes
@@ -271,8 +277,8 @@ would remove the values of the person.
 
 `Status.NowPlaying.SHA256` (`now_playing.sha256`) is the hash of the file on the
 screen. The server finds its library object with it, because the device reports the
-object name `<sha8>-<name>` and not the library name. It is empty for a URL item and
-for a local file that the device did not hash yet.
+object name `<sha8>-<name>` and not the library name. It is empty for a local file
+that the device did not hash yet.
 
 `Acks` holds at most 100 command IDs. A command that the server delivered and that
 no heartbeat acknowledged goes out again after 10 minutes, three times in all, and
@@ -288,11 +294,15 @@ is the sentence for a person. The codes are the constants of
 `config-bad-edit`, `playlist-problem`, `hardware-changed`, `update-rolled-back`,
 `server-insecure`.
 
-`Status.Codecs` is the codec report of the player (D12). The player probes
-MediaCapabilities one time and sends it as `codecs` with its FIRST heartbeat. The daemon
-keeps it and serves it again; `web/shared/item-warnings.js` prefers it over its own
-probe. `hardware_id` is NOT in `Status`: it is a secret between the device and its
-server. `Status.HardwareChanged` is a bool.
+The player fields of `Status`: `player_state` uses the State words of the player
+supervisor (`stopped`, `starting`, `running`, `waiting-for-display`, `disabled`).
+`video_output` is `"gpu"` or `"drm"`. `hwdec` is the decoder of the current video, and
+`""` when no video plays. `now_playing.dropped_frames` counts the frames of the
+current video that the player dropped. An empty value means that the player did not
+report it. `Status` has no device tier and no codec report.
+
+`hardware_id` is NOT in `Status`: it is a secret between the device and its server.
+`Status.HardwareChanged` is a bool.
 
 The device stores fleet objects at `_fleet/media/<first 8 hex of sha>-<safe name>`.
 
@@ -307,6 +317,9 @@ The device stores fleet objects at `_fleet/media/<first 8 hex of sha>-<safe name
   at daemon start. The browser opens `/player?k=<secret>`.
 - `/api/status` needs no session. It includes `pairing_code` for loopback peers only.
 - `GET /licenses` needs no session. A licence list is a public document (D33).
+- `PUT /api/config` answers `{applied, changes:[{field, class}]}`. A class is `live`,
+  `player` (a new player process applies the value) or `reboot`. `applied` is the
+  highest class of the save (`config.ChangeClass`).
 - The server uses the same package with an allowlist made from `public_url`.
 
 ### 6a. The v0.2 device routes
@@ -397,7 +410,7 @@ The environment of `cage` has `WLR_LIBINPUT_NO_DEVICES=1`, `XCURSOR_THEME`,
 `<tmpfs>/browser.log`, with a limit of 1 MiB, and starts again at each launch.
 
 Rotation and `video_mode` go through `wlr-randr` in the cage session. They rotate all
-content, external pages included. The browser command and its flags live in ONE place,
+content. The browser command and its flags live in ONE place,
 `internal/device/browser/command.go`.
 
 ```go
@@ -431,14 +444,12 @@ URL carries `?k=<secret>`.
 ```json
 {
   "fallback": false,
-  "tier": "high",
   "playlist": {
     "name": "default", "title": "Lobby loop",
-    "transition": "crossfade", "transition_ms": 500, "shuffle": false,
+    "transition": "fade", "transition_ms": 500, "shuffle": false,
     "items": [
       {"index": 0, "kind": "image", "name": "welcome.jpg", "src": "/media/default/welcome.jpg", "duration": 15},
-      {"index": 1, "kind": "video", "name": "promo.mp4", "src": "/media/default/promo.mp4", "mute": false, "max_duration": 0},
-      {"index": 2, "kind": "url", "name": "https://dash.example.com/board", "url": "https://dash.example.com/board", "duration": 60, "refresh_seconds": 300}
+      {"index": 1, "kind": "video", "name": "promo.mp4", "src": "/media/default/promo.mp4", "mute": false, "max_duration": 0}
     ]
   }
 }
@@ -457,26 +468,15 @@ item is `/media/_fleet/media/<object>`.
  "state": "playing", "frames": 18211, "position": 12.4}
 ```
 
-The FIRST heartbeat also carries `"codecs"`: the answer of MediaCapabilities for h264,
-hevc, vp9 and av1 at 1080 and 2160 (D12). The daemon keeps it and serves it in
-`status.codecs`. It is sent one time, not on every beat.
-
 `state` is `playing`, `fallback` or `handoff`. `frames` is a requestAnimationFrame
 counter that only grows in one page life (D45). A new page starts at 0: the watchdog
 must read a lower value as a reset, not as a stall. An optional `"note"` string gives one
 line when something needs attention, for example a skipped item. The daemon writes a new
 note to the ops log. The reply is `{"ok": true}`.
 
-`POST /api/player/url-item` with `{"index": 2}`: the SPA stops. The daemon navigates to
-the URL, waits for the dwell time, then opens `/player?k=...&resume=3`. A reply of
-`{"skip": true}` means the URL is not reachable (D19). Then the SPA goes to the next item.
-
 `GET /api/player/events` (SSE). Events: `playlist` (get the manifest again and start at
 item 0), `grace` (the daemon wants to restart the browser; the SPA calls
 `POST /api/player/ready` at the next item boundary), `reload` (reload the page now).
-
-Kiosk mode (D42): when the active playlist is one URL item, the daemon keeps the browser
-on that URL. The SPA does not run.
 
 ## 8. Web assets
 
