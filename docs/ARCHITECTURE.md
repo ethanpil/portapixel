@@ -19,8 +19,9 @@ Permitted dependencies. Each new dependency needs a rationale line here.
 | `modernc.org/sqlite` | Pure-Go SQLite for the server. No cgo. |
 | `aead.dev/minisign` | Verify release signatures (D47). |
 | `golang.org/x/crypto` | bcrypt for the server admin password. |
-| `golang.org/x/net/websocket` | CDP client for navigation rung 1. The standard library has no WebSocket client. |
-| `golang.org/x/sys` | Indirect, through minisign. |
+| `golang.org/x/sys` | The DRM ioctls of the DPMS screen power (`internal/device/power`). |
+| `golang.org/x/image` | The fonts of the fallback screen (`internal/device/fallback`, D18). |
+| `golang.org/x/net` | Indirect, through `miekg/dns`. |
 | `github.com/hashicorp/mdns` | mDNS announce (D20). |
 | `github.com/miekg/dns` | Indirect, through `hashicorp/mdns`. |
 | `github.com/skip2/go-qrcode` | QR code on the fallback screen (D18). |
@@ -33,11 +34,11 @@ The standard library does all other work. Use `net/http` with Go 1.22 pattern ro
 ```
 cmd/portapixeld/          device entry point. Subcommands, flags, wiring only.
 cmd/portapixel-server/    server entry point. Flags and wiring only.
-web/embed.go              package web. go:embed of player, device-admin, server-admin, shared.
+web/embed.go              package web. go:embed of device-admin, server-admin, shared.
 
 internal/version          Version string and minisign public key, both set with -ldflags.
-internal/rnd              Hex(n): the one random-text helper. Session tokens, the player
-                          secret, a staging directory name.
+internal/rnd              Hex(n): the one random-text helper. Session tokens, a staging
+                          directory name.
 internal/fleet            The rules of a device call to a fleet server: ResolveURL (a
                           server-relative address becomes a whole address on the paired
                           host), DropBearerOffHost, NewClient, ContextUntil. The sync
@@ -58,14 +59,17 @@ internal/slug             One safe-name rule. A playlist directory, a host name 
 internal/device/identity  Device ID derivation and repair semantics (D21).
 internal/device/library   Scan media root, parse playlists, hash cache, item warnings.
 internal/device/scheduler Rule evaluation each minute, clock-sync gate (D17, D40).
-internal/device/browser   cage + Chromium supervisor, navigation ladder, watchdog.
+internal/device/player    mpv supervisor: command line, JSON IPC, playlist, transition
+                          script, fallback screen, watchdog (section 7).
+internal/device/fallback  Draw the fallback screen as a PNG (D18).
 internal/device/power     CEC or DPMS, screen schedule, manual override (D31).
 internal/device/syncer    Fleet client: enroll, poll, download, fleet playlists, commands.
 internal/device/mdns      Announce _http._tcp as <name>.local (D20).
 internal/device/health    Status struct for /api/status.
 internal/device/netcfg    Render wpa_supplicant.conf and /etc/network/interfaces.
 internal/device/installer install-to-disk: disk list, GPT clone, media copy, boot bits (D54).
-internal/device/httpd     Routes, handlers, SSE hub. No business logic.
+internal/device/httpd     Routes, handlers, the SSE hub of the install progress. No
+                          business logic.
 
 internal/server          New(deps) http.Handler: the one route stack of the server.
 internal/server/db        Schema, migrations, queries. Single writer.
@@ -114,6 +118,9 @@ The fleet client keeps the whole last manifest and not only a hash of it, for tw
 one field: the poll compares the new manifest with it, so an answer that did not change
 writes nothing at all; and the daemon hands the schedule to the scheduler at start, so a
 paired device uses the fleet rules before its first poll answers.
+
+Files in the run dir: `health/<version>.ok` (the health marker of an update) and the files
+of the player (section 7).
 
 The staging directories of a sync are `_fleet/.staging-<random>` and
 `_fleet/.trash-<random>`. A name that starts with a full stop is never a playlist, so a
@@ -296,10 +303,10 @@ is the sentence for a person. The codes are the constants of
 
 The player fields of `Status`: `player_state` uses the State words of the player
 supervisor (`stopped`, `starting`, `running`, `waiting-for-display`, `disabled`).
-`video_output` is `"gpu"` or `"drm"`. `hwdec` is the decoder of the current video, and
-`""` when no video plays. `now_playing.dropped_frames` counts the frames of the
-current video that the player dropped. An empty value means that the player did not
-report it. `Status` has no device tier and no codec report.
+`video_output` is `"gpu"` or `"drm"`. `hwdec` is the decoder of the current video, `"no"`
+for software decoding, and `""` when no video plays. `now_playing.dropped_frames` counts
+the frames of the current video that the player dropped. An empty value means that the
+player did not report it. `Status` has no device tier and no codec report.
 
 `hardware_id` is NOT in `Status`: it is a secret between the device and its server.
 `Status.HardwareChanged` is a bool.
@@ -312,10 +319,9 @@ The device stores fleet objects at `_fleet/media/<first 8 hex of sha>-<safe name
   `portapixel-<last4>.local`, each with or without the port.
 - Session cookie `pp_session`: `HttpOnly`, `SameSite=Strict`, path `/`.
 - Each request with a method other than GET or HEAD must carry `X-PortaPixel: 1`.
-- `/api/player/*` accepts loopback peers only and needs `?k=<boot secret>` or the
-  `X-PortaPixel-Player` header with the same value. The secret is 32 random hex chars made
-  at daemon start. The browser opens `/player?k=<secret>`.
 - `/api/status` needs no session. It includes `pairing_code` for loopback peers only.
+- `/media/` needs no session. It serves image and video files only, for the previews of
+  the admin UI. mpv reads the files directly.
 - `GET /licenses` needs no session. A licence list is a public document (D33).
 - `PUT /api/config` answers `{applied, changes:[{field, class}]}`. A class is `live`,
   `player` (a new player process applies the value) or `reboot`. `applied` is the
@@ -347,7 +353,8 @@ DELETE /api/pair    {ok:true}. It forgets the token and the claim secret, takes 
 ```
 
 `pairing_code` is in `GET /api/pair` because that route needs a session. `/api/status`
-gives the code to loopback callers only, which is the fallback screen (D46).
+gives the code to loopback callers only (D46). The fallback screen gets it inside the
+daemon.
 
 `insecure` is true when the address is `http://` on a host that is not loopback and not a
 private network. The status then also carries the warning `server-insecure`.
@@ -381,102 +388,173 @@ answers 200 and the About page says the sentence.
 The install stream replays its last event to a new subscriber. The admin UI sends the
 POST and opens the stream after the answer, so the first events are already gone.
 
-## 7. Navigation ladder (`internal/device/browser`)
+## 7. The player (`internal/device/player`)
 
-The display stack is Chromium in kiosk mode inside `cage` (see CONTEXT.md section 3).
-The daemon starts one process tree as the `kiosk` user:
+The player is mpv 0.40. It shows the content directly on DRM/KMS: there is no compositor,
+no seat manager, no X and no Wayland. The daemon starts one mpv process as the `kiosk`
+account and controls it over JSON IPC (section 7a).
 
 ```
-cage -s -- chromium --kiosk --ozone-platform=wayland \
-  --remote-debugging-address=127.0.0.1 --remote-debugging-port=9222 \
-  --remote-allow-origins=http://127.0.0.1:9222 \
-  --autoplay-policy=no-user-gesture-required \
-  --user-data-dir=<tmpfs>/profile --disk-cache-dir=<tmpfs>/cache \
-  --no-first-run --noerrdialogs --disable-infobars --disable-session-crashed-bubble \
-  --disable-features=Translate,OptimizationHints,NetworkTimeServiceQuerying,BackForwardCache \
-  --password-store=basic \
-  --disable-background-networking --disable-component-update \
-  --disable-domain-reliability --metrics-recording-only --disable-sync \
-  --disable-default-apps --no-default-browser-check --disable-breakpad \
-  --gcm-checkin-url=http://127.0.0.1:1/ --gcm-registration-url=http://127.0.0.1:1/ \
-  --gcm-mcs-endpoint=http://127.0.0.1:1/ <url>
+mpv --no-config --profile=fast --idle=yes --force-window=yes --keep-open=yes \
+  --loop-playlist=inf --prefetch-playlist=yes \
+  --input-ipc-server=<run>/player/mpv.sock --script=<run>/transitions.lua \
+  --input-default-bindings=no --osc=no --ytdl=no --load-stats-overlay=no \
+  --load-console=no --load-auto-profiles=no --load-select=no --load-commands=no \
+  --load-positioning=no --hwdec=auto-safe --ao=alsa --msg-level=all=warn \
+  --vo=drm | --vo=gpu --gpu-context=drm \
+  [--video-rotate=<display.rotation>] [--drm-mode=<display.video_mode>]
 ```
 
-This block is a copy for the reader. `command.go` is the source. There is exactly one
-`--disable-features` flag: a second one replaces the first. There is no sandbox flag.
-The environment of `cage` has `WLR_LIBINPUT_NO_DEVICES=1`, `XCURSOR_THEME`,
-`XCURSOR_PATH`, `XCURSOR_SIZE`, `XDG_RUNTIME_DIR`, `HOME` and `PATH`. It must NOT have
-`WAYLAND_DISPLAY` (CONTEXT.md section 4). The browser output goes to
-`<tmpfs>/browser.log`, with a limit of 1 MiB, and starts again at each launch.
+This block is a copy for the reader. `command.go` is the source, and the mpv command line
+lives there and nowhere else. mpv refuses an option that it does not know, so the image
+needs mpv 0.40 or later. The environment of mpv is `PATH` and `HOME=<run>/player`.
 
-Rotation and `video_mode` go through `wlr-randr` in the cage session. They rotate all
-content. The browser command and its flags live in ONE place,
-`internal/device/browser/command.go`.
+`--player-cmd` or `PORTAPIXEL_PLAYER_CMD` replaces the program. Its own arguments come
+after the arguments of the daemon, and mpv uses the last value of an option. An override
+keeps the environment of the daemon, because a desktop needs `DISPLAY` or
+`WAYLAND_DISPLAY`. The value `none` switches the player off (`player_state: "disabled"`).
 
-```go
-type Navigator interface {
-    Name() string                                  // "cdp" | "relaunch"
-    Start(ctx context.Context, url string) error   // browser up and on url
-    Navigate(ctx context.Context, url string) error
-    Reload(ctx context.Context) error
-    CurrentURL(ctx context.Context) (string, error) // relaunch rung returns the last url if the process lives
-    Alive() bool
-    Stop() error
-}
+The files of the player in the run directory (a tmpfs):
+
+| File | Owner | What |
+|---|---|---|
+| `player/` | kiosk, 0700 | The only directory that mpv can write. It holds `mpv.sock`, and it is `HOME`. |
+| `transitions.lua` | root, 0644 | The transition script. The daemon writes it from the binary at each start. |
+| `fallback.png` | root, 0644 | The fallback screen (D18). The daemon writes it atomically. |
+| `player.log` | root, 0640 | The output of mpv. 1 MiB at most, new at each start. |
+
+The video output comes from `display.video_output`. `auto` takes `gpu` when a graphics card
+has a hardware OpenGL driver in Mesa: `vc4`, `v3d`, `i915`, `xe`, `amdgpu`, `radeon` or
+`nouveau` (the name can end in `-drm`). Each other driver gets `drm`. virtio_gpu, bochs and
+simpledrm have no GPU, and vo=gpu there is llvmpipe. The daemon reads the `DRIVER=` line of
+`/sys/class/drm/card*/device/uevent`. `status.video_output` names the output that runs.
+
+`--hwdec=auto-safe` tries only the decoders of the mpv whitelist
+(`video/decode/vd_lavc.c`): d3d11va, dxva2-copy, nvdec, vaapi, vulkan, vdpau-copy, drm,
+drm-copy, mediacodec-copy and videotoolbox, with their `-copy` forms. `v4l2m2m` is not in
+the list. The H.264 decoder of a Raspberry Pi is v4l2m2m, so auto-safe decodes H.264 in
+software there. `drm` and `drm-copy` are the V4L2 request API, which is the HEVC decoder
+of a Pi 4 and a Pi 5. They work only when FFmpeg has that support.
+
+The kiosk account. mpv parses files from removable media and from the network, so it never
+runs as root. The kernel makes the first process that opens a DRM primary node the DRM
+master, also without root. mpv gets the groups `video` (`/dev/dri/card*`), `render` (a Pi
+4 renders on v3d) and `audio` (`/dev/snd`). Proven on the pp-zero lab VM on 2026-10-08:
+vo=drm and vo=gpu as `kiosk`.
+
+Rotation goes to `--video-rotate`, and `display.video_mode` goes to `--drm-mode`. A change
+of `display.rotation`, `display.video_mode`, `display.video_output` or `audio.output`
+restarts mpv (change class `player`). A `video_mode` that the display does not have does
+not stop mpv. No file can show, mpv goes idle, and the ops log names `player.log`.
+
+The watchdog ladder (plan 3.3). The thresholds come from `[watchdog]` (D30). T is
+`heartbeat_timeout`.
+
+| Fault | Rule |
+|---|---|
+| mpv ends | Start again at once. An mpv that ends before its first picture waits 5 s, doubled up to 60 s. |
+| The IPC does not answer | No socket T after the start, or a request with no answer for T. |
+| A video does not move | The `time-pos` of the video does not change for T. |
+| An image does not go on | The same image for its duration plus T. One image alone is not checked. |
+
+Each fault above is a counted restart. `restarts_before_reboot` counted restarts inside
+`restart_window` reboot the device. A restart from a person, from a setting or from the
+nightly job does not count. After a fault, the new mpv starts at the item after the item
+on the screen. After a restart from a person, it starts at the same item.
+
+No display is a wait and never a fault (D44). The daemon reads `/sys/class/drm/*/status`
+every 5 s. While nothing is connected, the period doubles up to 60 s, mpv stops, and
+`player_state` is `waiting-for-display`.
+
+The nightly restart (`playback.nightly_restart`) waits for the end of the item on the
+screen, for 60 s at most. A screen schedule that has the screen off at that time skips
+it. The fallback screen and a playlist of one item have no item boundary, so the restart
+is immediate.
+
+Screen power. `power.Controller` stops mpv first and then switches the display off.
+`Suspend` returns when the process has ended, so the DRM device is free. Going on, the
+display comes first and mpv second.
+
+The health marker of an update (`<run>/health/<version>.ok`): the daemon writes it after
+the first picture of mpv, content or the fallback screen. A device that waits for a
+display, a device with the screen off and a player that is off are also up.
+
+## 7a. Player protocol: JSON IPC with mpv
+
+The daemon connects to `<run>/player/mpv.sock`. Each request is one line
+`{"command": [...], "request_id": N}`, and mpv answers the requests in order. The client
+uses the standard library only.
+
+At the connect the daemon observes three properties:
+
+| ID | Property | Use |
+|---|---|---|
+| 1 | `idle-active` | `true` after a file started: no item of the list could play. |
+| 2 | `hwdec-current` | `status.hwdec` while a video plays. `no` is software decoding. |
+| 3 | `user-data/pptr/fault` | A fault of `transitions.lua`. The daemon writes it to the ops log. |
+
+The events that it reads are `start-file`, `playback-restart` (an item shows its first
+frame), `end-file` (`reason`, `file_error`, `playlist_entry_id`) and `property-change`.
+
+The manifest (`library.PlayerManifest`) goes to the player in the same process. The daemon
+applies the defaults (`image_duration`, the playlist overrides) and does the shuffle. The
+player gives mpv the whole list, and mpv reads each file directly from the media root:
+
+```
+["loadfile", "<path of item 0>", "replace", -1, {<per-file options>}]
+["loadfile", "<path of item 1>", "append", -1, {<per-file options>}]
+...
 ```
 
-The ladder has two rungs. Rung 1 is the Chrome DevTools Protocol (CDP) on the loopback
-port: `GET /json` to find the page target, then `Page.navigate`, `Page.reload` and
-`Runtime.evaluate("location.href")` on its WebSocket. Rung 2 starts the browser again with
-the target URL as its argument. The supervisor tries rung 1 at start and falls to rung 2
-when CDP does not answer. It writes the chosen rung to the ops log. Tests must exercise
-both rungs: CDP against a stub HTTP and WebSocket server, relaunch against a real stub
-process.
+A restart starts the list at the resume item. mpv loops the list, so the order stays the
+order of the playlist. The per-file options:
 
-## 7a. Player protocol
+| Option | Item | Value |
+|---|---|---|
+| `script-opts` | each | `pptr-kind=<transition>,pptr-ms=<transition_ms>` |
+| `image-display-duration` | image | the duration; `inf` for one image alone |
+| `mute` | video | `yes` or `no`, from the `mute` of the item |
+| `end` | video | `max_duration`, when it is set |
+| `loop-file` | video | `inf` for one video alone |
 
-The browser opens `/player?k=<secret>[&resume=<index>]`. The SPA sends the secret in the
-`X-PortaPixel-Player` header on each call. EventSource cannot set a header, so the SSE
-URL carries `?k=<secret>`.
+A schedule change, a library change or a playback setting gives a new manifest. The
+daemon replaces the list only when the manifest is different. No playable content gives
+the fallback screen:
 
-`GET /api/player/manifest`:
-
-```json
-{
-  "fallback": false,
-  "playlist": {
-    "name": "default", "title": "Lobby loop",
-    "transition": "fade", "transition_ms": 500, "shuffle": false,
-    "items": [
-      {"index": 0, "kind": "image", "name": "welcome.jpg", "src": "/media/default/welcome.jpg", "duration": 15},
-      {"index": 1, "kind": "video", "name": "promo.mp4", "src": "/media/default/promo.mp4", "mute": false, "max_duration": 0}
-    ]
-  }
-}
+```
+["loadfile", "<run>/fallback.png", "replace", -1,
+ {"image-display-duration": "inf", "script-opts": "pptr-kind=cut,pptr-ms=0"}]
 ```
 
-`fallback: true` means no playable content. Then `playlist` is null and the SPA shows the
-fallback screen from `/api/status` and `/api/player/qr.svg`. The daemon applies defaults
-(`image_duration`, playlist overrides) before it sends the manifest. The daemon does the
-shuffle. `index` is the position in the list that the SPA received. `src` for a fleet
-item is `/media/_fleet/media/<object>`.
+The daemon draws the fallback screen at the size of the display: `display.video_mode`, else
+the first mode of the connected connector, else 1920x1080, turned for a rotation of 90 or
+270. It draws it again for new data, for a new minute and every 3 minutes for the burn-in
+shift. When no item of a list can play, mpv goes idle. The fallback screen then shows, and
+the daemon tries the list again after 5 minutes.
 
-`POST /api/player/heartbeat`, every 5 s:
+Every 2 s the daemon asks for `playlist-pos`, and for a video also `time-pos`,
+`frame-drop-count` and `decoder-frame-drop-count`. At each `playback-restart` it asks for
+`playlist-pos` and the two counters again. `now_playing.index` is the index in the
+manifest, and `now_playing.since` is the time of the first frame.
+`now_playing.dropped_frames` is the sum of the two counters since that frame. mpv starts
+the counters again at each file.
 
-```json
-{"playlist": "default", "index": 1, "name": "promo.mp4", "kind": "video",
- "state": "playing", "frames": 18211, "position": 12.4}
-```
+The transition script `transitions.lua` is mpv Lua with the LuaJIT FFI. When an item ends,
+its `on_unload` hook covers the screen with a copy (`screenshot-raw window bgra`, OSD
+overlay 62). The next item loads under the copy. At its `playback-restart`, a 20 ms timer
+moves the copy away. The script uses the options of the item that ends.
 
-`state` is `playing`, `fallback` or `handoff`. `frames` is a requestAnimationFrame
-counter that only grows in one page life (D45). A new page starts at 0: the watchdog
-must read a lower value as a reset, not as a stall. An optional `"note"` string gives one
-line when something needs attention, for example a skipped item. The daemon writes a new
-note to the ops log. The reply is `{"ok": true}`.
+| Kind | Effect |
+|---|---|
+| `cut` | No copy. |
+| `fade` | Dip to black. The copy goes dark. Then one black pixel, scaled to the screen (overlay 63), goes clear over the next item. One overlay at a time. |
+| `crossfade` | The copy goes clear over the next item. |
+| `wipe-left`, `-right`, `-up`, `-down` | The copy gets smaller at one side. |
+| `push-left`, `-right`, `-up`, `-down` | The copy moves out, and `video-pan-x` or `video-pan-y` moves the next item in. |
 
-`GET /api/player/events` (SSE). Events: `playlist` (get the manifest again and start at
-item 0), `grace` (the daemon wants to restart the browser; the SPA calls
-`POST /api/player/ready` at the next item boundary), `reload` (reload the page now).
+`config.Transitions` permits `cut` and `fade` now. Each fault ends in a cut: a failed copy,
+an overlay that fails, a Lua error, or a next item that does not show in 5 s. With no
+LuaJIT FFI, each transition is a cut.
 
 ## 8. Web assets
 
