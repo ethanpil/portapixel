@@ -157,15 +157,15 @@ while {[clock seconds] < $deadline} {
 			# The browser needs longer than the API. Keep polling until the
 			# daemon says that the cage session runs, because "the API answers"
 			# alone passed on a device with a black screen.
-			if {[string match {*"browser_state":"running"*} $out]} {
-				if {$playing == 0} { send_user "==> browser_state is running\n" }
+			if {[string match {*"player_state":"running"*} $out]} {
+				if {$playing == 0} { send_user "==> player_state is running\n" }
 				set playing 1
 			}
-			# The player sends its codec report with its FIRST heartbeat (D12),
-			# so "codecs" in the status proves that a heartbeat arrived. A
+			# The status has now_playing from the FIRST heartbeat of the
+			# player, so "now_playing" proves that a heartbeat arrived. A
 			# browser process that loads no player is a black screen with a
 			# green status (plan section 17 item 4).
-			if {[string match {*"codecs":*} $out]} {
+			if {[string match {*"now_playing":*} $out]} {
 				if {$heartbeat == 0} { send_user "==> one heartbeat is recorded\n" }
 				set heartbeat 1
 			}
@@ -219,7 +219,7 @@ if {$browser == 0} {
 	die "the daemon did not start the browser in the cage session"
 }
 if {$playing == 0} {
-	die "/api/status never reported browser_state running.
+	die "/api/status never reported player_state running.
  A browser process alone is not a picture: cage can start and then stop, or
  Chromium can hold a black window. Read the ops log on the guest."
 }

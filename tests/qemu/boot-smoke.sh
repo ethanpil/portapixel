@@ -5,7 +5,7 @@
 #   1. the image boots to a login prompt (the boot chain works),
 #   2. the daemon answers on port 80 through a host forwarded port,
 #   3. /api/status returns something that looks like our status,
-#   4. /api/status reports browser_state "running", so the cage session came up.
+#   4. /api/status reports player_state "running", so the cage session came up.
 #
 # It does NOT prove that a picture is on the screen. Use tests/qemu/boot-dev.sh
 # for that: it keeps the guest up and takes a screenshot of the display.
