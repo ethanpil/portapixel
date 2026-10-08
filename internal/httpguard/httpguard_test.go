@@ -97,39 +97,9 @@ func TestRequireHeader(t *testing.T) {
 	}
 }
 
-func TestLoopbackOnly(t *testing.T) {
-	tests := []struct {
-		name       string
-		remoteAddr string
-		want       int
-	}{
-		{name: "loopback", remoteAddr: "127.0.0.1:41234", want: 200},
-		{name: "another loopback address", remoteAddr: "127.0.0.55:41234", want: 200},
-		{name: "loopback over IPv6", remoteAddr: "[::1]:41234", want: 200},
-		{name: "no port", remoteAddr: "127.0.0.1", want: 200},
-		{name: "LAN address", remoteAddr: "192.168.1.9:41234", want: 403},
-		{name: "not an address", remoteAddr: "somewhere", want: 403},
-		{name: "empty", remoteAddr: "", want: 403},
-	}
-
-	h := LoopbackOnly(okHandler)
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodGet, "/api/player/manifest", nil)
-			r.RemoteAddr = tt.remoteAddr
-			w := httptest.NewRecorder()
-			h.ServeHTTP(w, r)
-			if w.Code != tt.want {
-				t.Fatalf("%q gave %d, want %d", tt.remoteAddr, w.Code, tt.want)
-			}
-		})
-	}
-}
-
 func TestDenyAnswersJSON(t *testing.T) {
-	h := LoopbackOnly(okHandler)
-	r := httptest.NewRequest(http.MethodGet, "/api/player/manifest", nil)
-	r.RemoteAddr = "192.168.1.9:41234"
+	h := RequireHeader(okHandler)
+	r := httptest.NewRequest(http.MethodPost, "/api/rescan", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 

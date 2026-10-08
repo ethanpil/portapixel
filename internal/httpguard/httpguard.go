@@ -98,19 +98,6 @@ func RequireHeader(next http.Handler) http.Handler {
 	})
 }
 
-// LoopbackOnly rejects a request that does not come from this device. The
-// player API uses it: an external page in the browser must not be able to drive
-// the player endpoints (D46).
-func LoopbackOnly(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !IsLoopback(r.RemoteAddr) {
-			deny(w, http.StatusForbidden, "this endpoint answers the device only")
-			return
-		}
-		next.ServeHTTP(w, r)
-	})
-}
-
 // IsLoopback reports if addr is a loopback address. It takes the form that
 // RemoteAddr uses ("127.0.0.1:41234", "[::1]:41234") and also an address with
 // no port ("127.0.0.1", "::1", "[::1]"). A name, an empty value and an address

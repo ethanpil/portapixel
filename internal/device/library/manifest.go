@@ -7,44 +7,42 @@ import (
 	"github.com/ethanpil/portapixel/internal/playlist"
 )
 
-// PlayerManifest is the body of GET /api/player/manifest (ARCHITECTURE section
-// 7a). The daemon applies every default before it sends the manifest, and the
-// daemon does the shuffle, so the SPA has no rules to know: it plays the list in
-// the order that it receives.
+// PlayerManifest is what the player must show now (ARCHITECTURE section 7a). The
+// daemon applies every default and does the shuffle, so the player has no rules
+// to know: it gives mpv the list in the order that it receives.
 type PlayerManifest struct {
-	Fallback bool              `json:"fallback"`
-	Playlist *ManifestPlaylist `json:"playlist"`
+	Fallback bool
+	Playlist *ManifestPlaylist
 }
 
 // ManifestPlaylist is the playlist that the player must show.
 type ManifestPlaylist struct {
-	Name         string         `json:"name"`
-	Title        string         `json:"title"`
-	Transition   string         `json:"transition"`
-	TransitionMS int            `json:"transition_ms"`
-	Shuffle      bool           `json:"shuffle"`
-	Items        []ManifestItem `json:"items"`
+	Name         string
+	Title        string
+	Transition   string
+	TransitionMS int
+	Shuffle      bool
+	Items        []ManifestItem
 }
 
 // ManifestItem is one item that the player can show. Index is the position in
 // this list, not the position in playlist.toml.
 type ManifestItem struct {
-	Index int    `json:"index"`
-	Kind  string `json:"kind"` // image | video
-	Name  string `json:"name"`
-	Src   string `json:"src"`
+	Index int
+	Kind  string // image | video
+	Name  string
 	// Path is the absolute path of the file. mpv reads the file directly.
-	Path string `json:"-"`
+	Path string
 
-	Duration    int  `json:"duration"`
-	Mute        bool `json:"mute"`
-	MaxDuration int  `json:"max_duration"`
+	Duration    int
+	Mute        bool
+	MaxDuration int
 }
 
 // BuildManifest makes the manifest for one playlist.
 //
 // A nil playlist, or a playlist with nothing that the player can show, gives
-// fallback: true. The SPA then shows the fallback screen (D18). An item that
+// Fallback: true. The player then shows the fallback screen (D18). An item that
 // names a missing file, or a file kind that the player does not know, is left
 // out here and shown as a warning in the admin UI.
 //
@@ -68,7 +66,6 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 		items = append(items, ManifestItem{
 			Kind:        it.Kind,
 			Name:        it.Name,
-			Src:         it.Src,
 			Path:        it.path,
 			Duration:    duration,
 			Mute:        it.Mute,

@@ -15,7 +15,7 @@ import (
 	"io/fs"
 )
 
-//go:embed all:player all:shared all:device-admin all:server-admin LICENSES-THIRD-PARTY.md
+//go:embed all:shared all:device-admin all:server-admin LICENSES-THIRD-PARTY.md
 var files embed.FS
 
 // LicensesName is the file that GET /licenses serves (D33). The copy in this
@@ -28,11 +28,10 @@ const LicensesName = "LICENSES-THIRD-PARTY.md"
 // Licenses gives the embedded licence list.
 func Licenses() ([]byte, error) { return files.ReadFile(LicensesName) }
 
-// The four sub-trees. Each one is the root of the URL space that serves it:
-// Player answers /player, Shared answers /shared, DeviceAdmin answers / on a
-// device, and ServerAdmin answers / on the fleet server.
+// The three sub-trees. Each one is the root of the URL space that serves it:
+// Shared answers /shared, DeviceAdmin answers / on a device, and ServerAdmin
+// answers / on the fleet server.
 var (
-	Player      = sub("player")
 	Shared      = sub("shared")
 	DeviceAdmin = sub("device-admin")
 	ServerAdmin = sub("server-admin")

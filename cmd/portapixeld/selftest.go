@@ -35,7 +35,6 @@ func selftestCommand(args []string) int {
 	}
 
 	// 1. The web assets.
-	check("the player is in the binary", web.Exists(web.Player, "index.html"), "web/player/index.html is missing")
 	check("the shared stylesheet is in the binary", web.Exists(web.Shared, "pp.css"), "web/shared/pp.css is missing")
 	check("the transition script is in the binary", strings.Contains(string(player.TransitionScript()), "on_unload"),
 		"internal/device/player/transitions.lua is missing")

@@ -21,8 +21,8 @@ import (
 //
 // TestMain answers the same two arguments that portapixeld answers, with the same
 // writer, so the real reader has a real program to read. The same trick works on
-// Windows and on Linux and it needs no compiler (internal/device/browser does it
-// for the stub browser).
+// Windows and on Linux and it needs no compiler (internal/device/player does it
+// for the fake mpv).
 const (
 	selfName    = testBinary
 	selfVersion = "1.5.0"
