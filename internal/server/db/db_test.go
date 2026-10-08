@@ -51,7 +51,8 @@ func TestOpenTwiceKeepsTheSchema(t *testing.T) {
 
 // TestMigrationTwoRemovesURLItems opens a file at schema version 1 that holds a
 // url item and the old transition words. Migration 2 must remove the url item and
-// its two columns, keep the media item, and map each old word to "fade".
+// its two columns, keep the media items in their order, and map each old word to
+// "fade". A playlist that held only url items stays, with no item.
 func TestMigrationTwoRemovesURLItems(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 
@@ -72,15 +73,25 @@ func TestMigrationTwoRemovesURLItems(t *testing.T) {
 		t.Fatal(err)
 	}
 	sha := strings.Repeat("a", 64)
+	other := strings.Repeat("b", 64)
 	for _, stmt := range []string{
 		"PRAGMA user_version = 1",
-		`INSERT INTO media (sha256, orig_name, size, uploaded_at) VALUES ('` + sha + `', 'a.jpg', 3, '2026-10-01T00:00:00Z')`,
+		`INSERT INTO media (sha256, orig_name, size, uploaded_at) VALUES
+			('` + sha + `', 'a.jpg', 3, '2026-10-01T00:00:00Z'),
+			('` + other + `', 'b.mp4', 3, '2026-10-01T00:00:00Z')`,
 		`INSERT INTO playlists (id, name, transition, updated_at) VALUES
 			(1, 'one', 'crossfade', ''), (2, 'two', 'push-left', ''), (3, 'three', 'cut', ''),
-			(4, 'four', '', ''), (5, 'five', 'push-down', '')`,
+			(4, 'four', '', ''), (5, 'five', 'push-down', ''), (6, 'six', 'fade', ''),
+			(7, 'seven', 'crossfade', '')`,
 		`INSERT INTO playlist_items (playlist_id, position, media_sha, url, name, refresh_seconds) VALUES
 			(1, 0, '` + sha + `', '', 'a.jpg', 0),
-			(1, 1, NULL, 'https://dash.example.com/board', '', 300)`,
+			(1, 1, NULL, 'https://dash.example.com/board', '', 300),
+			(6, 0, '` + other + `', '', 'b.mp4', 0),
+			(6, 1, NULL, 'https://dash.example.com/one', '', 0),
+			(6, 2, '` + sha + `', '', 'a.jpg', 0),
+			(6, 3, NULL, 'https://dash.example.com/two', '', 0),
+			(6, 4, '` + other + `', '', 'b.mp4', 0),
+			(7, 0, NULL, 'https://dash.example.com/kiosk', '', 300)`,
 	} {
 		if _, err := raw.Exec(stmt); err != nil {
 			t.Fatalf("%s: %v", stmt, err)
@@ -108,7 +119,8 @@ func TestMigrationTwoRemovesURLItems(t *testing.T) {
 		}
 	}
 
-	want := map[string]string{"one": "fade", "two": "fade", "three": "cut", "four": "", "five": "fade"}
+	want := map[string]string{"one": "fade", "two": "fade", "three": "cut", "four": "", "five": "fade",
+		"six": "fade", "seven": "fade"}
 	list, err := d.Playlists()
 	if err != nil {
 		t.Fatal(err)
@@ -128,6 +140,28 @@ func TestMigrationTwoRemovesURLItems(t *testing.T) {
 	}
 	if len(p.Items) != 1 || p.Items[0].SHA256 != sha || p.Items[0].Kind != "image" {
 		t.Fatalf("the items are %+v, want the media item only", p.Items)
+	}
+
+	// The media items keep their order when url items between them go away.
+	p, err = d.PlaylistNoCount(6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var order []string
+	for _, it := range p.Items {
+		order = append(order, it.Name)
+	}
+	if got := strings.Join(order, " "); got != "b.mp4 a.jpg b.mp4" {
+		t.Errorf("the items are %q, want \"b.mp4 a.jpg b.mp4\"", got)
+	}
+
+	// A playlist of url items only stays, with no item. A device then skips it.
+	p, err = d.PlaylistNoCount(7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Items) != 0 {
+		t.Errorf("the playlist seven has items %+v, want none", p.Items)
 	}
 }
 
