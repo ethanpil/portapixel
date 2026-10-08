@@ -336,29 +336,16 @@ func TestPlaylistValidation(t *testing.T) {
 			field: "items",
 		},
 		{
-			name:  "a file and a url",
-			in:    Playlist{Title: "both", Items: []PlaylistItem{{SHA256: testSHA, URL: "https://a.example", Name: "a.jpg"}}},
-			field: "items[0]",
+			// An item is an image or a video from the library. A web page is not
+			// an item.
+			name:  "an item with no file",
+			in:    Playlist{Title: "none", Items: []PlaylistItem{{Name: "https://a.example", Duration: 10}}},
+			field: "items[0].sha256",
 		},
 		{
-			name:  "a url with no scheme",
-			in:    Playlist{Title: "scheme", Items: []PlaylistItem{{URL: "a.example", Duration: 10}}},
-			field: "items[0].url",
-		},
-		{
-			name:  "mute on a url item",
-			in:    Playlist{Title: "mute", Items: []PlaylistItem{{URL: "https://a.example", Duration: 10, Mute: true}}},
-			field: "items[0].mute",
-		},
-		{
-			name:  "max duration on a url item",
-			in:    Playlist{Title: "max", Items: []PlaylistItem{{URL: "https://a.example", Duration: 10, MaxDuration: 5}}},
-			field: "items[0].max_duration",
-		},
-		{
-			name:  "refresh on a file item",
-			in:    Playlist{Title: "refresh", Items: []PlaylistItem{{SHA256: testSHA, Name: "a.jpg", RefreshSeconds: 60}}},
-			field: "items[0].refresh_seconds",
+			name:  "a negative duration",
+			in:    Playlist{Title: "negative", Items: []PlaylistItem{{SHA256: testSHA, Name: "a.jpg", Duration: -1}}},
+			field: "items[0].duration",
 		},
 		{
 			name:  "a hash that is not a hash",

@@ -130,18 +130,16 @@ type Playlist struct {
 
 // PlaylistItem is one row of the playlist_items table.
 type PlaylistItem struct {
-	SHA256         string `json:"sha256,omitempty"`
-	URL            string `json:"url,omitempty"`
-	Name           string `json:"name"`
-	Kind           string `json:"kind"`
-	Duration       int    `json:"duration,omitempty"`
-	Mute           bool   `json:"mute,omitempty"`
-	MaxDuration    int    `json:"max_duration,omitempty"`
-	RefreshSeconds int    `json:"refresh_seconds,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Name        string `json:"name"`
+	Kind        string `json:"kind"`
+	Duration    int    `json:"duration,omitempty"`
+	Mute        bool   `json:"mute,omitempty"`
+	MaxDuration int    `json:"max_duration,omitempty"`
 	// Thumb is the URL of the thumbnail, or an empty value when there is none.
 	Thumb string `json:"thumb,omitempty"`
-	// Size is the length of the media object in bytes, or zero for a url item.
-	// The manifest needs it, and one query gives it with the item.
+	// Size is the length of the media object in bytes. The manifest needs it,
+	// and one query gives it with the item.
 	Size int64 `json:"-"`
 	// MediaRow is true when the media table still holds this hash. The manifest
 	// leaves out an item whose media row went away: a device cannot name, size or

@@ -136,19 +136,17 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 			Items:      make([]manifest.Item, 0, len(p.Items)),
 		}
 		for _, it := range p.Items {
-			if it.SHA256 != "" && !it.MediaRow {
+			if !it.MediaRow {
 				// The media row went away. The item goes with it.
 				continue
 			}
 			out.Items = append(out.Items, manifest.Item{
-				SHA256:         it.SHA256,
-				URL:            it.URL,
-				Duration:       it.Duration,
-				Mute:           it.Mute,
-				MaxDuration:    it.MaxDuration,
-				RefreshSeconds: it.RefreshSeconds,
+				SHA256:      it.SHA256,
+				Duration:    it.Duration,
+				Mute:        it.Mute,
+				MaxDuration: it.MaxDuration,
 			})
-			if it.SHA256 == "" || mediaSeen[it.SHA256] {
+			if mediaSeen[it.SHA256] {
 				continue
 			}
 			mediaSeen[it.SHA256] = true

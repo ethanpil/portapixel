@@ -1,6 +1,8 @@
 package server_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -148,6 +150,10 @@ func (f *fleet) setUpRoutesWithoutSession(t *testing.T) []any {
 // version, empty group.
 func adminRoutes(t *testing.T) []adminRoute {
 	t.Helper()
+	// An item names a file of the library. setUpRoutes uploads this picture, so
+	// its hash is known here.
+	picture := sha256.Sum256(imageBytes(t, 20, 20))
+	item := map[string]any{"sha256": hex.EncodeToString(picture[:]), "name": "welcome.png", "duration": 30}
 	return []adminRoute{
 		{name: "login", method: http.MethodPost, path: "/api/admin/login",
 			body: map[string]string{"password": testPassword}, noSession: true},
@@ -197,13 +203,9 @@ func adminRoutes(t *testing.T) []adminRoute {
 		{name: "the playlist list", method: http.MethodGet, path: "/api/admin/playlists"},
 		{name: "one playlist", method: http.MethodGet, path: "/api/admin/playlists/%[2]d"},
 		{name: "make a playlist", method: http.MethodPost, path: "/api/admin/playlists",
-			body: map[string]any{"title": "Another loop", "items": []any{
-				map[string]any{"url": "https://dash.example.com", "duration": 30},
-			}}},
+			body: map[string]any{"title": "Another loop", "items": []any{item}}},
 		{name: "update a playlist", method: http.MethodPut, path: "/api/admin/playlists/%[2]d",
-			body: map[string]any{"title": "Lobby loop", "items": []any{
-				map[string]any{"url": "https://dash.example.com", "duration": 30},
-			}}},
+			body: map[string]any{"title": "Lobby loop", "items": []any{item}}},
 		{name: "the device count of a playlist", method: http.MethodGet, path: "/api/admin/playlists/%[2]d/devices"},
 		{name: "delete a playlist", method: http.MethodDelete, path: "/api/admin/playlists/%[2]d",
 			// A playlist that a rule names cannot go away, and setUpRoutes makes

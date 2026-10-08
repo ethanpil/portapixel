@@ -30,6 +30,19 @@ var migrations = []func(*tx) error{
 		_, err = tx.Exec(string(data))
 		return err
 	},
+	// Schema version 2: an item is an image or a video. The player is mpv, which
+	// shows no web page. The url items go, and the url and refresh_seconds
+	// columns go with them. A url item is the only row with no media_sha. Each
+	// old transition word (crossfade, push-left, push-right, push-up, push-down)
+	// becomes "fade".
+	func(tx *tx) error {
+		_, err := tx.Exec(`
+DELETE FROM playlist_items WHERE media_sha IS NULL;
+ALTER TABLE playlist_items DROP COLUMN url;
+ALTER TABLE playlist_items DROP COLUMN refresh_seconds;
+UPDATE playlists SET transition = 'fade' WHERE transition NOT IN ('', 'cut', 'fade');`)
+		return err
+	},
 }
 
 // DB is the database of the fleet server.

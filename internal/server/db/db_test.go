@@ -1,8 +1,11 @@
 package db
 
 import (
+	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -43,6 +46,88 @@ func TestOpenTwiceKeepsTheSchema(t *testing.T) {
 	}
 	if len(groups) != 1 || groups[0].Name != "Lobby" {
 		t.Fatalf("the group did not survive the reopen: %+v", groups)
+	}
+}
+
+// TestMigrationTwoRemovesURLItems opens a file at schema version 1 that holds a
+// url item and the old transition words. Migration 2 must remove the url item and
+// its two columns, keep the media item, and map each old word to "fade".
+func TestMigrationTwoRemovesURLItems(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+
+	// A file at schema version 1: migration 1 only, with rows that the old build
+	// could write.
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sqlTx, err := raw.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := migrations[0](&tx{tx: sqlTx, queries: &atomic.Int64{}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sqlTx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	sha := strings.Repeat("a", 64)
+	for _, stmt := range []string{
+		"PRAGMA user_version = 1",
+		`INSERT INTO media (sha256, orig_name, size, uploaded_at) VALUES ('` + sha + `', 'a.jpg', 3, '2026-10-01T00:00:00Z')`,
+		`INSERT INTO playlists (id, name, transition, updated_at) VALUES
+			(1, 'one', 'crossfade', ''), (2, 'two', 'push-left', ''), (3, 'three', 'cut', ''),
+			(4, 'four', '', ''), (5, 'five', 'push-down', '')`,
+		`INSERT INTO playlist_items (playlist_id, position, media_sha, url, name, refresh_seconds) VALUES
+			(1, 0, '` + sha + `', '', 'a.jpg', 0),
+			(1, 1, NULL, 'https://dash.example.com/board', '', 300)`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	raw.Close()
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("the migration failed: %v", err)
+	}
+	defer d.Close()
+
+	var version int
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
+		t.Fatalf("the schema version is %d (%v), want 2", version, err)
+	}
+	columns, err := d.columnsOf("playlist_items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, gone := range []string{"url", "refresh_seconds"} {
+		if columns[gone] {
+			t.Errorf("playlist_items still has the column %s", gone)
+		}
+	}
+
+	want := map[string]string{"one": "fade", "two": "fade", "three": "cut", "four": "", "five": "fade"}
+	list, err := d.Playlists()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != len(want) {
+		t.Fatalf("got %d playlists, want %d", len(list), len(want))
+	}
+	for _, p := range list {
+		if p.Transition != want[p.Name] {
+			t.Errorf("the playlist %s has the transition %q, want %q", p.Name, p.Transition, want[p.Name])
+		}
+	}
+
+	p, err := d.PlaylistNoCount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Items) != 1 || p.Items[0].SHA256 != sha || p.Items[0].Kind != "image" {
+		t.Fatalf("the items are %+v, want the media item only", p.Items)
 	}
 }
 

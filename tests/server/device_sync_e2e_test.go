@@ -43,7 +43,6 @@ func TestDeviceSyncsFromTheRealServer(t *testing.T) {
 			// The name carries the extension, which is what says image or video.
 			{SHA256: first, Name: "welcome.jpg", Duration: 15},
 			{SHA256: second, Name: "promo.mp4", MaxDuration: 60},
-			{URL: "https://dash.example.com/board", Name: "dash", Duration: 30},
 		},
 	})
 	if err != nil {
@@ -115,14 +114,11 @@ func TestDeviceSyncsFromTheRealServer(t *testing.T) {
 	if !strings.Contains(string(text), `file = "../media/`+first[:8]) {
 		t.Errorf("the fleet playlist is:\n%s", text)
 	}
-	if !strings.Contains(string(text), `url = "https://dash.example.com/board"`) {
-		t.Errorf("the URL item is missing:\n%s", text)
-	}
 	p, ok := device.lib.Snapshot().Find("lobby-loop")
 	if !ok {
 		t.Fatal("the library does not serve the fleet playlist")
 	}
-	if len(p.Items) != 3 {
+	if len(p.Items) != 2 {
 		t.Errorf("the library read %d items", len(p.Items))
 	}
 	for _, item := range p.Items {

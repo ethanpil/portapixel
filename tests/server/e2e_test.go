@@ -39,10 +39,9 @@ func TestEndToEnd(t *testing.T) {
 	picture := imageBytes(t, 1280, 720)
 	sha := f.uploadMedia("welcome-autumn.png", picture)
 
-	// 3. A playlist with the picture and a web page.
+	// 3. A playlist with the picture.
 	playlist := f.makePlaylist("Lobby loop",
 		map[string]any{"sha256": sha, "name": "welcome-autumn.png", "duration": 15},
-		map[string]any{"url": "https://dash.example.com/board", "duration": 60, "refresh_seconds": 300},
 	)
 
 	// 4. The group plays it, by default and by a rule, and its screens go off at
@@ -82,14 +81,11 @@ func TestEndToEnd(t *testing.T) {
 	if m.DefaultPlaylist != "lobby-loop" {
 		t.Fatalf("the default playlist is %q", m.DefaultPlaylist)
 	}
-	if len(m.Playlists) != 1 || len(m.Playlists[0].Items) != 2 {
+	if len(m.Playlists) != 1 || len(m.Playlists[0].Items) != 1 {
 		t.Fatalf("the playlists are %+v", m.Playlists)
 	}
 	if m.Playlists[0].Items[0].SHA256 != sha || m.Playlists[0].Items[0].Duration != 15 {
 		t.Fatalf("the first item is %+v", m.Playlists[0].Items[0])
-	}
-	if m.Playlists[0].Items[1].URL == "" || m.Playlists[0].Items[1].RefreshSeconds != 300 {
-		t.Fatalf("the second item is %+v", m.Playlists[0].Items[1])
 	}
 	if len(m.Schedule) != 1 || m.Schedule[0].Start != "08:00" || len(m.Schedule[0].Days) != 5 {
 		t.Fatalf("the schedule is %+v", m.Schedule)

@@ -111,8 +111,8 @@ func scanPlaylist(s interface{ Scan(...any) error }) (Playlist, error) {
 
 // playlistItems gives the items of one playlist in their order.
 func (d *DB) playlistItems(id int64) ([]PlaylistItem, error) {
-	rows, err := d.r.Query(`SELECT COALESCE(i.media_sha, ''), i.url, i.name, i.duration, i.mute,
-			i.max_duration, i.refresh_seconds, COALESCE(m.has_thumb, 0), COALESCE(m.orig_name, ''),
+	rows, err := d.r.Query(`SELECT COALESCE(i.media_sha, ''), i.name, i.duration, i.mute,
+			i.max_duration, COALESCE(m.has_thumb, 0), COALESCE(m.orig_name, ''),
 			COALESCE(m.size, 0), m.sha256 IS NOT NULL
 		FROM playlist_items i LEFT JOIN media m ON m.sha256 = i.media_sha
 		WHERE i.playlist_id = ? ORDER BY i.position`, id)
@@ -130,8 +130,8 @@ func (d *DB) playlistItems(id int64) ([]PlaylistItem, error) {
 			origName  string
 			haveMedia int
 		)
-		if err := rows.Scan(&it.SHA256, &it.URL, &it.Name, &it.Duration, &mute,
-			&it.MaxDuration, &it.RefreshSeconds, &hasThumb, &origName,
+		if err := rows.Scan(&it.SHA256, &it.Name, &it.Duration, &mute,
+			&it.MaxDuration, &hasThumb, &origName,
 			&it.Size, &haveMedia); err != nil {
 			return nil, err
 		}
@@ -140,31 +140,16 @@ func (d *DB) playlistItems(id int64) ([]PlaylistItem, error) {
 		it.MediaName = origName
 		if it.Name == "" {
 			it.Name = origName
-			if it.Name == "" {
-				it.Name = it.URL
-			}
 		}
-		it.Kind = itemKind(it)
+		// internal/playlist says what an item is, so the server and the device use
+		// the same words. The extension of the name says image or video.
+		it.Kind = playlist.Kind(playlist.Item{File: it.Name})
 		if hasThumb != 0 {
 			it.Thumb = "/api/admin/media/" + it.SHA256 + "/thumb"
 		}
 		items = append(items, it)
 	}
 	return items, rows.Err()
-}
-
-// itemKind says what an item is. It asks internal/playlist, so the words that the
-// server uses and the words that the device uses are the same words.
-//
-// A media item carries a hash and a name, and the extension of the name is what
-// says image or video. A url item carries no hash. The name of a url item is the
-// URL itself, so the two cases go to Kind apart: an item with a file and a url
-// together is not a kind, it is an error, and the editor catches it.
-func itemKind(it PlaylistItem) string {
-	if it.SHA256 == "" && it.URL != "" {
-		return playlist.Kind(playlist.Item{URL: it.URL})
-	}
-	return playlist.Kind(playlist.Item{File: it.Name})
 }
 
 // PlaylistDeviceCount counts the devices that get this playlist. The editor
@@ -266,10 +251,9 @@ func (d *DB) SavePlaylist(p Playlist) (int64, error) {
 			mute = 1
 		}
 		if _, err := tx.Exec(`INSERT INTO playlist_items
-			(playlist_id, position, media_sha, url, name, duration, mute, max_duration, refresh_seconds)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			id, i, nullString(it.SHA256), it.URL, it.Name, it.Duration, mute,
-			it.MaxDuration, it.RefreshSeconds); err != nil {
+			(playlist_id, position, media_sha, name, duration, mute, max_duration)
+			VALUES (?, ?, ?, ?, ?, ?, ?)`,
+			id, i, it.SHA256, it.Name, it.Duration, mute, it.MaxDuration); err != nil {
 			return 0, err
 		}
 	}
@@ -294,29 +278,25 @@ func (d *DB) validatePlaylist(p Playlist) Errors {
 	for i, it := range p.Items {
 		field := fmt.Sprintf("items[%d]", i)
 		switch {
-		case it.SHA256 != "" && it.URL != "":
-			errs = append(errs, FieldError{field, "has a file and a url; use one of them"})
-		case it.SHA256 != "":
-			if !store.IsSHA256(it.SHA256) {
-				errs = append(errs, FieldError{field + ".sha256", "is not a SHA-256 value of 64 lower case hex characters"})
-				continue
-			}
-			var n int
-			if err := d.r.QueryRow(`SELECT COUNT(*) FROM media WHERE sha256 = ?`, it.SHA256).Scan(&n); err != nil {
-				errs = append(errs, FieldError{field + ".sha256", "could not be checked: " + err.Error()})
-				continue
-			}
-			if n == 0 {
-				errs = append(errs, FieldError{field + ".sha256", "names a file that the media library does not hold"})
-				continue
-			}
-			// The name carries the extension, which is what says image or video.
-			local.Items[i] = playlist.Item{File: it.Name, Duration: it.Duration,
-				Mute: it.Mute, MaxDuration: it.MaxDuration, RefreshSeconds: it.RefreshSeconds}
-		default:
-			local.Items[i] = playlist.Item{URL: it.URL, Duration: it.Duration,
-				Mute: it.Mute, MaxDuration: it.MaxDuration, RefreshSeconds: it.RefreshSeconds}
+		case it.SHA256 == "":
+			errs = append(errs, FieldError{field + ".sha256", "needs a file from the media library"})
+			continue
+		case !store.IsSHA256(it.SHA256):
+			errs = append(errs, FieldError{field + ".sha256", "is not a SHA-256 value of 64 lower case hex characters"})
+			continue
 		}
+		var n int
+		if err := d.r.QueryRow(`SELECT COUNT(*) FROM media WHERE sha256 = ?`, it.SHA256).Scan(&n); err != nil {
+			errs = append(errs, FieldError{field + ".sha256", "could not be checked: " + err.Error()})
+			continue
+		}
+		if n == 0 {
+			errs = append(errs, FieldError{field + ".sha256", "names a file that the media library does not hold"})
+			continue
+		}
+		// The name carries the extension, which is what says image or video.
+		local.Items[i] = playlist.Item{File: it.Name, Duration: it.Duration,
+			Mute: it.Mute, MaxDuration: it.MaxDuration}
 	}
 	if len(errs) > 0 {
 		return errs

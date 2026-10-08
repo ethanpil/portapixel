@@ -154,8 +154,9 @@ func TestABadDayNameIsRefusedAndNotWidenedToEveryDay(t *testing.T) {
 	f := newFleet(t)
 	f.login()
 	group := f.makeGroup("Warehouse")
+	sha := f.uploadMedia("board.png", imageBytes(t, 10, 10))
 	playlist := f.makePlaylist("Safety loop",
-		map[string]any{"url": "https://example.com/board", "duration": 30})
+		map[string]any{"sha256": sha, "name": "board.png", "duration": 30})
 	device := "px-days0001"
 	f.pairDevice(device)
 
@@ -205,8 +206,9 @@ func TestAGroupWithTimeRulesIsNotDeletedSilently(t *testing.T) {
 	f := newFleet(t)
 	f.login()
 	group := f.makeGroup("Warehouse")
+	sha := f.uploadMedia("board.png", imageBytes(t, 10, 10))
 	playlist := f.makePlaylist("Safety loop",
-		map[string]any{"url": "https://example.com/board", "duration": 30})
+		map[string]any{"sha256": sha, "name": "board.png", "duration": 30})
 	f.mustOK(f.adminCall(http.MethodPost, "/api/admin/assignments", map[string]any{
 		"group_id": group, "playlist_id": playlist, "days": []string{"mon"},
 		"start": "08:00", "end": "18:00",

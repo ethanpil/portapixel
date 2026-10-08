@@ -220,25 +220,19 @@ func TestPlaylistValidationOverTheAPI(t *testing.T) {
 			field: "items",
 		},
 		{
-			name: "a url with no scheme",
+			// A web page is not an item. The player shows images and videos.
+			name: "a url item",
 			body: map[string]any{"title": "url", "items": []any{
-				map[string]any{"url": "dash.example.com", "duration": 30},
+				map[string]any{"url": "https://dash.example.com", "duration": 30},
 			}},
-			field: "items[0].url",
+			field: "items[0].sha256",
 		},
 		{
-			name: "mute on a url item",
-			body: map[string]any{"title": "mute", "items": []any{
-				map[string]any{"url": "https://dash.example.com", "duration": 30, "mute": true},
+			name: "a negative duration",
+			body: map[string]any{"title": "negative", "items": []any{
+				map[string]any{"sha256": sha, "name": "a.png", "duration": -1},
 			}},
-			field: "items[0].mute",
-		},
-		{
-			name: "a file and a url",
-			body: map[string]any{"title": "both", "items": []any{
-				map[string]any{"sha256": sha, "url": "https://a.example", "name": "a.png"},
-			}},
-			field: "items[0]",
+			field: "items[0].duration",
 		},
 		{
 			name: "a hash that the library does not hold",
@@ -271,9 +265,10 @@ func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 	f.login()
 
 	sha := f.uploadMedia("welcome.png", imageBytes(t, 30, 20))
+	clip := f.uploadMedia("promo.mp4", []byte("the bytes of a video"))
 	id := f.makePlaylist("Safety loop",
 		map[string]any{"sha256": sha, "name": "welcome.png", "duration": 12},
-		map[string]any{"url": "https://dash.example.com/board", "duration": 60, "refresh_seconds": 300},
+		map[string]any{"sha256": clip, "name": "promo.mp4", "mute": true},
 	)
 
 	res := f.mustOK(f.adminCall(http.MethodGet,
@@ -283,12 +278,11 @@ func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 		Title      string `json:"title"`
 		Transition string `json:"transition"`
 		Items      []struct {
-			SHA256         string `json:"sha256"`
-			URL            string `json:"url"`
-			Kind           string `json:"kind"`
-			Duration       int    `json:"duration"`
-			RefreshSeconds int    `json:"refresh_seconds"`
-			Thumb          string `json:"thumb"`
+			SHA256   string `json:"sha256"`
+			Kind     string `json:"kind"`
+			Duration int    `json:"duration"`
+			Mute     bool   `json:"mute"`
+			Thumb    string `json:"thumb"`
 		} `json:"items"`
 		Devices int `json:"devices"`
 	}
@@ -303,7 +297,7 @@ func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 	if p.Items[0].Kind != "image" || p.Items[0].Thumb == "" {
 		t.Fatalf("the first item is %+v", p.Items[0])
 	}
-	if p.Items[1].Kind != "url" || p.Items[1].RefreshSeconds != 300 {
+	if p.Items[1].Kind != "video" || p.Items[1].SHA256 != clip || !p.Items[1].Mute {
 		t.Fatalf("the second item is %+v", p.Items[1])
 	}
 

@@ -176,7 +176,6 @@ func makePlaylists(c *client, media map[string]string) (map[string]int64, error)
 			{"sha256": media["welcome-autumn.jpg"], "name": "welcome-autumn.jpg", "duration": 15},
 			{"sha256": media["lobby-hours.jpg"], "name": "lobby-hours.jpg", "duration": 12},
 			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false},
-			{"url": "https://dashboards.example.com/lobby", "duration": 40, "refresh_seconds": 300},
 		}},
 		{"Safety loop", []item{
 			{"sha256": media["safety-notice-1.png"], "name": "safety-notice-1.png", "duration": 20},
