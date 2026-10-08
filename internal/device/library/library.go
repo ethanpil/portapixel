@@ -342,7 +342,7 @@ func (snap Snapshot) store(l *Library) {
 
 // HashInBackground computes the hash of each file that the cache does not know
 // yet. It runs until done is closed. It rests between two files: a hash must never
-// take the processor away from the browser. Playback comes before bookkeeping.
+// take the processor away from the player. Playback comes before bookkeeping.
 func (l *Library) HashInBackground(done <-chan struct{}) {
 	for {
 		select {

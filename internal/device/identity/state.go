@@ -72,7 +72,7 @@ type State struct {
 // reboots inside RebootWindow make a loop, and MaxRebootLog is how many times the
 // state file keeps.
 //
-// Four browser restarts in an hour give one reboot, so three reboots in an hour is
+// Four player restarts in an hour give one reboot, so three reboots in an hour is
 // a device that comes up and fails again. It stops asking for anything automatic
 // and shows its state, which is what a person needs to see.
 const (

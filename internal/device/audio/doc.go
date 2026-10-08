@@ -10,7 +10,7 @@
 //   - The volume goes to the mixer with amixer of alsa-utils. It takes effect at
 //     once.
 //   - The output goes to /etc/asound.conf, which names the default card of ALSA.
-//     Chromium reads the default device when it STARTS, so a change of the output
+//     mpv opens the default device when it STARTS, so a change of the output
 //     is of the class "player" in internal/config: the player must restart
 //     before a person hears the new card (internal/config/change.go).
 //

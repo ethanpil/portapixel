@@ -108,8 +108,8 @@ func New(opt Options) *Applier {
 // log and in Error().
 //
 // The order is the file first and the mixer second. The file must be on the disk
-// before a new browser process starts, because Chromium reads the default ALSA
-// device at its start. The mixer call runs a program, so it is the slow half.
+// before a new player process starts, because mpv opens the default ALSA device
+// at its start. The mixer call runs a program, so it is the slow half.
 //
 // The daemon calls this in a goroutine at start, so that a mixer that does not
 // answer cannot hold up the first picture.

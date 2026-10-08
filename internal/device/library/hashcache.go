@@ -22,7 +22,7 @@ import (
 const CacheName = "hashcache.json"
 
 // hashPause is the rest between two files. The device computes the hash in the
-// background: it must never take the processor away from the browser. 4 files a
+// background: it must never take the processor away from the player. 4 files a
 // second is fast enough to hash a full card in a few minutes and slow enough to be
 // invisible.
 const hashPause = 250 * time.Millisecond

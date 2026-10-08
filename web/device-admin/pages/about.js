@@ -64,7 +64,7 @@ export function mount(main, ctx) {
   const licences = card({
     title: 'Open source',
     body: [
-      h('div', { text: 'PortaPixel is MIT licensed. It is built on Alpine Linux, Chromium and cage, all used as they ship.' }),
+      h('div', { text: 'PortaPixel is MIT licensed. It is built on Alpine Linux and mpv, both used as they ship.' }),
       h('div', { class: 'pp-btns', style: { 'margin-top': '12px' } },
         h('a', { class: 'pp-btn', href: '/licenses', target: '_blank', rel: 'noopener', text: 'Licences of everything included' })),
       h('div', { class: 'pp-help' },
