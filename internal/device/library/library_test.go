@@ -625,7 +625,7 @@ refresh_seconds = 300
 	p, _ := snap.Find("default")
 
 	cfg := config.Default()
-	m := BuildManifest(&p, cfg, "high", 1)
+	m := BuildManifest(&p, cfg, 1)
 	if m.Fallback || m.Playlist == nil {
 		t.Fatalf("manifest = %+v", m)
 	}
@@ -650,12 +650,12 @@ refresh_seconds = 300
 
 func TestBuildManifestFallback(t *testing.T) {
 	cfg := config.Default()
-	if m := BuildManifest(nil, cfg, "low", 1); !m.Fallback || m.Playlist != nil {
+	if m := BuildManifest(nil, cfg, 1); !m.Fallback || m.Playlist != nil {
 		t.Fatalf("a nil playlist gave %+v", m)
 	}
 	// A playlist whose files are all missing has nothing to show.
 	p := Playlist{Name: "x", Items: []Item{{Kind: "image", Missing: true}}}
-	if m := BuildManifest(&p, cfg, "low", 1); !m.Fallback {
+	if m := BuildManifest(&p, cfg, 1); !m.Fallback {
 		t.Fatalf("a playlist of missing files is not fallback")
 	}
 }
@@ -679,15 +679,15 @@ file = "e.jpg"
 	p, _ := f.lib.Rescan().Find("default")
 	cfg := config.Default()
 
-	first := names(BuildManifest(&p, cfg, "high", 7))
-	if same := names(BuildManifest(&p, cfg, "high", 7)); first != same {
+	first := names(BuildManifest(&p, cfg, 7))
+	if same := names(BuildManifest(&p, cfg, 7)); first != same {
 		t.Fatalf("the same seed gave two orders: %q and %q", first, same)
 	}
 	// Some other seed must give another order. One of ten seeds is enough: five
 	// items have 120 orders.
 	different := false
 	for seed := uint64(1); seed < 10 && !different; seed++ {
-		if names(BuildManifest(&p, cfg, "high", seed)) != first {
+		if names(BuildManifest(&p, cfg, seed)) != first {
 			different = true
 		}
 	}

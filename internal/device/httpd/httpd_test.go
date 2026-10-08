@@ -41,7 +41,6 @@ type fx struct {
 	commands   []string
 	rootPW     string
 	beats      []browser.Heartbeat
-	codecs     manifest.CodecReport
 	urlSkip    bool
 	urlIndex   int
 	readyHits  int
@@ -150,7 +149,7 @@ func (f *fx) rebuild() {
 		},
 		ActivePlaylist: func() string { return "default" },
 		PlayerManifest: func() library.PlayerManifest {
-			return library.PlayerManifest{Fallback: true, Tier: "high"}
+			return library.PlayerManifest{Fallback: true}
 		},
 		Heartbeat: func(hb browser.Heartbeat) { f.beats = append(f.beats, hb) },
 		URLItem: func(index int) (bool, error) {
@@ -167,7 +166,6 @@ func (f *fx) rebuild() {
 		Rescan:          lib.Rescan,
 		AdminURL:        func() string { return "http://lobby.local/" },
 		SetRootPassword: func(pw string) error { f.rootPW = pw; return nil },
-		SetCodecs:       func(r manifest.CodecReport) { f.codecs = r },
 		PairState:       pairState,
 		Pair:            pair,
 		Unpair:          unpair,
@@ -722,7 +720,7 @@ func TestPlayerProtocol(t *testing.T) {
 
 	// The manifest.
 	got := body(t, f.do(http.MethodGet, "/api/player/manifest", nil, withSecret))
-	if got["fallback"] != true || got["tier"] != "high" {
+	if got["fallback"] != true {
 		t.Errorf("manifest = %v", got)
 	}
 
@@ -1262,39 +1260,6 @@ func TestEmptyPlaylistGivesAnEmptyList(t *testing.T) {
 	}
 	if strings.Contains(f.do(http.MethodGet, "/api/playlists", nil).Body.String(), `"items":null`) {
 		t.Error("the playlist list holds null in place of an empty item array")
-	}
-}
-
-// The player sends its codec report with the FIRST heartbeat (D12). The daemon must
-// take it and must not need it on every beat.
-func TestHeartbeatCarriesTheCodecReport(t *testing.T) {
-	f := newFx(t)
-	withSecret := func(r *request) { r.secret = testSecret }
-
-	first := map[string]any{
-		"playlist": "default", "index": 0, "state": "playing", "frames": 1,
-		"codecs": map[string]any{
-			"h264": map[string]any{"1080": map[string]any{"supported": true, "smooth": true, "powerEfficient": true}},
-		},
-	}
-	if w := f.do(http.MethodPost, "/api/player/heartbeat", first, withSecret); w.Code != http.StatusOK {
-		t.Fatalf("the first heartbeat gave %d: %s", w.Code, w.Body)
-	}
-	if f.codecs == nil || !f.codecs["h264"]["1080"].Supported {
-		t.Fatalf("the daemon got %+v", f.codecs)
-	}
-	if len(f.beats) != 1 || f.beats[0].Frames != 1 {
-		t.Errorf("beats = %+v", f.beats)
-	}
-
-	// A later heartbeat with no report must not clear what the daemon has.
-	f.codecs = nil
-	second := map[string]any{"playlist": "default", "index": 1, "state": "playing", "frames": 2}
-	if w := f.do(http.MethodPost, "/api/player/heartbeat", second, withSecret); w.Code != http.StatusOK {
-		t.Fatalf("the second heartbeat gave %d", w.Code)
-	}
-	if f.codecs != nil {
-		t.Errorf("a heartbeat with no report called SetCodecs with %+v", f.codecs)
 	}
 }
 

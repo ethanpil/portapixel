@@ -14,15 +14,14 @@ func heartbeatFor(s screen) manifest.Heartbeat {
 	st := manifest.Status{
 		DeviceID: s.id, Name: s.name, MDNSName: slug(s.name) + ".local",
 		IPs:     []string{"10.4.2." + fmt.Sprint(60+len(s.id)%40)},
-		Version: s.version, Arch: "arm64", Tier: "high",
+		Version: s.version, Arch: "arm64",
 		UptimeSeconds: 96 * 3600, Load: 0.31, TempC: 47.5,
 		RAMTotalBytes: 2 << 30, RAMFreeBytes: 1 << 30,
 		MediaTotalBytes: 58 << 30, MediaFreeBytes: 31 << 30,
-		BrowserState: "running", DisplayConnected: true, ScreenOn: true,
+		PlayerState: "running", DisplayConnected: true, ScreenOn: true,
 		Paired: true, ServerURL: "http://127.0.0.1:8095",
 		LastSync: now.Add(-40 * time.Second), LastSyncResult: "ok",
 		ClockSynced: true, Timezone: "America/New_York",
-		Codecs: codecsFor("high"),
 		Update: manifest.UpdateState{State: "idle", Current: s.version},
 	}
 	hb := manifest.Heartbeat{
@@ -53,8 +52,6 @@ func heartbeatFor(s screen) manifest.Heartbeat {
 		st.MediaFreeBytes = 1_181_116_006
 		st.LastSyncResult = "error"
 		st.SyncError = "needs 3.4 GB, has 1.1 GB"
-		st.Tier = "low"
-		st.Codecs = codecsFor("low")
 		hb.SyncError = "needs 3.4 GB, has 1.1 GB"
 	case "px-9a02f451": // Meeting room 3: a web page is on the screen.
 		st.NowPlaying = &manifest.NowPlaying{
@@ -70,31 +67,6 @@ func heartbeatFor(s screen) manifest.Heartbeat {
 	hb.Status = st
 	return hb
 }
-
-// codecsFor gives a report of the kind that the player sends. A low-power box
-// decodes H.264 only, which is what makes the item warnings of the playlist
-// editor appear.
-func codecsFor(tier string) manifest.CodecReport {
-	yes := manifest.CodecSupport{Supported: true, Smooth: true, PowerEfficient: boolPtr(true)}
-	soft := manifest.CodecSupport{Supported: true, Smooth: false, PowerEfficient: boolPtr(false)}
-	no := manifest.CodecSupport{Supported: false}
-	if tier == "low" {
-		return manifest.CodecReport{
-			"h264": {"1080": yes, "2160": no},
-			"hevc": {"1080": no, "2160": no},
-			"vp9":  {"1080": soft, "2160": no},
-			"av1":  {"1080": no, "2160": no},
-		}
-	}
-	return manifest.CodecReport{
-		"h264": {"1080": yes, "2160": yes},
-		"hevc": {"1080": yes, "2160": soft},
-		"vp9":  {"1080": yes, "2160": soft},
-		"av1":  {"1080": soft, "2160": no},
-	}
-}
-
-func boolPtr(v bool) *bool { return &v }
 
 // slug makes a host name out of a screen name.
 func slug(name string) string {

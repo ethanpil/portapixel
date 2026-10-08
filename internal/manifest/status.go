@@ -15,7 +15,6 @@ type Status struct {
 	ImageVersion        string `json:"image_version"`         // image release (D50)
 	PackageManifestHash string `json:"package_manifest_hash"` // hash of the installed-packages manifest (D50)
 	Arch                string `json:"arch"`
-	Tier                string `json:"tier"` // low | high
 
 	UptimeSeconds   int64   `json:"uptime_seconds"`
 	Load            float64 `json:"load"` // one-minute load average
@@ -25,10 +24,13 @@ type Status struct {
 	MediaTotalBytes uint64  `json:"media_total_bytes"`
 	MediaFreeBytes  uint64  `json:"media_free_bytes"`
 
-	// The words come from internal/device/browser: the State constants and the
-	// Name of the navigator that the ladder chose (contract section 7).
-	BrowserState     string `json:"browser_state"`   // stopped | starting | running | waiting-for-display | disabled
-	NavigationRung   string `json:"navigation_rung"` // cdp | relaunch
+	// PlayerState uses the State words of the player supervisor. VideoOutput is
+	// the video output of the player. Hwdec is the decoder of the current video,
+	// and "" when no video plays. An empty value means that the player did not
+	// report it.
+	PlayerState      string `json:"player_state"` // stopped | starting | running | waiting-for-display | disabled
+	VideoOutput      string `json:"video_output"` // gpu | drm
+	Hwdec            string `json:"hwdec"`
 	DisplayConnected bool   `json:"display_connected"`
 	ScreenOn         bool   `json:"screen_on"`
 
@@ -47,10 +49,6 @@ type Status struct {
 	// HardwareChanged is true after a hardware repair, until the fleet server
 	// confirms the new identity (D21).
 	HardwareChanged bool `json:"hardware_changed"`
-
-	// Codecs is what the player found out about the video formats of this
-	// device. It is empty until the player sent its first heartbeat.
-	Codecs CodecReport `json:"codecs,omitempty"`
 
 	// PairingCode goes only to loopback callers, which is the fallback screen
 	// (D46). The LAN copy of Status leaves it out.
@@ -98,10 +96,9 @@ const (
 	// the mDNS name of this device, so this device announces
 	// portapixel-<last4>.local instead (D20).
 	WarnMDNSNameTaken = "mdns-name-taken"
-	// WarnZramOff says that this device is low tier and has no zram swap. Chromium
-	// needs more memory than the WPE engine of the first design, and a low tier
-	// device with no swap restarts the browser again and again (plan section 16, the
-	// low RAM row). The OS layer configures zram; the daemon only reports it.
+	// WarnZramOff says that this device has less than 1 GiB of memory and no zram
+	// swap (plan section 16, the low RAM row). The OS layer configures zram; the
+	// daemon only reports it.
 	WarnZramOff = "zram-off"
 	// WarnAudioApplyFailed says that the device could not put [audio] into effect:
 	// the ALSA mixer refused the volume. The picture is not affected, and the
@@ -114,23 +111,6 @@ const (
 	WarnRebootLoop = "reboot-loop"
 )
 
-// CodecReport says which video formats a device decodes (D12). The player probes
-// MediaCapabilities one time and sends the answer with its first heartbeat.
-//
-// The outer key is the codec name, for example "h264". The inner key is the
-// picture height as a word, "1080" or "2160". The field names are the names of
-// the browser API, so the admin UI needs no translation step.
-type CodecReport map[string]map[string]CodecSupport
-
-// CodecSupport is the answer of MediaCapabilities for one codec and one size.
-// PowerEfficient is a pointer, because "the browser does not know" is a third
-// answer that matters: it means hardware decode is unknown, not absent.
-type CodecSupport struct {
-	Supported      bool  `json:"supported"`
-	Smooth         bool  `json:"smooth"`
-	PowerEfficient *bool `json:"powerEfficient"`
-}
-
 // NowPlaying is what the display shows at this moment.
 type NowPlaying struct {
 	Playlist string    `json:"playlist"`
@@ -142,6 +122,9 @@ type NowPlaying struct {
 	// library object with it. It is empty for a URL item, and for a local file
 	// that the device did not hash yet.
 	SHA256 string `json:"sha256,omitempty"`
+	// DroppedFrames counts the frames of the current video that the player
+	// dropped. It is 0 for an image.
+	DroppedFrames int `json:"dropped_frames"`
 }
 
 // UpdateState is the state of the self-update (section 15).

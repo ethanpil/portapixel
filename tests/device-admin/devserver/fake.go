@@ -133,7 +133,7 @@ func (f *fake) status(w http.ResponseWriter, r *http.Request, daemon string) {
 			"item":  "the item of the moment",
 			"since": time.Now().Truncate(dwell * time.Second).Format(time.RFC3339),
 		}
-		out["browser_state"] = "running"
+		out["player_state"] = "running"
 	}
 
 	f.mu.Lock()

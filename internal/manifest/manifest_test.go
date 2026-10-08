@@ -40,9 +40,9 @@ func TestJSONNamesAreSnakeCase(t *testing.T) {
 func TestStatusKeys(t *testing.T) {
 	want := []string{
 		"device_id", "name", "mdns_name", "ips", "version", "image_version",
-		"package_manifest_hash", "arch", "tier", "uptime_seconds", "load",
+		"package_manifest_hash", "arch", "uptime_seconds", "load",
 		"temp_c", "ram_total_bytes", "ram_free_bytes", "media_total_bytes",
-		"media_free_bytes", "browser_state", "navigation_rung",
+		"media_free_bytes", "player_state", "video_output", "hwdec",
 		"display_connected", "screen_on", "paired", "server_url", "last_sync",
 		"last_sync_result", "clock_synced", "timezone", "warnings",
 		"hardware_changed", "config_from_shadow", "update",
@@ -61,7 +61,7 @@ func TestStatusKeys(t *testing.T) {
 		}
 	}
 	// These keys must stay out of an empty Status.
-	for _, key := range []string{"now_playing", "pairing_code", "sync_error", "codecs"} {
+	for _, key := range []string{"now_playing", "pairing_code", "sync_error"} {
 		if _, ok := got[key]; ok {
 			t.Errorf("key %q must be left out when it is empty", key)
 		}
@@ -110,12 +110,16 @@ func TestRoundTrip(t *testing.T) {
 				Acks:       []int64{1, 2},
 				SyncError:  "needs 4.2 GB, has 1.1 GB",
 				Status: Status{
-					DeviceID:   "px-12345678",
-					IPs:        []string{"192.168.1.5"},
-					LastSync:   time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC),
-					Warnings:   []Warning{{Code: WarnWebPassword, Message: "change the web password"}},
-					NowPlaying: &NowPlaying{Playlist: "lobby", Index: 2, Item: "a.jpg", Kind: "image", SHA256: strings.Repeat("b", 64)},
-					Update:     UpdateState{State: "idle"},
+					DeviceID:    "px-12345678",
+					IPs:         []string{"192.168.1.5"},
+					LastSync:    time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC),
+					Warnings:    []Warning{{Code: WarnWebPassword, Message: "change the web password"}},
+					PlayerState: "running",
+					VideoOutput: "gpu",
+					Hwdec:       "v4l2m2m-copy",
+					NowPlaying: &NowPlaying{Playlist: "lobby", Index: 2, Item: "a.mp4", Kind: "video",
+						SHA256: strings.Repeat("b", 64), DroppedFrames: 3},
+					Update: UpdateState{State: "idle"},
 				},
 			},
 		},

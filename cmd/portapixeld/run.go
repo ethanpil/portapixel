@@ -18,7 +18,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -124,15 +123,12 @@ type daemon struct {
 	// same time lose one change. An unpair could then pair the device again.
 	cfgWriteMu sync.Mutex
 
-	mu          sync.Mutex
-	cfg         config.Config
-	fromShadow  bool
-	cfgWarning  string
-	cfgCode     string
-	cfgModified time.Time
-	// codecs is what the player found out about the video formats of this device.
-	// It arrives with the first heartbeat and it does not change (D12).
-	codecs       manifest.CodecReport
+	mu           sync.Mutex
+	cfg          config.Config
+	fromShadow   bool
+	cfgWarning   string
+	cfgCode      string
+	cfgModified  time.Time
 	lastManifest library.PlayerManifest
 	shuffleSeed  uint64
 	// hostList is the Host header allowlist. It is built from the network
@@ -634,7 +630,6 @@ func (d *daemon) deps() httpd.Deps {
 		SetRootPassword: func(password string) error {
 			return setRootPassword(d.paths.state, password)
 		},
-		SetCodecs:     d.setCodecs,
 		PairState:     d.sync.State,
 		Pair:          d.pair,
 		Unpair:        d.sync.Unpair,
@@ -725,28 +720,6 @@ func (d *daemon) startInstall(device, confirm string) error {
 	d.installHub.Reset()
 	go d.install.Run(context.Background(), device, confirm, d.installHub.Send)
 	return nil
-}
-
-// setCodecs takes the codec report of the player (D12). It arrives with the first
-// heartbeat and it does not change while the daemon runs.
-func (d *daemon) setCodecs(report manifest.CodecReport) {
-	clean := health.CleanCodecs(report)
-	if clean == nil {
-		return
-	}
-	d.mu.Lock()
-	first := d.codecs == nil
-	d.codecs = clean
-	d.mu.Unlock()
-
-	if first {
-		names := make([]string, 0, len(clean))
-		for name := range clean {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		d.log.Log("player.codecs", "the player reports "+strings.Join(names, " "))
-	}
 }
 
 // ---------------------------------------------------------------- the state
@@ -899,7 +872,7 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 	}
 
 	d.mu.Lock()
-	fromShadow, warning, code, codecs := d.fromShadow, d.cfgWarning, d.cfgCode, d.codecs
+	fromShadow, warning, code := d.fromShadow, d.cfgWarning, d.cfgCode
 	d.mu.Unlock()
 
 	fleet := d.sync.Report()
@@ -911,9 +884,7 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 		ConfigWarningCode: code,
 		DeviceID:          d.id.DeviceID,
 		HardwareChanged:   state.HardwareChanged,
-		Codecs:            codecs,
-		BrowserState:      browserState.Browser,
-		NavigationRung:    browserState.Rung,
+		PlayerState:       browserState.Browser,
 		DisplayConnected:  browserState.DisplayConnected,
 		// The power controller is what switched the display, so it is the truth
 		// about the screen. The browser is suspended as part of a transition, and
@@ -976,7 +947,6 @@ func (d *daemon) activePlaylist() browser.Active {
 // POST /api/player/url-item counts in the list that the player received.
 func (d *daemon) playerManifest() library.PlayerManifest {
 	cfg := d.config()
-	tier := d.reporter.Tier(cfg)
 	name := d.sched.Active()
 
 	d.mu.Lock()
@@ -985,9 +955,9 @@ func (d *daemon) playerManifest() library.PlayerManifest {
 
 	var out library.PlayerManifest
 	if p, ok := d.lib.Snapshot().Find(name); ok && !p.Kiosk {
-		out = library.BuildManifest(&p, cfg, tier, seed)
+		out = library.BuildManifest(&p, cfg, seed)
 	} else {
-		out = library.BuildManifest(nil, cfg, tier, seed)
+		out = library.BuildManifest(nil, cfg, seed)
 	}
 
 	d.mu.Lock()

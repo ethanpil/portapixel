@@ -27,8 +27,8 @@ const (
 	RootHashFile       = ".root-default-hash"
 )
 
-// lowRAMBytes is the memory under which a device is low tier: transitions
-// degrade and zram swap is on (plan section 4).
+// lowRAMBytes is the memory under which a device needs zram swap (plan section
+// 4). os/install.sh uses the same number for the size of the zram device.
 const lowRAMBytes = 1 << 30 // 1 GiB
 
 // Sources are the file roots that the report reads. A test gives directories
@@ -57,11 +57,10 @@ type Inputs struct {
 	DeviceID          string
 	// HardwareChanged is the repair flag of the state file (D21).
 	HardwareChanged bool
-	// Codecs is the report of the player, or nil before the first heartbeat.
-	Codecs manifest.CodecReport
 
-	BrowserState     string
-	NavigationRung   string
+	PlayerState      string
+	VideoOutput      string
+	Hwdec            string
 	DisplayConnected bool
 	ScreenOn         bool
 	NowPlaying       *manifest.NowPlaying
@@ -107,45 +106,6 @@ type Inputs struct {
 	Trusted bool
 }
 
-// The codec names and the picture heights that a codec report may hold. A report
-// comes from the player, which is a web page, so the daemon keeps the values that
-// it knows and drops the rest.
-var (
-	codecNames  = []string{"h264", "hevc", "vp9", "av1"}
-	codecHeight = []string{"1080", "2160"}
-)
-
-// CleanCodecs keeps the codec names and the sizes that this product knows.
-//
-// The report arrives in an HTTP body. Without this step a page could make the
-// daemon hold a map of any size and serve it again to every caller of
-// /api/status.
-func CleanCodecs(in manifest.CodecReport) manifest.CodecReport {
-	if in == nil {
-		return nil
-	}
-	out := make(manifest.CodecReport, len(codecNames))
-	for _, name := range codecNames {
-		bands, ok := in[name]
-		if !ok {
-			continue
-		}
-		kept := make(map[string]manifest.CodecSupport, len(codecHeight))
-		for _, height := range codecHeight {
-			if support, ok := bands[height]; ok {
-				kept[height] = support
-			}
-		}
-		if len(kept) > 0 {
-			out[name] = kept
-		}
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
 // Reporter builds the status. It holds the facts that cannot change while the
 // daemon runs: the image version and the hash of the package manifest (D50).
 // Reading and hashing that file at every call would cost milliseconds for an
@@ -157,8 +117,8 @@ type Reporter struct {
 	imageVersion string
 	manifestHash string
 
-	// The total memory is read once: it is a fact of the machine, and Tier asks
-	// for it at every call of Status.
+	// The total memory is read once: it is a fact of the machine, and the zram
+	// rule asks for it at every call of Status.
 	totalOnce sync.Once
 	ramTotal  uint64
 }
@@ -198,7 +158,6 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 		ImageVersion:        r.imageVersion,
 		PackageManifestHash: r.manifestHash,
 		Arch:                version.Arch(),
-		Tier:                r.Tier(in.Config),
 
 		UptimeSeconds:   r.uptime(),
 		Load:            r.load(),
@@ -208,8 +167,9 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 		MediaTotalBytes: total,
 		MediaFreeBytes:  free,
 
-		BrowserState:     in.BrowserState,
-		NavigationRung:   in.NavigationRung,
+		PlayerState:      in.PlayerState,
+		VideoOutput:      in.VideoOutput,
+		Hwdec:            in.Hwdec,
 		DisplayConnected: in.DisplayConnected,
 		ScreenOn:         in.ScreenOn,
 		NowPlaying:       in.NowPlaying,
@@ -224,7 +184,6 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 		Timezone:         in.Config.Device.Timezone,
 		ConfigFromShadow: in.ConfigFromShadow,
 		HardwareChanged:  in.HardwareChanged,
-		Codecs:           in.Codecs,
 		PairingCode:      in.PairingCode,
 		Update:           in.Update,
 	}
@@ -241,7 +200,7 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 // redact takes the fields that only a trusted caller may read out of the report.
 //
 // What stays: the name, the device ID, the addresses, the health numbers, the
-// state of the browser and of the screen, the playlist that plays and the
+// state of the player and of the screen, the playlist that plays and the
 // warnings that name no secret. That is what the login page and a monitor need.
 //
 // What goes:
@@ -333,12 +292,11 @@ func (r *Reporter) warnings(in Inputs) []manifest.Warning {
 		add(manifest.WarnMDNSNameTaken, "Another device on this network already answers for "+
 			in.MDNSNameTaken+". This device announces its factory name instead. Give the two devices different names.")
 	}
-	// A low tier device needs zram swap. Chromium uses more memory than the engine of
-	// the first design, and a low tier device with no swap restarts the browser again
-	// and again. The OS layer switches zram on; this is the report of it.
-	if r.Tier(in.Config) == "low" && !r.zramActive() {
+	// A device with little memory needs zram swap. The OS layer switches zram on;
+	// this is the report of it.
+	if r.lowMemory() && !r.zramActive() {
 		add(manifest.WarnZramOff, "This device has less than 1 GB of memory and no zram swap. "+
-			"The browser may restart again and again. Switch zram on in the operating system.")
+			"The player may stop again and again. Switch zram on in the operating system.")
 	}
 	if in.AudioError != "" {
 		add(manifest.WarnAudioApplyFailed, in.AudioError+" The picture is not affected.")
@@ -358,7 +316,7 @@ func (r *Reporter) warnings(in Inputs) []manifest.Warning {
 // there gives no swap, whatever /sys/block holds: the zram-init package can be
 // installed and its service switched off. A machine with no /proc/swaps at all is a
 // development machine, and that answers false, so the warning appears only where the
-// tier is low.
+// memory is low.
 func (r *Reporter) zramActive() bool {
 	for _, line := range strings.Split(readFile(filepath.Join(r.src.ProcRoot, "swaps")), "\n") {
 		if strings.HasPrefix(line, "/dev/zram") {
@@ -389,28 +347,17 @@ func (r *Reporter) rootPasswordIsDefault() bool {
 	return false
 }
 
-// Tier says if this device is low tier or high tier (plan section 4). The value
-// "auto" in the configuration asks the device to decide, and the memory is the
-// whole test. Every Raspberry Pi model that is too slow for a crossfade has 1 GiB
-// or less. A list of model names said the same thing a second time.
-//
-// The memory of a machine does not change while it runs, so the answer comes from
-// the value that the first report read.
-func (r *Reporter) Tier(cfg config.Config) string {
-	switch cfg.Device.Tier {
-	case "low", "high":
-		return cfg.Device.Tier
-	}
-	if total, _ := r.memory(); total > 0 && total < lowRAMBytes {
-		return "low"
-	}
-	return "high"
+// lowMemory reports if this device has less than lowRAMBytes of memory, which is
+// the zram rule of os/install.sh. A machine that gives no number is not low.
+func (r *Reporter) lowMemory() bool {
+	total, _ := r.memory()
+	return total > 0 && total < lowRAMBytes
 }
 
 // memory gives MemTotal and MemAvailable from one read of /proc/meminfo.
 //
 // MemTotal is read once for the life of the daemon: the memory of a machine does
-// not change, and Tier asks for it at every call of Status.
+// not change, and lowMemory asks for it at every call of Status.
 func (r *Reporter) memory() (total, free uint64) {
 	values := r.meminfo("MemTotal", "MemAvailable")
 	r.totalOnce.Do(func() { r.ramTotal = values["MemTotal"] })

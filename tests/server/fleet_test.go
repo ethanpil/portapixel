@@ -220,7 +220,7 @@ func TestHeartbeatAndCommandAck(t *testing.T) {
 		Acks: []int64{queued.ID},
 		Status: manifest.Status{
 			DeviceID: "px-hb000001", Version: "1.4.2", TempC: 42.5,
-			MediaFreeBytes: 1 << 30, BrowserState: "running",
+			MediaFreeBytes: 1 << 30, PlayerState: "running",
 		},
 	}
 	f.mustOK(f.device(http.MethodPost, "/api/v1/heartbeat", token, hb), "heartbeat")

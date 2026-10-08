@@ -13,7 +13,6 @@ import (
 // the order that it receives.
 type PlayerManifest struct {
 	Fallback bool              `json:"fallback"`
-	Tier     string            `json:"tier"` // low | high
 	Playlist *ManifestPlaylist `json:"playlist"`
 }
 
@@ -52,8 +51,8 @@ type ManifestItem struct {
 //
 // seed makes the shuffle. The caller gives a new seed each time a playlist
 // starts, so the order is different at each start but stable while it plays.
-func BuildManifest(p *Playlist, cfg config.Config, tier string, seed uint64) PlayerManifest {
-	out := PlayerManifest{Fallback: true, Tier: tier}
+func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
+	out := PlayerManifest{Fallback: true}
 	if p == nil {
 		return out
 	}
@@ -108,7 +107,6 @@ func BuildManifest(p *Playlist, cfg config.Config, tier string, seed uint64) Pla
 	}
 	return PlayerManifest{
 		Fallback: false,
-		Tier:     tier,
 		Playlist: &ManifestPlaylist{
 			Name:         p.Name,
 			Title:        p.Title,

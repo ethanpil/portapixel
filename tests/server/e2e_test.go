@@ -127,7 +127,7 @@ func TestEndToEnd(t *testing.T) {
 		Status: manifest.Status{
 			DeviceID: "px-e2e00001", Name: "Lobby North", Version: "1.4.2",
 			TempC: 47.5, MediaFreeBytes: 3 << 30, MediaTotalBytes: 8 << 30,
-			BrowserState: "running", ScreenOn: true,
+			PlayerState: "running", ScreenOn: true,
 			NowPlaying: &manifest.NowPlaying{
 				Playlist: "lobby-loop", Index: 0, Item: "welcome-autumn.png", Kind: "image",
 			},

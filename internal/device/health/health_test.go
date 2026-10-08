@@ -68,8 +68,7 @@ func TestStatusReadsTheSystemFiles(t *testing.T) {
 	got := New(f.src).Status(Inputs{
 		Config:           cfg,
 		DeviceID:         "px-1a2b3c4d",
-		BrowserState:     "running",
-		NavigationRung:   "cdp",
+		PlayerState:      "running",
 		DisplayConnected: true,
 		ScreenOn:         true,
 		ClockSynced:      true,
@@ -222,34 +221,6 @@ func TestConfigWarningCode(t *testing.T) {
 	}
 }
 
-// The codec report comes from a web page, so the daemon keeps the values that it
-// knows and drops everything else.
-func TestCleanCodecs(t *testing.T) {
-	yes := true
-	in := manifest.CodecReport{
-		"h264":   {"1080": {Supported: true, Smooth: true, PowerEfficient: &yes}, "720": {}},
-		"hevc":   {"2160": {Supported: false}},
-		"madeUp": {"1080": {Supported: true}},
-		"vp9":    {"999": {Supported: true}},
-	}
-	got := CleanCodecs(in)
-	if len(got) != 2 {
-		t.Fatalf("codecs = %+v, want h264 and hevc only", got)
-	}
-	if len(got["h264"]) != 1 || !got["h264"]["1080"].Supported {
-		t.Errorf("h264 = %+v", got["h264"])
-	}
-	if _, ok := got["madeUp"]; ok {
-		t.Error("a codec name that this product does not know was kept")
-	}
-	if _, ok := got["vp9"]; ok {
-		t.Error("a codec with no size that this product knows was kept")
-	}
-	if CleanCodecs(nil) != nil {
-		t.Error("CleanCodecs(nil) gave a map")
-	}
-}
-
 func TestRootPasswordWarningNeedsBothFiles(t *testing.T) {
 	f := newRoots(t)
 	r := New(f.src)
@@ -261,42 +232,6 @@ func TestRootPasswordWarningNeedsBothFiles(t *testing.T) {
 	f.write(t, filepath.Join(f.src.StateDir, RootHashFile), "$6$abc$hash\n")
 	if r.rootPasswordIsDefault() {
 		t.Error("the warning appeared after the password changed")
-	}
-}
-
-func TestTier(t *testing.T) {
-	tests := []struct {
-		name     string
-		tier     string
-		memTotal string
-		model    string
-		want     string
-	}{
-		{"the configuration wins", "low", "MemTotal: 8000000 kB\n", "", "low"},
-		{"high is high", "high", "MemTotal: 400000 kB\n", "Raspberry Pi 3 Model B", "high"},
-		{"little memory is low", "auto", "MemTotal: 500000 kB\n", "", "low"},
-		// Every Raspberry Pi model that is too slow for a crossfade has 1 GiB or
-		// less, so the memory says it and a list of model names said it again.
-		{"a Pi 3 is low by its memory", "auto", "MemTotal: 1000000 kB\n", "Raspberry Pi 3 Model B Plus Rev 1.3", "low"},
-		{"a Zero 2 is low by its memory", "auto", "MemTotal: 500000 kB\n", "Raspberry Pi Zero 2 W Rev 1.0", "low"},
-		{"a Pi 4 is high", "auto", "MemTotal: 4000000 kB\n", "Raspberry Pi 4 Model B Rev 1.4", "high"},
-		{"no facts at all is high", "auto", "", "", "high"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			f := newRoots(t)
-			if tt.memTotal != "" {
-				f.proc(t, "meminfo", tt.memTotal)
-			}
-			if tt.model != "" {
-				f.proc(t, "device-tree/model", tt.model+"\x00")
-			}
-			cfg := config.Default()
-			cfg.Device.Tier = tt.tier
-			if got := New(f.src).Tier(cfg); got != tt.want {
-				t.Errorf("Tier = %q, want %q", got, tt.want)
-			}
-		})
 	}
 }
 
@@ -456,12 +391,11 @@ func hasCode(list []manifest.Warning, code string) bool {
 	return false
 }
 
-// A low tier device with no zram swap gets a warning (final review 20).
-//
-// Chromium needs more memory than the engine of the first design. CONTEXT.md
-// measured 512 MB with no swap as a restart loop, and 512 MB with zram as usable.
-// The operating system switches zram on; the daemon only reports the state, so a
-// person and the fleet dashboard can see a device that will not hold.
+// A device with less than 1 GiB of memory and no zram swap gets a warning (final
+// review 20). The memory is the whole test, the same as the zram rule of
+// os/install.sh. The operating system switches zram on; the daemon only reports
+// the state, so a person and the fleet dashboard can see a device that will not
+// hold.
 func TestZramWarning(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -470,26 +404,31 @@ func TestZramWarning(t *testing.T) {
 		want  bool
 	}{
 		{
-			name:  "low tier and no swap at all",
+			name:  "little memory and no swap at all",
 			ram:   "MemTotal:         512000 kB\nMemAvailable:     200000 kB\n",
 			swaps: "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n",
 			want:  true,
 		},
 		{
-			name:  "low tier with zram",
+			name:  "little memory with zram",
 			ram:   "MemTotal:         512000 kB\nMemAvailable:     200000 kB\n",
 			swaps: "Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n/dev/zram0\tpartition\t524284\t0\t100\n",
 			want:  false,
 		},
 		{
-			name:  "low tier with swap on a disk, which is not zram",
+			name:  "little memory with swap on a disk, which is not zram",
 			ram:   "MemTotal:         512000 kB\nMemAvailable:     200000 kB\n",
 			swaps: "Filename\t\t\t\tType\t\tSize\tUsed\tPriority\n/dev/sda4\tpartition\t524284\t0\t-2\n",
 			want:  true,
 		},
 		{
-			name:  "high tier needs no zram",
+			name:  "enough memory needs no zram",
 			ram:   "MemTotal:        4014520 kB\nMemAvailable:    3012345 kB\n",
+			swaps: "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n",
+			want:  false,
+		},
+		{
+			name:  "no memory number is not little memory",
 			swaps: "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n",
 			want:  false,
 		},
@@ -497,12 +436,14 @@ func TestZramWarning(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newRoots(t)
-			f.proc(t, "meminfo", tt.ram)
+			if tt.ram != "" {
+				f.proc(t, "meminfo", tt.ram)
+			}
 			f.proc(t, "swaps", tt.swaps)
 
 			got := New(f.src).Status(Inputs{Config: config.Default(), DeviceID: "px-1a2b3c4d", Trusted: true})
 			if has := hasCode(got.Warnings, manifest.WarnZramOff); has != tt.want {
-				t.Errorf("the zram warning is %v, want %v (tier %q)", has, tt.want, got.Tier)
+				t.Errorf("the zram warning is %v, want %v (memory %d)", has, tt.want, got.RAMTotalBytes)
 			}
 		})
 	}

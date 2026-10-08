@@ -95,9 +95,6 @@ type Deps struct {
 	AdminURL func() string
 	// SetRootPassword changes the root password of the system.
 	SetRootPassword func(password string) error
-	// SetCodecs takes the codec report that the player sends with its first
-	// heartbeat (D12).
-	SetCodecs func(manifest.CodecReport)
 
 	// PairState gives the pairing state of GET /api/pair.
 	PairState func() PairState

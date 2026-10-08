@@ -4,7 +4,6 @@ import (
 	"net/http"
 
 	"github.com/ethanpil/portapixel/internal/device/browser"
-	"github.com/ethanpil/portapixel/internal/manifest"
 )
 
 // GET /api/player/manifest gives the active playlist (ARCHITECTURE 7a). The
@@ -14,29 +13,16 @@ func (d Deps) getPlayerManifest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, d.PlayerManifest())
 }
 
-// heartbeatBody is the body of POST /api/player/heartbeat. It is the supervisor
-// heartbeat plus the codec report, which comes with the FIRST heartbeat only (D12).
-//
-// The codec report is not a field of browser.Heartbeat, because the browser
-// supervisor has no use for it: the report belongs to the health report.
-type heartbeatBody struct {
-	browser.Heartbeat
-	Codecs manifest.CodecReport `json:"codecs,omitempty"`
-}
-
 // POST /api/player/heartbeat, every 5 seconds.
 //
 // The frame counter in the body is what makes a frozen picture visible: the
 // timers of a dead page still fire, but the frame clock stops (D45).
 func (d Deps) postHeartbeat(w http.ResponseWriter, r *http.Request) {
-	var body heartbeatBody
+	var body browser.Heartbeat
 	if !readJSON(w, r, &body) {
 		return
 	}
-	d.Heartbeat(body.Heartbeat)
-	if body.Codecs != nil && d.SetCodecs != nil {
-		d.SetCodecs(body.Codecs)
-	}
+	d.Heartbeat(body)
 	writeJSON(w, http.StatusOK, ok)
 }
 

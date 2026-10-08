@@ -34,7 +34,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,7 +69,6 @@ type mock struct {
 	ms         int
 	lastFrames int64
 	beats      int
-	codecs     manifest.CodecReport
 	clients    map[chan string]bool
 }
 
@@ -227,7 +225,6 @@ var scenarios = []struct{ name, about string }{
 	{"broken", "every item fails: two are absent, one never answers"},
 	{"fallback", "no content, clock in order"},
 	{"fallback-code", "no content, pairing code, warnings, no clock"},
-	{"lowtier", "tier low, video to video, fade through black (D14)"},
 	{"urlskip", "url items that the daemon skips, one of them last"},
 	{"urlgo", "a url item that the daemon takes; the player stops"},
 	{"single-image", "one image, no transition"},
@@ -239,27 +236,17 @@ func (m *mock) build() playerManifest {
 	sc, tr, ms := m.scenario, m.transition, m.ms
 	m.mu.Unlock()
 
-	tier := "high"
 	var list []item
 
 	switch sc {
 	case "fallback", "fallback-code":
-		return playerManifest{Fallback: true, Tier: tier}
+		return playerManifest{Fallback: true}
 
 	case "onefail":
 		list = []item{card(1, 5), missing(2), raster(3, 5)}
 
 	case "broken":
 		list = []item{missing(1), slow(2), missing(3)}
-
-	case "lowtier":
-		tier = "low"
-		if m.video == "" {
-			log.Print("lowtier needs --video; images are used instead")
-			list = []item{card(1, 4), raster(2, 4)}
-		} else {
-			list = []item{m.clip(true, 8), m.clip(true, 8)}
-		}
 
 	case "urlskip":
 		list = []item{card(1, 4), webPage(1, 20), webPage(2, 20), raster(2, 4), webPage(3, 20)}
@@ -290,7 +277,6 @@ func (m *mock) build() playerManifest {
 		list[i].Index = i
 	}
 	return playerManifest{
-		Tier: tier,
 		Playlist: &mockPlaylist{
 			Name: sc, Title: "Mock " + sc,
 			Transition: tr, TransitionMS: ms,
@@ -340,7 +326,7 @@ func (m *mock) manifest(w http.ResponseWriter, r *http.Request) {
 	if mf.Playlist != nil {
 		n = len(mf.Playlist.Items)
 	}
-	log.Printf("manifest: fallback=%v tier=%s items=%d", mf.Fallback, mf.Tier, n)
+	log.Printf("manifest: fallback=%v items=%d", mf.Fallback, n)
 	writeJSON(w, mf)
 }
 
@@ -348,25 +334,10 @@ func (m *mock) heartbeat(w http.ResponseWriter, r *http.Request) {
 	if !m.gate(w, r) {
 		return
 	}
-	// The first heartbeat also carries the codec report of the screen (D12).
-	var hb struct {
-		heartbeat
-		Codecs manifest.CodecReport `json:"codecs,omitempty"`
-	}
+	var hb heartbeat
 	if err := json.NewDecoder(r.Body).Decode(&hb); err != nil {
 		http.Error(w, "bad body", http.StatusBadRequest)
 		return
-	}
-	if hb.Codecs != nil {
-		names := make([]string, 0, len(hb.Codecs))
-		for name := range hb.Codecs {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		log.Printf("the player reports the codecs: %s", strings.Join(names, " "))
-		m.mu.Lock()
-		m.codecs = hb.Codecs
-		m.mu.Unlock()
 	}
 	m.mu.Lock()
 	m.beats++
@@ -417,20 +388,18 @@ func (m *mock) ready(w http.ResponseWriter, r *http.Request) {
 
 func (m *mock) status(w http.ResponseWriter, r *http.Request) {
 	m.mu.Lock()
-	sc, codecs := m.scenario, m.codecs
+	sc := m.scenario
 	m.mu.Unlock()
 
 	s := manifest.Status{
 		DeviceID: "px-4f2a9c17", Name: "Lobby north", MDNSName: "lobby-north.local",
 		IPs:     []string{"192.168.1.42", "fe80::7a3c:1bff:fe4d:22a1"},
-		Version: "0.1.0-mock", ImageVersion: "0.1.0", Arch: "amd64", Tier: "high",
+		Version: "0.1.0-mock", ImageVersion: "0.1.0", Arch: "amd64",
 		UptimeSeconds: 96543, Load: 0.31, TempC: 47.5,
 		RAMTotalBytes: 2 << 30, RAMFreeBytes: 1 << 30,
 		MediaTotalBytes: 28 << 30, MediaFreeBytes: 21 << 30,
-		BrowserState: "running", NavigationRung: "cdp",
-		DisplayConnected: true, ScreenOn: true,
+		PlayerState: "running", DisplayConnected: true, ScreenOn: true,
 		LastSyncResult: "never", ClockSynced: true, Timezone: "America/New_York",
-		Codecs:   codecs,
 		Warnings: []manifest.Warning{{Code: manifest.WarnWebPassword, Message: "Change the web password."}},
 	}
 	if sc == "fallback-code" {
