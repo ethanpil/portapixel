@@ -90,7 +90,7 @@ export function fileURL(sha256) {
 export function preview(kind, url, opts = {}) {
   const cls = opts.wide ? 'pp-thumb pp-thumb--wide' : 'pp-thumb pp-thumb--sm';
   if (url) return h('span', { class: cls }, h('img', { src: url, alt: '', loading: 'lazy' }));
-  const name = kind === 'video' ? 'video' : (kind === 'url' ? 'url' : 'image');
+  const name = kind === 'video' ? 'video' : 'image';
   return h('span', { class: opts.wide ? `${cls} sv-blank` : 'sv-icon' }, icon(name, opts.wide ? 26 : 16));
 }
 

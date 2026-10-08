@@ -12,8 +12,7 @@ import {
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
 import { mountPlaylistEditor } from '/shared/playlist-editor.js';
-import { warningsFor } from '/shared/item-warnings.js';
-import { thumbURL, parseStatus, screenHref } from '../util.js';
+import { thumbURL } from '../util.js';
 
 /* The playlist that is open. It lives in the module, so a trip to the media page
    and back comes back to the same playlist. */
@@ -111,7 +110,7 @@ export function mount(main, ctx) {
       fill(panel, card({
         body: h('div', { class: 'pp-empty', style: { margin: '0' } },
           h('div', { class: 'pp-empty__title', text: 'No playlist is open' }),
-          h('div', { class: 'pp-empty__body', text: 'A playlist is a list of files and web pages. Groups and screens point at one, and every screen that uses it downloads what it needs.' }),
+          h('div', { class: 'pp-empty__body', text: 'A playlist is a list of images and videos. Groups and screens point at one, and every screen that uses it downloads what it needs.' }),
           h('div', { class: 'pp-empty__actions' },
             h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'New playlist', onClick: createPlaylist }))),
       }));
@@ -141,8 +140,6 @@ export function mount(main, ctx) {
         // The server holds the playlist in its database. There is no file with
         // hand-typed comments to lose, so there is nothing to warn about.
         commentLossWarning: false,
-        decode: fleetCodecs(),
-        tier: fleetTier(),
         impact: {
           text: h('span', null, reachWords(p), ' · ', fmtBytes(bytes), ' of media'),
           note: 'Changes reach a screen at its next check-in.',
@@ -150,11 +147,6 @@ export function mount(main, ctx) {
         saveLabel: p.devices
           ? `Save — ${p.devices} ${p.devices === 1 ? 'screen fetches' : 'screens fetch'} the changes`
           : 'Save playlist',
-        warnPrefix: 'Some screens may struggle with it.',
-        // The report is the whole fleet at its worst, so the words must say
-        // "some screens" and never "this box".
-        warnMachine: 'some screens',
-        warnAction: { label: 'Which ones?', onClick: whichScreens },
       },
       mediaSource: {
         list: () => library.map(forEditor),
@@ -188,25 +180,20 @@ export function mount(main, ctx) {
      editor keeps every field that it does not own. */
   function forEditor(raw) {
     const m = raw.sha256 ? library.find((x) => x.sha256 === raw.sha256) : null;
-    const name = raw.name || raw.orig_name || raw.url || '';
+    const name = raw.name || raw.orig_name || '';
     const out = {
       name,
       kind: raw.kind || guessKind(name),
       duration: Number(raw.duration) || null,
+      sha256: raw.sha256,
+      max_duration: Number(raw.max_duration) || null,
     };
-    if (raw.url) {
-      out.url = raw.url;
-      out.refresh_seconds = Number(raw.refresh_seconds) || null;
-    } else {
-      out.sha256 = raw.sha256;
-      out.max_duration = Number(raw.max_duration) || null;
-      if (out.kind === 'video') out.mute = !!raw.mute;
-      if (m) {
-        out.size = m.size;
-        out.width = m.width;
-        out.height = m.height;
-        if (m.has_thumb) out.thumb = thumbURL(m.sha256);
-      }
+    if (out.kind === 'video') out.mute = !!raw.mute;
+    if (m) {
+      out.size = m.size;
+      out.width = m.width;
+      out.height = m.height;
+      if (m.has_thumb) out.thumb = thumbURL(m.sha256);
     }
     return out;
   }
@@ -255,18 +242,10 @@ export function mount(main, ctx) {
     };
   }
 
-  /* The body of a save. An item carries a hash or a URL and never both, and a
-     file item always carries its name: the extension is what says image or
-     video, on this server and on every screen. */
+  /* The body of a save. An item carries a hash and always its name: the
+     extension is what says image or video, on this server and on every
+     screen. */
   function forServer(it) {
-    if (it.url) {
-      return {
-        url: it.url,
-        name: it.name || it.url,
-        duration: Number(it.duration) || 0,
-        refresh_seconds: Number(it.refresh_seconds) || 0,
-      };
-    }
     if (!it.sha256) return null;
     return {
       sha256: it.sha256,
@@ -275,79 +254,6 @@ export function mount(main, ctx) {
       mute: !!it.mute,
       max_duration: Number(it.max_duration) || 0,
     };
-  }
-
-  /* --------------------------------------------------- the fleet warnings */
-
-  /* The decode report of the whole fleet, at its worst: a format counts as
-     supported only when every screen decodes it. The playlist editor then shows
-     one warning, and "Which ones?" names the screens.
-
-     There is no route for this. The warnings are client-side work against the
-     last report of each screen, which is what the API notes say. */
-  function fleetCodecs() {
-    const reports = screenCodecs();
-    if (reports.length === 0) return null;
-    const out = { source: 'device', tier: fleetTier(), codecs: {} };
-    for (const name of ['h264', 'hevc', 'vp9', 'av1']) {
-      out.codecs[name] = {};
-      for (const band of ['1080', '2160']) {
-        let supported = true;
-        let smooth = true;
-        let efficient = true;
-        for (const r of reports) {
-          const got = (r.codecs[name] || {})[band];
-          if (!got || !got.supported) supported = false;
-          if (!got || !got.smooth) smooth = false;
-          if (!got || got.powerEfficient === false) efficient = false;
-        }
-        out.codecs[name][band] = { supported, smooth, powerEfficient: efficient };
-      }
-    }
-    return out;
-  }
-
-  function fleetTier() {
-    return ctx.store.devices.some((d) => parseStatus(d).tier === 'low') ? 'low' : 'high';
-  }
-
-  /* One entry for each screen that reported its codecs. */
-  function screenCodecs() {
-    const out = [];
-    for (const d of ctx.store.devices) {
-      const st = parseStatus(d);
-      if (st.codecs && Object.keys(st.codecs).length) {
-        out.push({ device: d, codecs: st.codecs, tier: st.tier || null });
-      }
-    }
-    return out;
-  }
-
-  /* The screens that would have trouble with one item. Each screen is tested
-     against its own report, so the list is exact and not a guess. */
-  function whichScreens(item) {
-    const hits = [];
-    for (const r of screenCodecs()) {
-      const caps = { source: 'device', tier: r.tier, codecs: r.codecs };
-      const why = warningsFor(item, caps, r.tier, { mixed: true });
-      // A warning is {prefix, text}. An older shared module gave a plain string.
-      if (why.length) hits.push({ device: r.device, why: why[0].text || String(why[0]) });
-    }
-    modal({
-      title: `Which screens struggle with ${item.name || 'this item'}?`,
-      wide: true,
-      body: hits.length
-        ? h('div', null,
-          h('div', { class: 'pp-help', style: { 'margin-top': '0' } },
-            'Each screen is measured against what it reported about its own hardware.'),
-          h('div', { class: 'pp-facts' }, hits.map((hit) => h('div', { class: 'pp-facts__row' },
-            h('span', { class: 'pp-facts__k' },
-              h('a', { href: screenHref(hit.device.id), text: hit.device.name || hit.device.id })),
-            h('span', { class: 'pp-facts__v', style: { 'font-family': 'inherit', 'max-width': '60%' }, text: hit.why })))))
-        : h('div', { class: 'pp-help' },
-          'No screen reported a problem with it. The warning comes from the file itself, so a screen that has not checked in yet may still struggle.'),
-      actions: [{ label: 'Close', value: true }],
-    });
   }
 
   /* ------------------------------------------------------- make and remove */

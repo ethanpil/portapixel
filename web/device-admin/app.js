@@ -171,8 +171,7 @@ function start() {
     nameEl.textContent = status.name || 'This screen';
     idEl.textContent = status.device_id || '';
     versionEl.textContent = status.version ? `v${status.version}` : '';
-    const bits = [status.arch, status.tier === 'low' ? 'low-power' : 'full-power'].filter(Boolean);
-    hardwareEl.textContent = bits.join(' · ');
+    hardwareEl.textContent = status.arch || '';
     document.title = status.name ? `${status.name} — PortaPixel` : 'PortaPixel';
   });
   store.start();

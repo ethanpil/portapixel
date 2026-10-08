@@ -6,28 +6,24 @@
 
    The playlist it edits:
      {name, title, transition, shuffle,
-      items: [{file|sha256|url, name, kind, duration, mute, max_duration,
-               refresh_seconds, thumb}]}
+      items: [{file|sha256, name, kind, duration, mute, max_duration, thumb}]}
 */
 
 import { h, fill, icon, toast, modal, confirmDialog, fmtDuration, fmtBytes, banner, progress } from './ui.js';
 import { warningsFor } from './item-warnings.js';
 
+/* The same two words as config.Transitions in internal/config. */
 const TRANSITIONS = [
-  ['crossfade', 'Crossfade'],
+  ['fade', 'Fade through black'],
   ['cut', 'Hard cut'],
-  ['push-left', 'Push left'],
-  ['push-right', 'Push right'],
-  ['push-up', 'Push up'],
-  ['push-down', 'Push down'],
 ];
 
-const KIND_LABEL = { image: 'Image', video: 'Video', url: 'Web page' };
+const KIND_LABEL = { image: 'Image', video: 'Video' };
 
 /* The item keys that the editor itself reads and writes. snapshot() puts them
    first, in this order, and keeps every other key that the host page added. */
-const ITEM_KEYS = ['file', 'sha256', 'url', 'name', 'kind', 'duration', 'mute',
-  'max_duration', 'refresh_seconds', 'thumb'];
+const ITEM_KEYS = ['file', 'sha256', 'name', 'kind', 'duration', 'mute',
+  'max_duration', 'thumb'];
 
 /** Mount the editor into `el`.
     playlist:     the playlist object. It is copied, never edited in place.
@@ -35,14 +31,11 @@ const ITEM_KEYS = ['file', 'sha256', 'url', 'name', 'kind', 'duration', 'mute',
                   list() gives the library items the user can add.
                   upload() is the device path: it puts a file in the playlist.
     readOnly:     true shows the managed-by banner and disables everything.
-    capabilities: {commentLossWarning, configFile, managedBy, folder, tier,
-                   decode, warnPrefix, warnMachine, warnAction, impact, saveLabel,
-                   itemWarnings(item), libraryLabel, libraryEmpty}
+    capabilities: {commentLossWarning, configFile, managedBy, folder, impact,
+                   saveLabel, itemWarnings(item), libraryLabel, libraryEmpty}
                   itemWarnings(item) gives the warnings that only the host page
                   knows, for example a file that the device reports as missing.
                   Each one is a string or a {prefix, text}.
-                  warnPrefix replaces the lead-in of EVERY warning. Leave it out
-                  and each warning uses its own.
     onSave(playlist):          must return a promise. Resolve it with the saved
                   playlist and the editor adopts that answer, so a host page
                   never has to draw the editor again after a save.
@@ -90,7 +83,6 @@ export function mountPlaylistEditor(el, opts = {}) {
     h('div', { class: 'pp-pe__opt' }, h('span', { text: 'Between items' }), transSelect),
     h('label', { class: 'pp-check' }, shuffleBox, h('span', { text: 'Shuffle' })));
 
-  const noteSlot = h('div');
   const itemsSlot = h('div');
   const summary = h('div', { class: 'pp-pe__summary' });
 
@@ -110,8 +102,6 @@ export function mountPlaylistEditor(el, opts = {}) {
       icon('plus'), 'Upload files'));
     if (src.list) addBtns.append(h('button', { type: 'button', class: 'pp-btn', onClick: pickFromLibrary },
       icon('plus'), libraryLabel()));
-    addBtns.append(h('button', { type: 'button', class: 'pp-btn', onClick: addUrlItem },
-      icon('plus'), 'Add a web page'));
   }
 
   const fileInput = h('input', {
@@ -128,7 +118,7 @@ export function mountPlaylistEditor(el, opts = {}) {
     head,
     caps.impact ? h('div', { class: 'pp-pe__strip' },
       h('span', null, caps.impact.text), caps.impact.note ? h('span', { text: caps.impact.note }) : null) : null,
-    noteSlot, itemsSlot, foot);
+    itemsSlot, foot);
 
   fill(el,
     ro && caps.managedBy ? banner({
@@ -143,11 +133,6 @@ export function mountPlaylistEditor(el, opts = {}) {
   /* ---- render ---- */
 
   function render() {
-    // Kiosk hint: exactly one URL item and nothing else.
-    const kiosk = pl.items.length === 1 && pl.items[0].kind === 'url';
-    fill(noteSlot, kiosk ? h('div', { class: 'pp-note' },
-      'One web page and nothing else, so this screen just stays on it — no looping, no gaps. It reloads on the interval below.') : null);
-
     if (pl.items.length === 0) {
       fill(itemsSlot, emptyState());
     } else {
@@ -170,11 +155,10 @@ export function mountPlaylistEditor(el, opts = {}) {
         caps.folder
           ? ['Drag images or videos here, or pull the stick and copy them into the ',
             h('span', { class: 'pp-mono', text: caps.folder }), ' folder from any computer. Either way this screen keeps playing what it has.']
-          : 'Add media from the library or a web page. Screens keep playing what they have until this playlist is saved.'),
+          : 'Add media from the library. Screens keep playing what they have until this playlist is saved.'),
       ro ? null : h('div', { class: 'pp-empty__actions' },
         uploader ? h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: 'Upload files', onClick: pickFiles }) : null,
-        src.list ? h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: libraryLabel(), onClick: pickFromLibrary }) : null,
-        h('button', { type: 'button', class: 'pp-btn', text: 'Add a web page', onClick: addUrlItem })));
+        src.list ? h('button', { type: 'button', class: 'pp-btn pp-btn--primary', text: libraryLabel(), onClick: pickFromLibrary }) : null));
   }
 
   function itemRow(item, i) {
@@ -195,7 +179,7 @@ export function mountPlaylistEditor(el, opts = {}) {
         thumb,
         h('div', { class: 'pp-pe__names' },
           h('div', { class: 'pp-pe__title', title: label(item), text: label(item) }),
-          h('div', { class: 'pp-pe__kind' }, icon(kind === 'url' ? 'url' : kind, 11), KIND_LABEL[kind] || kind))),
+          h('div', { class: 'pp-pe__kind' }, icon(kind, 11), KIND_LABEL[kind] || kind))),
       h('div', { class: 'pp-pe__ctl' },
         h('div', { class: 'pp-pe__dur' }, durationField(item, sub)),
         kind === 'video'
@@ -226,8 +210,8 @@ export function mountPlaylistEditor(el, opts = {}) {
     return wrap;
   }
 
-  /* Per-item fields. Images and URL items hold a dwell time; a video plays
-     its natural length and takes an optional cap instead. */
+  /* Per-item fields. An image holds a dwell time; a video plays its natural
+     length and takes an optional cap instead. */
   function durationField(item, sub) {
     if (item.kind === 'video') {
       return h('span', { class: 'pp-mono pp-muted', style: { 'font-size': '12.5px' }, text: 'full length' });
@@ -235,7 +219,7 @@ export function mountPlaylistEditor(el, opts = {}) {
     const input = h('input', {
       class: 'pp-input pp-input--sm pp-input--mono', type: 'number', min: '1', step: '1',
       value: item.duration ?? '', disabled: ro,
-      placeholder: item.kind === 'url' ? 'stays on' : '10',
+      placeholder: '10',
       'aria-label': `Seconds on screen for ${label(item)}`,
       onInput: () => {
         const v = parseInt(input.value, 10);
@@ -247,44 +231,18 @@ export function mountPlaylistEditor(el, opts = {}) {
     return input;
   }
 
-  /* Sub-rows under one item: warnings, notes and the extra fields.
-
-     Each warning carries its own lead-in. A note about a codec and a note about
-     a file that the player cannot read are not the same kind of problem, and one
-     shared prefix made the second one read as a performance note.
-     capabilities.warnPrefix still overrides all of them, which is what a fleet
-     page needs when it speaks for a group of screens. */
+  /* Sub-rows under one item: warnings and the extra fields. Each warning
+     carries its own lead-in. */
   function renderSub(item, sub) {
-    const mixed = pl.items.length > 1;
     const extra = caps.itemWarnings ? caps.itemWarnings(item) || [] : [];
-    const warns = warningsFor(item, caps.decode, caps.tier, { mixed, extra, machine: caps.warnMachine });
-    const parts = [];
+    const parts = warningsFor(item, { extra }).map((w) => h('div', { class: 'pp-pe__sub' },
+      h('div', { class: 'pp-pe__warn' },
+        h('span', null, h('b', { text: `${w.prefix} ` }), w.text))));
 
-    for (const w of warns) {
-      parts.push(h('div', { class: 'pp-pe__sub' },
-        h('div', { class: 'pp-pe__warn' },
-          h('span', null, h('b', { text: `${caps.warnPrefix || w.prefix} ` }), w.text),
-          caps.warnAction ? h('button', {
-            type: 'button', class: 'pp-btn pp-btn--sm pp-btn--warn-outline', text: caps.warnAction.label,
-            onClick: () => caps.warnAction.onClick(item),
-          }) : null)));
-    }
-
-    // A read-only view states the reload interval in words. An editable one
-    // shows the field instead, so the same fact is never said twice.
-    if (ro && item.kind === 'url' && Number(item.refresh_seconds)) {
-      parts.push(h('div', { class: 'pp-pe__sub pp-pe__note' },
-        `Reloads every ${fmtDuration(item.refresh_seconds)} so the numbers stay current.`));
-    }
     if (!ro && item.kind === 'video') {
       parts.push(h('div', { class: 'pp-pe__sub pp-pe__extra' },
         h('label', { class: 'pp-pe__extra-f' }, 'Stop after',
           numberInput(item, 'max_duration', 'no limit', `Cap in seconds for ${label(item)}`), 's')));
-    }
-    if (!ro && item.kind === 'url') {
-      parts.push(h('div', { class: 'pp-pe__sub pp-pe__extra' },
-        h('label', { class: 'pp-pe__extra-f' }, 'Reload every',
-          numberInput(item, 'refresh_seconds', 'never', `Reload interval in seconds for ${label(item)}`), 's')));
     }
 
     fill(sub, parts);
@@ -484,38 +442,6 @@ export function mountPlaylistEditor(el, opts = {}) {
     if (ok) addItems([...chosen]);
   }
 
-  async function addUrlItem() {
-    const urlIn = h('input', { class: 'pp-input pp-input--mono', type: 'url', placeholder: 'https://dashboards.example.com/lobby', autofocus: true });
-    const dwellIn = h('input', { class: 'pp-input pp-input--mono', type: 'number', min: '1', step: '1', placeholder: '60' });
-    const refreshIn = h('input', { class: 'pp-input pp-input--mono', type: 'number', min: '1', step: '1', placeholder: '300' });
-
-    const ok = await modal({
-      title: 'Add a web page',
-      body: h('div', null,
-        h('label', { class: 'pp-label' }, 'Address', urlIn),
-        h('div', { class: 'pp-fields', style: { 'margin-top': '14px' } },
-          h('label', { class: 'pp-label pp-field' }, 'Time on screen (seconds)', dwellIn,
-            h('span', { class: 'pp-help' }, 'Leave it empty in a playlist of just this page.')),
-          h('label', { class: 'pp-label pp-field' }, 'Reload every (seconds)', refreshIn,
-            h('span', { class: 'pp-help' }, 'Keeps a dashboard current.')))),
-      actions: [{ label: 'Cancel', value: false }, { label: 'Add the page', value: true, kind: 'primary' }],
-    });
-    if (!ok) return;
-    const addr = urlIn.value.trim();
-    if (!addr) { toast('That needs an address', 'danger'); return; }
-    // The same rule as internal/playlist. Without it one typed address makes
-    // every later save of this playlist fail.
-    if (!/^https?:\/\//.test(addr)) {
-      toast('The address must start with http:// or https://', 'danger');
-      return;
-    }
-    addItems([{
-      url: addr, kind: 'url', name: addr.replace(/^https?:\/\//, ''),
-      duration: parseInt(dwellIn.value, 10) || null,
-      refresh_seconds: parseInt(refreshIn.value, 10) || null,
-    }]);
-  }
-
   /* ---- save and discard ---- */
 
   async function onDiscard() {
@@ -633,8 +559,8 @@ function adopt(p) {
 
 function normalizeItem(raw) {
   const it = { ...raw };
-  if (!it.kind) it.kind = it.url ? 'url' : guessKind(it.file || it.name || '');
-  if (!it.name) it.name = it.url || it.file || it.sha256 || '';
+  if (!it.kind) it.kind = guessKind(it.file || it.name || '');
+  if (!it.name) it.name = it.file || it.sha256 || '';
   if (it.kind !== 'video') delete it.mute;
   else it.mute = !!it.mute;
   return it;
@@ -647,7 +573,7 @@ function guessKind(name) {
   return /\.(mp4|m4v|mov|webm|mkv|ogv)$/i.test(name) ? 'video' : 'image';
 }
 
-function label(item) { return item.name || item.file || item.url || 'item'; }
+function label(item) { return item.name || item.file || 'item'; }
 
 /* One canonical string per playlist state, used for dirty tracking and for
    handing a copy to onSave. Key order is fixed so it compares reliably.
@@ -664,8 +590,8 @@ function snapshot(pl) {
 
 /* One item in canonical form: the keys that the editor owns, in a fixed order,
    and then every other key in name order. A host page adds fields of its own,
-   for example codec, width, height, size and length. The warnings and the pass
-   time read them, so a save and a discard must both keep them. */
+   for example width, height, size and length. The warnings and the pass time
+   read them, so a save and a discard must both keep them. */
 function snapshotItem(item) {
   const out = {};
   for (const k of ITEM_KEYS) out[k] = item[k] ?? null;

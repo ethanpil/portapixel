@@ -21,11 +21,8 @@ import { notInThisBuild, nameToSave } from '../util.js';
 
 const MASK = '********';
 
-const TRANSITIONS = [
-  ['crossfade', 'Crossfade'], ['cut', 'Hard cut'],
-  ['push-left', 'Push left'], ['push-right', 'Push right'],
-  ['push-up', 'Push up'], ['push-down', 'Push down'],
-];
+/* The same two words as config.Transitions in internal/config. */
+const TRANSITIONS = [['fade', 'Fade through black'], ['cut', 'Hard cut']];
 
 export function mount(main, ctx) {
   /* The comment-loss warning is shown one time for each visit to this page (D16).
@@ -154,9 +151,7 @@ export function mount(main, ctx) {
   const cName = text({ maxlength: '63', autocomplete: 'off' });
   const cID = h('input', { class: 'pp-input pp-input--mono', type: 'text', readonly: true });
   const cTimezone = timezoneControl();
-  const cTier = select([['auto', 'Automatic'], ['low', 'Treat as low-power'], ['high', 'Treat as full-power']]);
   const nameHelp = h('div', { class: 'pp-help' });
-  const tierHelp = h('div', { class: 'pp-help' });
 
   // Network.
   const cMode = segmented([['dhcp', 'Get an address automatically'], ['static', 'Fixed address']], 'How it gets an address');
@@ -295,7 +290,6 @@ export function mount(main, ctx) {
           field('device.name', 'Name', cName, nameHelp),
           field(null, 'ID', cID, 'It comes from the hardware and cannot be edited.'),
           field('device.timezone', 'Time zone', cTimezone, 'Schedules use this. The clock itself syncs over the network.'),
-          field('device.tier', 'Performance', cTier, tierHelp),
         ],
       }),
       card({
@@ -313,7 +307,7 @@ export function mount(main, ctx) {
       card({
         title: 'Screen',
         body: [
-          group('display.rotation', 'Rotation', cRotation, 'The browser restarts to turn the picture.'),
+          group('display.rotation', 'Rotation', cRotation, 'The player restarts to turn the picture.'),
           field('display.video_mode', 'Force the output mode', cVideoMode,
             'Leave it empty and the display is trusted. Fill it in only when a display or an HDMI splitter reports the wrong modes, for example 1920x1080@60.'),
           field('display.power_method', 'Turning the screen on and off', cPowerMethod, powerHelp),
@@ -401,7 +395,6 @@ export function mount(main, ctx) {
     cName.value = cfg.device.name || '';
     cID.value = status.device_id || cfg.device.id || '';
     setValue(cTimezone, cfg.device.timezone || 'UTC');
-    cTier.value = cfg.device.tier || 'auto';
 
     cMode.value = cfg.network.mode || 'dhcp';
     cAddress.value = cfg.network.address || '';
@@ -427,7 +420,7 @@ export function mount(main, ctx) {
       cDefault.append(h('option', { value: cfg.playback.default_playlist, text: `${cfg.playback.default_playlist} (missing)` }));
     }
     cDefault.value = cfg.playback.default_playlist || '';
-    cTransition.value = cfg.playback.transition || 'crossfade';
+    cTransition.value = cfg.playback.transition || 'fade';
     cTransitionMS.value = String(cfg.playback.transition_ms ?? 500);
     cImageDuration.value = String(cfg.playback.image_duration ?? 10);
     cShuffle.input.checked = !!cfg.playback.shuffle;
@@ -467,7 +460,6 @@ export function mount(main, ctx) {
 
     next.device.name = cName.value.trim();
     next.device.timezone = cTimezone.value.trim();
-    next.device.tier = cTier.value;
 
     next.network.mode = cMode.value;
     next.network.address = cAddress.value.trim();
@@ -535,9 +527,6 @@ export function mount(main, ctx) {
     const status = ctx.store.status || {};
     fill(nameHelp, 'Also its address on the network: ',
       h('span', { class: 'pp-mono', text: status.mdns_name || '—' }));
-    setText(tierHelp, status.tier
-      ? `Detected as ${status.tier === 'low' ? 'low-power' : 'full-power'}${status.arch ? ` (${status.arch})` : ''}.`
-      : 'The device decides on its own unless you pick one.');
     fill(wifiHelp, cfg && cfg.network.wifi_psk
       ? ['Leave the dots to keep the key you have; clear the field to remove it.',
         (status.ips || []).length ? h('div', null, 'Currently at ', h('span', { class: 'pp-mono', text: status.ips[0] })) : null]
@@ -707,10 +696,10 @@ export function mount(main, ctx) {
       }));
       return;
     }
-    if (applied.applied === 'browser') {
+    if (applied.applied === 'player') {
       fill(result, banner({
         kind: 'info',
-        title: 'Saved. The browser restarts',
+        title: 'Saved. The player restarts',
         body: h('div', null, 'The screen goes black for a few seconds and comes back with the new setting.', list),
       }));
       toast('Settings saved to the stick.');

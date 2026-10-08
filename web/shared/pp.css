@@ -524,7 +524,7 @@ button.pp-table__row:hover { background: var(--pp-subtle); }
 .pp-code--lg { font-size: 26px; font-weight: 500; padding: var(--pp-space-4) var(--pp-space-8); border-radius: var(--pp-r-panel); }
 .pp-code--md { font-size: 17px; font-weight: 500; padding: var(--pp-space-2) var(--pp-space-6); }
 
-/* Uppercase kind label (IMAGE / VIDEO / WEB PAGE). */
+/* Uppercase kind label (IMAGE / VIDEO). */
 .pp-kind {
   font-family: var(--pp-mono); font-size: 10.5px; text-transform: uppercase;
   letter-spacing: 0.05em; color: var(--pp-muted);
@@ -575,7 +575,7 @@ button.pp-table__row:hover { background: var(--pp-subtle); }
 .pp-banner--paired .pp-banner__body { color: var(--pp-brand-tint-ink); }
 .pp-banner--info { background: var(--pp-subtle); border-color: var(--pp-border-2); }
 
-/* Inline tinted note, such as the kiosk-mode hint. */
+/* Inline tinted note. */
 .pp-note {
   padding: var(--pp-space-5) var(--pp-space-7); background: var(--pp-brand-tint);
   color: var(--pp-brand-tint-ink); font-size: var(--pp-fs-body); line-height: 1.5;

@@ -50,7 +50,7 @@ const SAID_ELSEWHERE = new Set([
   CODE.playlist, CODE.hardware,
 ]);
 
-const BROWSER_STATE = {
+const PLAYER_STATE = {
   running: 'playing',
   starting: 'starting',
   restarting: 'restarting',
@@ -220,7 +220,7 @@ export function mount(main, ctx) {
     }
 
     // Header.
-    const state = BROWSER_STATE[status.browser_state] || status.browser_state || 'unknown';
+    const state = PLAYER_STATE[status.player_state] || status.player_state || 'unknown';
     setText(headText, `${status.screen_on ? 'Screen on' : 'Screen off'} · ${state}`);
     headDot.className = `pp-dot pp-dot--${dotFor(status)}`;
     setText(lead, status.paired
@@ -425,11 +425,11 @@ export function mount(main, ctx) {
   }
 
   function emptyReason(status) {
-    switch (status.browser_state) {
+    switch (status.player_state) {
       case 'waiting-for-display':
         return 'No display answers on the HDMI port. The device waits and keeps looking; this does not count as a fault.';
       case 'disabled':
-        return 'The browser is switched off on this build, so there is nothing to show. The rest of this page works.';
+        return 'The player is switched off on this build, so there is nothing to show. The rest of this page works.';
       case 'starting':
       case 'restarting':
         return 'The player is starting. It reports the first item in a moment.';
@@ -439,8 +439,7 @@ export function mount(main, ctx) {
   }
 
   /* A still frame is the honest preview: an image element for an image, and a
-     video element parked on its first frame for a video. A web page item has no
-     file, so it gets its address on the striped placeholder. */
+     video element parked on its first frame for a video. */
   function previewFor(item, np) {
     const kind = (item && item.kind) || np.kind;
     // The address comes from the API, so it is checked before it goes in a src.
@@ -458,7 +457,7 @@ export function mount(main, ctx) {
       return video;
     }
     return h('span', { class: 'pp-thumb__label' },
-      h('span', { class: 'pp-kind pp-kind--chip', text: kind === 'url' ? 'Web page' : String(kind || 'item') }));
+      h('span', { class: 'pp-kind pp-kind--chip', text: String(kind || 'item') }));
   }
 
   /* How long the item stays on the screen. An image with no time of its own
@@ -473,7 +472,7 @@ export function mount(main, ctx) {
   }
 
   function describe(item) {
-    const bits = [item.kind === 'url' ? 'web page' : item.kind];
+    const bits = [item.kind];
     const seconds = itemSeconds(item);
     if (seconds) bits.push(fmtDuration(seconds));
     else if (item.kind === 'video') bits.push('full length');
@@ -691,8 +690,8 @@ export function mount(main, ctx) {
   function dotFor(status) {
     if (!status.display_connected) return 'quiet';
     if (!status.screen_on) return 'quiet';
-    if (status.browser_state === 'running') return 'ok';
-    if (status.browser_state === 'stopped') return 'alert';
+    if (status.player_state === 'running') return 'ok';
+    if (status.player_state === 'stopped') return 'alert';
     return 'busy';
   }
 

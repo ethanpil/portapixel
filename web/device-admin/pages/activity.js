@@ -17,8 +17,6 @@ const LINES = 200;
    from the top, so a longer prefix goes before a shorter one. */
 const KINDS = [
   ['scheduler.', 'playback'],
-  ['browser.url.', 'playback'],
-  ['browser.kiosk.', 'playback'],
   ['browser.suspend', 'screen'],
   ['browser.resume', 'screen'],
   ['browser.display.', 'screen'],

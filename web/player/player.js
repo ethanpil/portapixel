@@ -18,7 +18,6 @@
 
 import { Stage } from './stage.js';
 import { Fallback } from './fallback.js';
-import { probeCapabilities } from '/shared/item-warnings.js';
 
 const HEARTBEAT_MS = 5000;
 const STALL_MS = 10000;          // a video that does not move for this long
@@ -51,12 +50,6 @@ let hbFailedAt = 0;
 let hbTimer = 0;
 let retryTimer = 0;
 let stopDwell = null;
-/* codecs is what this machine decodes (D12). The probe runs one time, here on
-   the screen itself, and the answer goes out with the FIRST heartbeat. The
-   daemon keeps it and serves it in /api/status, so the admin UI warns about the
-   screen and not about the laptop of the person who looks at it. */
-let codecs = null;
-let codecsSent = false;
 
 /* ------------------------------------------------------------- transport */
 
@@ -140,8 +133,6 @@ function heartbeatBody() {
   }
   // "note" is an extra field. It makes a problem visible in the ops log.
   if (note) body.note = note;
-  // The codec report goes out one time, with the first heartbeat that has it.
-  if (codecs && !codecsSent) body.codecs = codecs;
   return body;
 }
 
@@ -157,9 +148,6 @@ async function beat() {
     await postJSON('/api/player/heartbeat', body);
     // Keep a note that came in while this call ran.
     if (body.note && note === body.note) note = '';
-    // The daemon has the codec report now. A second copy is wasted bytes every
-    // five seconds for the life of the device.
-    if (body.codecs) codecsSent = true;
     const gap = hbFailedAt ? Date.now() - hbFailedAt : 0;
     hbFailedAt = 0;
     if (gap >= HB_DEAD_MS) ask('playlist');
@@ -500,8 +488,3 @@ openEvents();
 hbTimer = setInterval(beat, HEARTBEAT_MS);
 void beat();
 void start(query.get('resume'));
-
-/* The codec probe. It is last and it is not awaited: MediaCapabilities asks the
-   graphics stack, which takes a moment on a Raspberry Pi, and nothing on the
-   screen may wait for it. The next heartbeat carries the answer. */
-probeCapabilities().then((caps) => { codecs = caps.codecs; }).catch(() => { /* an old engine */ });

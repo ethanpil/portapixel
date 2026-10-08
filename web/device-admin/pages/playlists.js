@@ -13,12 +13,11 @@ import {
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
 import { mountPlaylistEditor } from '/shared/playlist-editor.js';
-import { probeCapabilities } from '/shared/item-warnings.js';
 import { mediaURL } from '../util.js';
 
 export function mount(main, ctx) {
   let snap = { playlists: [], problems: [], active: '', hashing: false };
-  let caps = null;         // what this machine decodes (D12)
+  let loaded = false;      // the first load drew the page
   let picked = null;       // the folder name of the playlist in the editor
   let editor = null;
   let paired = false;
@@ -42,31 +41,12 @@ export function mount(main, ctx) {
 
   const unsubscribe = ctx.store.subscribe((status) => {
     if (!status || gone) return;
-    // The device report arrives with the first player heartbeat, which can be
-    // after this page opened. Take it then and build the warnings again.
-    if (status.codecs && (!caps || caps.source !== 'device')) {
-      probeCapabilities(status).then((c) => {
-        if (gone) return;
-        caps = c;
-        openPicked();
-      });
-    }
-    if (status.paired === paired && caps) return;
+    if (status.paired === paired) return;
     paired = !!status.paired;
-    if (caps) { renderBanners(); openPicked(); }
+    if (loaded) { renderBanners(); openPicked(); }
   });
 
-  /* What the screen decodes (D12). The device reports its own findings in
-     status.codecs, which the player measured on the screen itself, so that answer
-     always wins. The probe of this browser is the fallback for a screen that has
-     not checked in yet, and the warnings then say "this browser". */
-  /* The browser probe is the slow one, so it must never take the place of a
-     device report that came in while it ran. */
-  probeCapabilities(ctx.store.status).catch(() => null).then((c) => {
-    if (gone) return;
-    if (!caps || caps.source !== 'device' || (c && c.source === 'device')) caps = c;
-    load({ reopen: true });
-  });
+  load({ reopen: true });
 
   /* ---------------------------------------------------------------- loading */
 
@@ -89,6 +69,7 @@ export function mount(main, ctx) {
     renderBanners();
     renderList();
     if (reopen) openPicked();
+    loaded = true;
   }
 
   function renderBanners() {
@@ -123,7 +104,6 @@ export function mount(main, ctx) {
       h('div', { class: 'pp-pick__meta', text: summary(p) }),
       h('div', { class: 'pp-pick__tags' },
         p.name === snap.active ? badge('playing now', 'brand') : null,
-        p.kiosk ? badge('kiosk') : null,
         p.fleet ? badge('from the server', 'brand') : null)));
 
     fill(side, h('div', { class: 'pp-card' },
@@ -140,7 +120,6 @@ export function mount(main, ctx) {
   }
 
   function summary(p) {
-    if (p.kiosk) return '1 web page · kiosk';
     if (!p.items.length) return 'empty';
     let seconds = 0;
     let partial = false;
@@ -208,8 +187,6 @@ export function mount(main, ctx) {
         commentLossWarning: true,
         configFile: `${p.name}/playlist.toml`,
         folder: p.name,
-        tier: (ctx.store.status && ctx.store.status.tier) || null,
-        decode: caps,
         // What the device found out about one item: a file that is not on the
         // stick, or a kind that the player does not know. Only the device knows
         // it, so the editor asks for it per item.
@@ -240,35 +217,23 @@ export function mount(main, ctx) {
   /* The warning that the device wrote for one item of this playlist. The editor
      asks for it per item; the device sends it in the playlist list. */
   function deviceWarnings(p, item) {
-    const key = item.file || item.url;
-    if (!key) return [];
-    const found = p.items.find((it) => (it.file || it.url) === key);
+    if (!item.file) return [];
+    const found = p.items.find((it) => it.file === item.file);
     return found && found.warning ? [found.warning] : [];
   }
 
   function forEditor(it) {
     const out = {
-      name: it.name, kind: it.kind, src: it.src, size: it.size,
+      file: it.file, name: it.name, kind: it.kind, src: it.src, size: it.size,
       duration: Number(it.duration) || null,
       max_duration: Number(it.max_duration) || null,
-      refresh_seconds: Number(it.refresh_seconds) || null,
     };
-    if (it.url) out.url = it.url; else out.file = it.file;
     if (it.kind === 'video') out.mute = !!it.mute;
     return out;
   }
 
-  /* The items go back in the shape that playlist.toml takes: a file item never
-     carries a reload interval and a web page never carries a cap, and the
-     device answers 422 for either of them. */
+  /* The items go back in the shape that playlist.toml takes. */
   function forDevice(it) {
-    if (it.url) {
-      return {
-        url: it.url,
-        duration: Number(it.duration) || 0,
-        refresh_seconds: Number(it.refresh_seconds) || 0,
-      };
-    }
     return {
       file: it.file,
       duration: Number(it.duration) || 0,
@@ -289,7 +254,7 @@ export function mount(main, ctx) {
     const body = {
       title: (edited.name || '').trim() || p.title,
       transition: edited.transition || '',
-      items: edited.items.filter((it) => it.file || it.url).map(forDevice),
+      items: edited.items.filter((it) => it.file).map(forDevice),
     };
     if (edited.shuffle === true || edited.shuffle === false) body.shuffle = edited.shuffle;
 

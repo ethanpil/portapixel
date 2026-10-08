@@ -23,8 +23,6 @@ export function mount(main, ctx) {
   const vImage = h('span');
   const vManifest = h('span', { class: 'pp-trunc', style: { 'max-width': '220px', display: 'inline-block' } });
   const vArch = h('span');
-  const vTier = h('span');
-  const vRung = h('span');
   const vID = h('span');
   const vSystem = h('span');
   const vStick = h('span');
@@ -38,8 +36,6 @@ export function mount(main, ctx) {
         ['Image version', vImage],
         ['Package manifest', vManifest],
         ['Hardware', vArch],
-        ['Performance', vTier],
-        ['Player control', vRung],
         ['Device ID', vID],
         ['Running for', vUptime],
         ['On the stick', vStick],
@@ -120,13 +116,11 @@ export function mount(main, ctx) {
     setText(vManifest, hash ? hash.slice(0, 16) : '—');
     vManifest.title = hash;
     setText(vArch, status.arch || '—');
-    setText(vTier, status.tier === 'low' ? 'low-power' : 'full-power');
-    setText(vRung, status.navigation_rung || '—');
     setText(vID, status.device_id || '—');
     setText(vUptime, fmtDuration(status.uptime_seconds));
     const total = Number(status.media_total_bytes) || 0;
     setText(vStick, total ? `${fmtBytes(status.media_free_bytes)} free of ${fmtBytes(total)}` : '—');
-    setText(vSystem, `${status.browser_state || 'unknown'}${status.display_connected ? '' : ', no display'}`);
+    setText(vSystem, `${status.player_state || 'unknown'}${status.display_connected ? '' : ', no display'}`);
     renderUpdate(status);
   }
 

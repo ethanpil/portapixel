@@ -441,7 +441,7 @@ export function mount(main, ctx, deviceID) {
       { k: 'Temperature', v: fmtTemp(st.temp_c), kind: Number(st.temp_c) > 75 ? 'danger' : null },
       ['Space on the card', h('span', { class: 'pp-row', style: { gap: '8px', 'justify-content': 'flex-end' } },
         bar, h('span', { class: 'pp-mono', text: total ? `${fmtBytes(free)} of ${fmtBytes(total)}` : '—' }))],
-      ['Player', st.browser_state || '—'],
+      ['Player', st.player_state || '—'],
       ['Screen', st.screen_on === undefined ? '—' : (st.screen_on ? 'on' : 'off')],
       ['Time zone', st.timezone || '—'],
       ['Checks in every', d.poll_seconds ? `${d.poll_seconds} s` : 'the server default'],

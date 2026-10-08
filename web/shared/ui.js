@@ -67,10 +67,9 @@ const PATHS = {
   plus: 'M8 3v10M3 8h10',
   image: 'M2.5 3.5h11v9h-11zM2.5 10l3-3 3 3 2-2 3 3',
   video: 'M2.5 3.5h11v9h-11zM6.5 6l4 2-4 2z',
-  url: 'M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11M2.5 8h11M8 2.5c1.6 1.5 2.4 3.4 2.4 5.5S9.6 12 8 13.5C6.4 12 5.6 10.1 5.6 8S6.4 4 8 2.5',
 };
 
-/** One of: drag, up, down, close, plus, image, video, url. */
+/** One of: drag, up, down, close, plus, image, video. */
 export function icon(name, size = 16) {
   const ns = 'http://www.w3.org/2000/svg';
   const svg = document.createElementNS(ns, 'svg');
@@ -127,9 +126,8 @@ export function fmtTemp(c) {
     player skips, and both UIs must say so. */
 export function guessKind(name) {
   const n = String(name || '');
-  if (/^https?:\/\//i.test(n)) return 'url';
   if (/\.(mp4|m4v|mov|webm|mkv|ogv)$/i.test(n)) return 'video';
-  if (/\.(jpg|jpeg|png|gif|webp|avif|bmp|svg)$/i.test(n)) return 'image';
+  if (/\.(jpg|jpeg|png|gif|webp|avif|bmp)$/i.test(n)) return 'image';
   return 'unknown';
 }
 

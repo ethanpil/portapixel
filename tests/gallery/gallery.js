@@ -23,40 +23,21 @@ import { mountPlaylistEditor } from '/shared/playlist-editor.js';
 const NOW = Date.now();
 const ago = (s) => new Date(NOW - s * 1000).toISOString();
 
-// A capability report of the kind a device sends in /api/status.
-const DEVICE_CAPS = {
-  source: 'device',
-  tier: 'high',
-  codecs: {
-    h264: { 1080: { supported: true, smooth: true, powerEfficient: true }, 2160: { supported: true, smooth: true, powerEfficient: true } },
-    hevc: { 1080: { supported: false, smooth: false, powerEfficient: false }, 2160: { supported: false, smooth: false, powerEfficient: false } },
-    vp9: { 1080: { supported: true, smooth: true, powerEfficient: false }, 2160: { supported: false, smooth: false, powerEfficient: false } },
-    av1: { 1080: { supported: false, smooth: false, powerEfficient: false }, 2160: { supported: false, smooth: false, powerEfficient: false } },
-  },
-};
-
 const LOBBY = {
   name: 'Lobby loop',
-  transition: 'crossfade',
+  transition: 'fade',
   shuffle: false,
   items: [
     { file: 'welcome-autumn.jpg', name: 'welcome-autumn.jpg', kind: 'image', duration: 15 },
     { file: 'hours-and-directions.jpg', name: 'hours-and-directions.jpg', kind: 'image', duration: 12 },
     { file: 'promo-fall.mp4', name: 'promo-fall.mp4', kind: 'video', mute: false, length: 24 },
-    { file: 'product-hero-4k.mp4', name: 'product-hero-4k.mp4', kind: 'video', mute: false, codec: 'hvc1', width: 3840, height: 2160, length: 31 },
-    { url: 'https://dashboards.example.com/sales', name: 'dashboards.example.com/sales', kind: 'url', duration: 60, refresh_seconds: 300 },
+    { file: 'product-hero-4k.mp4', name: 'product-hero-4k.mp4', kind: 'video', mute: false, width: 3840, height: 2160, length: 31 },
+    { file: 'brochure.pdf', name: 'brochure.pdf', kind: 'unknown', duration: 10 },
     { file: 'seasonal-menu.jpg', name: 'seasonal-menu.jpg', kind: 'image', duration: 10 },
   ],
 };
 
-const WINDOW_PL = {
-  name: 'Front window',
-  transition: 'cut',
-  shuffle: false,
-  items: [{ url: 'https://dashboards.example.com/lobby', name: 'dashboards.example.com/lobby', kind: 'url', refresh_seconds: 300 }],
-};
-
-const BREAK_ROOM = { name: 'Break room', transition: 'crossfade', shuffle: false, items: [] };
+const BREAK_ROOM = { name: 'Break room', transition: 'fade', shuffle: false, items: [] };
 
 const LIBRARY = [
   { sha256: 'a1', name: 'safety-01.jpg', kind: 'image', size: 2_400_000 },
@@ -167,7 +148,7 @@ function foundations() {
       h('div', { style: { flex: '1 1 220px' } }, progress(0.82, { thin: true, brand: true })),
       spinner('Waiting for approval'),
       h('span', { class: 'pp-small pp-muted', text: 'Waiting for someone to approve this code' })),
-    section('Icons', ['drag', 'up', 'down', 'close', 'plus', 'image', 'video', 'url'].map((n) =>
+    section('Icons', ['drag', 'up', 'down', 'close', 'plus', 'image', 'video'].map((n) =>
       h('span', { class: 'pp-status', style: { gap: '5px' } }, icon(n), h('span', { class: 'pp-small pp-muted', text: n })))),
     section('Formatting',
       h('span', { class: 'pp-small' }, h('span', { class: 'pp-mono' }, fmtBytes(3_650_000_000)), ' from fmtBytes'),
@@ -216,7 +197,7 @@ function badges() {
     section('Kind labels',
       h('span', { class: 'pp-kind pp-kind--chip', text: 'Image' }),
       h('span', { class: 'pp-kind pp-kind--chip', text: 'Video' }),
-      h('span', { class: 'pp-kind', text: 'Web page' })),
+      h('span', { class: 'pp-kind', text: 'Unknown' })),
     section('Pairing codes',
       h('span', { class: 'pp-code pp-code--lg', text: 'K7M2QP' }),
       h('span', { class: 'pp-code pp-code--md', text: 'J4T8ZR' }),
@@ -255,7 +236,7 @@ function banners() {
       actions: [h('button', { class: 'pp-btn', text: 'Unpair' })],
     }),
     h('div', { class: 'pp-card', style: { 'margin-top': '14px' } },
-      h('div', { class: 'pp-note' }, 'One web page and nothing else, so this screen just stays on it — no looping, no gaps. It reloads on the interval below.')));
+      h('div', { class: 'pp-note' }, 'Copy this now: it is not shown again')));
 }
 
 function forms() {
@@ -374,7 +355,7 @@ function tables() {
     rows: [
       { when: '09:12:40', what: 'Playlist switched to Lobby loop by schedule rule 1', kind: 'Playback' },
       { when: '08:41:12', what: 'Player restarted on the nightly schedule, back up in 3.1 s', kind: 'Player' },
-      { when: '08:12:02', what: 'Web page item skipped: dashboards.example.com did not answer', kind: 'Playback' },
+      { when: '08:12:02', what: 'Item skipped: brochure.pdf is not an image or a video', kind: 'Playback' },
       { when: '07:00:00', what: 'Screen turned on for the day over HDMI', kind: 'Screen' },
       { when: '06:58:31', what: '6 files added after a scan of the stick', kind: 'Files' },
     ],
@@ -437,8 +418,7 @@ function cards() {
         h('div', { class: 'pp-empty__body' }, 'Drag images or videos here, or pull the stick and copy them into the ',
           h('span', { class: 'pp-mono', text: 'break-room' }), ' folder from any computer. Either way this screen keeps playing what it has.'),
         h('div', { class: 'pp-empty__actions' },
-          h('button', { class: 'pp-btn pp-btn--primary', text: 'Upload files' }),
-          h('button', { class: 'pp-btn', text: 'Add a web page' })))));
+          h('button', { class: 'pp-btn pp-btn--primary', text: 'Upload files' })))));
 }
 
 function overlays() {
@@ -521,7 +501,6 @@ function media() {
 function editor() {
   const deviceBox = h('div');
   const serverBox = h('div');
-  const kioskBox = h('div');
   const pairedBox = h('div');
   const emptyBox = h('div');
 
@@ -530,9 +509,6 @@ function editor() {
     mediaSource: deviceSource,
     capabilities: {
       commentLossWarning: true, configFile: 'lobby-loop/playlist.toml', folder: 'lobby-loop',
-      decode: DEVICE_CAPS, tier: 'high',
-      warnPrefix: 'Might not play smoothly here.',
-      warnAction: { label: 'Keep anyway', onClick: () => toast('Kept. It plays as it is.') },
     },
     onSave: async () => { await wait(400); toast('Playlist saved — the screen picks it up on the next item'); },
   });
@@ -541,10 +517,7 @@ function editor() {
     playlist: LOBBY,
     mediaSource: serverSource,
     capabilities: {
-      decode: DEVICE_CAPS, tier: 'high',
       saveLabel: 'Save — 16 screens pick this up',
-      warnPrefix: '3 screens in this group may struggle with it.',
-      warnAction: { label: 'Which ones?', onClick: () => toast('Retail 14, Retail 22 and Meeting 3') },
       impact: {
         text: ['Used by the ', h('strong', { text: 'Warehouse' }), ' group — 16 screens · 3.4 GB of media'],
         note: 'Changes reach screens within a minute',
@@ -553,29 +526,22 @@ function editor() {
     onSave: async () => { await wait(400); toast('Saved — 16 screens will fetch the changes on their next check-in.'); },
   });
 
-  mountPlaylistEditor(kioskBox, {
-    playlist: WINDOW_PL,
-    mediaSource: deviceSource,
-    capabilities: { commentLossWarning: true, configFile: 'front-window/playlist.toml', folder: 'front-window', decode: DEVICE_CAPS },
-    onSave: async () => toast('Playlist saved — the screen picks it up on the next item'),
-  });
-
   mountPlaylistEditor(pairedBox, {
     playlist: LOBBY,
     readOnly: true,
     mediaSource: serverSource,
-    capabilities: { managedBy: 'control.example.com', decode: DEVICE_CAPS, folder: '_fleet/lobby-loop' },
+    capabilities: { managedBy: 'control.example.com', folder: '_fleet/lobby-loop' },
   });
 
   mountPlaylistEditor(emptyBox, {
     playlist: BREAK_ROOM,
     mediaSource: deviceSource,
-    capabilities: { commentLossWarning: true, configFile: 'break-room/playlist.toml', folder: 'break-room', decode: DEVICE_CAPS },
+    capabilities: { commentLossWarning: true, configFile: 'break-room/playlist.toml', folder: 'break-room' },
     onSave: async () => toast('Playlist saved'),
   });
 
   const list = h('div', { class: 'pp-card pp-col-narrow', style: { padding: '8px', flex: '0 0 244px' } },
-    [['Lobby loop', '6 items · 2m 13s', true], ['Evening slow loop', '3 items · 1m 02s'], ['Front window', '1 web page · kiosk'], ['Break room', 'empty']]
+    [['Lobby loop', '6 items · 1m 42s', true], ['Evening slow loop', '3 items · 1m 02s'], ['Break room', 'empty']]
       .map(([name, meta, active]) => h('button', {
         class: 'pp-nav__item', style: { padding: '9px 11px' }, 'aria-current': active ? 'page' : null,
       }, h('div', { style: { 'font-size': '13.5px', 'font-weight': active ? '600' : '400' }, text: name }),
@@ -587,7 +553,6 @@ function editor() {
       h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Device: list and editor side by side' }),
         h('div', { class: 'pp-cards' }, list, h('div', { style: { flex: '1 1 480px', 'min-width': 'min(300px, 100%)' } }, deviceBox))),
       h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Server: impact strip and the library picker' }), serverBox),
-      h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Single URL: kiosk mode' }), kioskBox),
       h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Paired: read-only' }), pairedBox),
       h('div', null, h('div', { class: 'pp-h2', style: { 'margin-bottom': '10px' }, text: 'Empty playlist' }), emptyBox)));
 }
