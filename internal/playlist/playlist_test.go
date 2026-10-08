@@ -24,18 +24,12 @@ duration = 15
 file = "promo.mp4"
 mute = true
 max_duration = 60
-
-[[item]]
-url = "https://dash.example.com/board"
-duration = 60
-refresh_seconds = 300
 `
 	want := Playlist{
 		Meta: Meta{Name: "Lobby loop", Shuffle: boolPtr(true), Transition: "cut"},
 		Items: []Item{
 			{File: "welcome.jpg", Duration: 15},
 			{File: "promo.mp4", Mute: true, MaxDuration: 60},
-			{URL: "https://dash.example.com/board", Duration: 60, RefreshSeconds: 300},
 		},
 	}
 
@@ -60,9 +54,11 @@ func TestParseSmallFiles(t *testing.T) {
 			want: Playlist{Items: []Item{{File: "a.jpg"}}},
 		},
 		{
-			name: "one url item is kiosk mode",
-			toml: "[[item]]\nurl = \"https://example.com/\"\n",
-			want: Playlist{Items: []Item{{URL: "https://example.com/"}}},
+			// A key that the format does not know is not a fault. The old
+			// refresh_seconds of a web page item is such a key.
+			name: "an unknown key",
+			toml: "[[item]]\nfile = \"a.jpg\"\nrefresh_seconds = 300\n",
+			want: Playlist{Items: []Item{{File: "a.jpg"}}},
 		},
 		{
 			name: "shuffle false is not the same as no shuffle",
@@ -105,8 +101,8 @@ func TestParseGarbage(t *testing.T) {
 		strings.Repeat("[", 500),
 		"[playlist]\nname = \"" + strings.Repeat("a", 100000) + "\"\n",
 		"[[item]]\nfile = \"" + strings.Repeat("../", 200) + "a.jpg\"\n",
-		"[[item]]\nurl = \"javascript:alert(1)\"\n",
-		"[[item]]\nfile = \"a.jpg\"\nurl = \"https://a\"\n",
+		"[[item]]\nurl = \"javascript:alert(1)\"\n", // a web page is not an item
+		"[[item]]\nurl = \"https://dash.example.com/board\"\nduration = 60\n",
 		"[[item]]\nduration = -5\nfile = \"a.jpg\"\n",
 		"[[item]]\nfile = \"C:\\\\media\\\\a.jpg\"\n",
 		"[[item]]\nfile = \"/etc/passwd\"\n",
@@ -133,7 +129,6 @@ func TestParseGarbage(t *testing.T) {
 			for _, it := range p.Items {
 				Kind(it)
 			}
-			p.IsKiosk()
 		})
 	}
 }
@@ -161,11 +156,6 @@ func TestValidate(t *testing.T) {
 		{
 			name:      "an item with nothing in it",
 			playlist:  Playlist{Items: []Item{{}}},
-			wantField: "item[0]",
-		},
-		{
-			name:      "an item with a file and a url",
-			playlist:  Playlist{Items: []Item{{File: "a.jpg", URL: "https://a"}}},
 			wantField: "item[0]",
 		},
 		{
@@ -232,40 +222,6 @@ func TestValidate(t *testing.T) {
 			wantField: "item[0].file",
 		},
 		{
-			name:      "a url that is not http",
-			playlist:  Playlist{Items: []Item{{URL: "file:///etc/passwd"}}},
-			wantField: "item[0].url",
-		},
-		{
-			name:      "refresh_seconds on a file item",
-			playlist:  Playlist{Items: []Item{{File: "a.mp4", RefreshSeconds: 60}}},
-			wantField: "item[0].refresh_seconds",
-		},
-		{
-			// Render writes no mute key for a url item, so a playlist that holds
-			// one would lose it in silence at the next save.
-			name:      "mute on a url item",
-			playlist:  Playlist{Items: []Item{{URL: "https://a", Duration: 10, Mute: true}}},
-			wantField: "item[0].mute",
-		},
-		{
-			name:      "max_duration on a url item",
-			playlist:  Playlist{Items: []Item{{URL: "https://a", Duration: 10, MaxDuration: 60}}},
-			wantField: "item[0].max_duration",
-		},
-		{
-			name:     "a url item alone needs no duration",
-			playlist: Playlist{Items: []Item{{URL: "https://a"}}},
-		},
-		{
-			name: "a url item with other items needs a duration",
-			playlist: Playlist{Items: []Item{
-				{File: "a.jpg", Duration: 10},
-				{URL: "https://a"},
-			}},
-			wantField: "item[1].duration",
-		},
-		{
 			name:      "a negative duration",
 			playlist:  Playlist{Items: []Item{{File: "a.jpg", Duration: -1}}},
 			wantField: "item[0].duration",
@@ -326,7 +282,6 @@ func TestKind(t *testing.T) {
 		{item: Item{File: "a.PNG"}, want: KindImage},
 		{item: Item{File: "a.gif"}, want: KindImage},
 		{item: Item{File: "a.webp"}, want: KindImage},
-		{item: Item{File: "a.svg"}, want: KindImage},
 		{item: Item{File: "a.avif"}, want: KindImage},
 		{item: Item{File: "a.bmp"}, want: KindImage},
 		{item: Item{File: "sub/b.Jpg"}, want: KindImage},
@@ -337,7 +292,7 @@ func TestKind(t *testing.T) {
 		{item: Item{File: "a.mkv"}, want: KindVideo},
 		{item: Item{File: "a.ogv"}, want: KindVideo},
 		{item: Item{File: "a.MP4"}, want: KindVideo},
-		{item: Item{URL: "https://example.com/"}, want: KindURL},
+		{item: Item{File: "a.svg"}, want: KindUnknown},
 		{item: Item{File: "a.pdf"}, want: KindUnknown},
 		{item: Item{File: "a.txt"}, want: KindUnknown},
 		{item: Item{File: "noextension"}, want: KindUnknown},
@@ -345,49 +300,9 @@ func TestKind(t *testing.T) {
 		{item: Item{}, want: KindUnknown},
 	}
 	for _, tt := range tests {
-		name := tt.item.File
-		if name == "" {
-			name = tt.item.URL
-		}
-		t.Run(name, func(t *testing.T) {
+		t.Run(tt.item.File, func(t *testing.T) {
 			if got := Kind(tt.item); got != tt.want {
 				t.Fatalf("Kind(%+v) = %q, want %q", tt.item, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestIsKiosk(t *testing.T) {
-	tests := []struct {
-		name string
-		p    Playlist
-		want bool
-	}{
-		{
-			name: "one url item",
-			p:    Playlist{Items: []Item{{URL: "https://a"}}},
-			want: true,
-		},
-		{
-			name: "one url item with a refresh",
-			p:    Playlist{Items: []Item{{URL: "https://a", RefreshSeconds: 300}}},
-			want: true,
-		},
-		{name: "one file item", p: Playlist{Items: []Item{{File: "a.jpg"}}}},
-		{name: "no items", p: Playlist{}},
-		{
-			name: "two url items",
-			p:    Playlist{Items: []Item{{URL: "https://a", Duration: 10}, {URL: "https://b", Duration: 10}}},
-		},
-		{
-			name: "a url item and a file item",
-			p:    Playlist{Items: []Item{{URL: "https://a", Duration: 10}, {File: "a.jpg"}}},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.p.IsKiosk(); got != tt.want {
-				t.Fatalf("IsKiosk = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -29,14 +29,12 @@ type Meta struct {
 	Transition string `toml:"transition,omitempty" json:"transition,omitempty"`
 }
 
-// Item is one [[item]] table. It holds a file or a URL, never both.
+// Item is one [[item]] table: one image or video file.
 type Item struct {
-	File           string `toml:"file,omitempty" json:"file,omitempty"`
-	URL            string `toml:"url,omitempty" json:"url,omitempty"`
-	Duration       int    `toml:"duration,omitempty" json:"duration,omitempty"`
-	Mute           bool   `toml:"mute,omitempty" json:"mute,omitempty"`
-	MaxDuration    int    `toml:"max_duration,omitempty" json:"max_duration,omitempty"`
-	RefreshSeconds int    `toml:"refresh_seconds,omitempty" json:"refresh_seconds,omitempty"`
+	File        string `toml:"file,omitempty" json:"file,omitempty"`
+	Duration    int    `toml:"duration,omitempty" json:"duration,omitempty"`
+	Mute        bool   `toml:"mute,omitempty" json:"mute,omitempty"`
+	MaxDuration int    `toml:"max_duration,omitempty" json:"max_duration,omitempty"`
 }
 
 // Options changes what Parse and Validate permit.
@@ -97,43 +95,16 @@ func (p Playlist) Validate(opt Options) Errors {
 
 	for i, it := range p.Items {
 		field := fmt.Sprintf("item[%d]", i)
-		switch {
-		case it.File == "" && it.URL == "":
-			add(field, "needs a file or a url")
-		case it.File != "" && it.URL != "":
-			add(field, "has a file and a url; use one of them")
-		case it.File != "":
-			if msg := badFilePath(it.File, opt); msg != "" {
-				add(field+".file", msg)
-			}
-			if it.RefreshSeconds != 0 {
-				add(field+".refresh_seconds", "belongs to a url item")
-			}
-		case it.URL != "":
-			if !strings.HasPrefix(it.URL, "http://") && !strings.HasPrefix(it.URL, "https://") {
-				add(field+".url", "must start with http:// or https://")
-			}
-			if it.MaxDuration != 0 {
-				add(field+".max_duration", "belongs to a file item; a url item uses duration")
-			}
-			// Render writes no mute key for a url item, because a web page has no
-			// mute switch. Without this rule the key would go away in silence at
-			// the next save.
-			if it.Mute {
-				add(field+".mute", "belongs to a video item; a url item has no sound switch")
-			}
-			if it.Duration <= 0 && len(p.Items) > 1 {
-				add(field+".duration", "a url item in a playlist of more than one item needs a duration")
-			}
+		if it.File == "" {
+			add(field, "needs a file")
+		} else if msg := badFilePath(it.File, opt); msg != "" {
+			add(field+".file", msg)
 		}
 		if it.Duration < 0 {
 			add(field+".duration", "must not be less than zero")
 		}
 		if it.MaxDuration < 0 {
 			add(field+".max_duration", "must not be less than zero")
-		}
-		if it.RefreshSeconds < 0 {
-			add(field+".refresh_seconds", "must not be less than zero")
 		}
 	}
 	return errs
@@ -189,10 +160,4 @@ func isFleetRef(file string) bool {
 		return false
 	}
 	return parts[0]+"/"+parts[1]+"/" == FleetRefPrefix && parts[2] != "" && parts[2] != ".."
-}
-
-// IsKiosk reports if this playlist is the single-URL kiosk mode (D42). The
-// daemon then parks the browser on the page and never uses the player SPA.
-func (p Playlist) IsKiosk() bool {
-	return len(p.Items) == 1 && p.Items[0].URL != "" && p.Items[0].File == ""
 }

@@ -6,8 +6,8 @@ import "mime"
 //
 // Alpine and a distroless container have no /etc/mime.types, so the mime package
 // knows almost no extension there. Go then reads the first bytes of a file, and
-// it cannot identify SVG, AVIF or Matroska. The browser gets text/plain and does
-// not show the item. Windows reads the registry and Ubuntu has mailcap, so a
+// it cannot identify AVIF or Matroska. The browser gets text/plain and does not
+// show the item. Windows reads the registry and Ubuntu has mailcap, so a
 // development machine and the CI runner hide this fault.
 //
 // The device and the server import this package, so one table serves the two.
@@ -17,7 +17,6 @@ var mediaTypes = map[string]string{
 	".png":  "image/png",
 	".gif":  "image/gif",
 	".webp": "image/webp",
-	".svg":  "image/svg+xml",
 	".avif": "image/avif",
 	".bmp":  "image/bmp",
 	".mp4":  "video/mp4",

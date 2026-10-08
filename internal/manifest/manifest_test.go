@@ -90,7 +90,7 @@ func TestRoundTrip(t *testing.T) {
 					Shuffle:    &shuffle,
 					Items: []Item{
 						{SHA256: "aa", Duration: 15},
-						{URL: "https://example.com/board", Duration: 60, RefreshSeconds: 300},
+						{SHA256: "bb", Mute: true, MaxDuration: 60},
 					},
 				}},
 				Schedule: []Rule{{Playlist: "lobby", Days: []string{"mon"}, Start: "08:00", End: "18:00"}},
@@ -160,12 +160,12 @@ func TestNowPlayingCarriesTheHash(t *testing.T) {
 	if !strings.Contains(string(data), `"sha256":"55efb67e"`) {
 		t.Errorf("now_playing is %s, want a sha256 key", data)
 	}
-	data, err = json.Marshal(NowPlaying{Item: "https://example.com", Kind: "url"})
+	data, err = json.Marshal(NowPlaying{Item: "menu.jpg", Kind: "image"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if strings.Contains(string(data), "sha256") {
-		t.Errorf("a URL item has no hash, but now_playing is %s", data)
+		t.Errorf("a file with no hash yet gives now_playing %s, want no sha256 key", data)
 	}
 }
 

@@ -20,17 +20,12 @@ func TestRenderRoundTrip(t *testing.T) {
 				Items: []Item{
 					{File: "welcome.jpg", Duration: 15},
 					{File: "promo.mp4", Mute: true, MaxDuration: 60},
-					{URL: "https://dash.example.com/board", Duration: 60, RefreshSeconds: 300},
 				},
 			},
 		},
 		{
 			name: "no name and no options",
 			p:    Playlist{Items: []Item{{File: "a.jpg"}}},
-		},
-		{
-			name: "kiosk mode",
-			p:    Playlist{Items: []Item{{URL: "https://example.com/board"}}},
 		},
 		{
 			name: "shuffle off",
@@ -62,10 +57,6 @@ func TestRenderRoundTrip(t *testing.T) {
 		{
 			name: "an image with a mute flag",
 			p:    Playlist{Items: []Item{{File: "a.jpg", Mute: true}}},
-		},
-		{
-			name: "a url with a query",
-			p:    Playlist{Items: []Item{{URL: "https://a/board?token=x&y=1"}}},
 		},
 	}
 

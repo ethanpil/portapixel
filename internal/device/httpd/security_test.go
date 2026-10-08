@@ -58,10 +58,12 @@ func TestEveryAnswerCarriesTheSecurityHeaders(t *testing.T) {
 	}
 }
 
-// A file from the card is INERT. An SVG is a document with a script in it, and
-// /media/ needs no session by design, so an SVG that somebody planted would run on
-// the origin of the admin UI and of the player. The sandbox policy gives it an
-// opaque origin and no scripts.
+// A file from the card is INERT. /media/ needs no session by design, so a file
+// that somebody planted, for example a page with a script and a picture name,
+// must never run on the origin of the admin UI and of the player. The sandbox
+// policy gives it an opaque origin and no scripts, and nosniff keeps the media
+// type of the name. An SVG can hold a script as well. It is not a media kind,
+// so /media/ does not serve it at all.
 //
 // The header must be on a 200, on a 206 of a Range request and on a 304, because a
 // browser uses the headers of the answer that it gets.
@@ -71,9 +73,11 @@ func TestMediaFilesGetTheSandboxPolicy(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	evil := `<svg xmlns="http://www.w3.org/2000/svg"><script>fetch('/api/config')</script></svg>`
-	if err := os.WriteFile(filepath.Join(dir, "evil.svg"), []byte(evil), 0o644); err != nil {
-		t.Fatal(err)
+	evil := `<html><script>fetch('/api/config')</script></html>`
+	for _, name := range []string{"evil.png", "evil.svg"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(evil), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := os.WriteFile(filepath.Join(dir, "clip.mp4"), []byte("0123456789"), 0o644); err != nil {
 		t.Fatal(err)
@@ -92,14 +96,19 @@ func TestMediaFilesGetTheSandboxPolicy(t *testing.T) {
 		}
 	}
 
-	// 200: the whole file. The body is still the SVG, and the media type is still
-	// the true one, because a slide that IS an SVG has to draw.
-	w := f.do(http.MethodGet, "/media/lobby/evil.svg", nil)
-	if w.Code != http.StatusOK {
-		t.Fatalf("the SVG gave %d", w.Code)
+	// An SVG is not a media kind, so there is no answer with its bytes.
+	if w := f.do(http.MethodGet, "/media/lobby/evil.svg", nil); w.Code != http.StatusNotFound {
+		t.Errorf("the SVG gave %d, want 404", w.Code)
 	}
-	if !strings.Contains(w.Header().Get("Content-Type"), "image/svg+xml") {
-		t.Errorf("Content-Type = %q", w.Header().Get("Content-Type"))
+
+	// 200: the whole file. The body is still the page, and the media type is the
+	// type of the name, not a guess from the bytes.
+	w := f.do(http.MethodGet, "/media/lobby/evil.png", nil)
+	if w.Code != http.StatusOK {
+		t.Fatalf("the file gave %d", w.Code)
+	}
+	if got := w.Header().Get("Content-Type"); got != "image/png" {
+		t.Errorf("Content-Type = %q", got)
 	}
 	if !strings.Contains(w.Body.String(), "<script>") {
 		t.Error("the test file holds no script, so it proves nothing")
@@ -114,7 +123,7 @@ func TestMediaFilesGetTheSandboxPolicy(t *testing.T) {
 	check(t, w.Header(), "a part of a file")
 
 	// 304: the browser has the file already.
-	w = f.do(http.MethodGet, "/media/lobby/evil.svg", nil, func(r *request) {
+	w = f.do(http.MethodGet, "/media/lobby/evil.png", nil, func(r *request) {
 		r.headers = map[string]string{"If-Modified-Since": time.Now().Add(time.Hour).UTC().Format(http.TimeFormat)}
 	})
 	if w.Code != http.StatusNotModified {

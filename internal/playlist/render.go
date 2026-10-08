@@ -42,21 +42,6 @@ func Render(p Playlist) []byte {
 }
 
 func renderItem(b *strings.Builder, it Item) {
-	if it.URL != "" && it.File == "" {
-		writeLine(b, "url", quote(it.URL), "")
-		if it.Duration > 0 {
-			writeLine(b, "duration", strconv.Itoa(it.Duration), "Dwell seconds.")
-		} else {
-			b.WriteString("# duration = 60            # Dwell seconds. Leave it out to park on the page.\n")
-		}
-		if it.RefreshSeconds > 0 {
-			writeLine(b, "refresh_seconds", strconv.Itoa(it.RefreshSeconds), "Load the page again every N seconds.")
-		} else {
-			b.WriteString("# refresh_seconds = 300    # Load the page again every N seconds.\n")
-		}
-		return
-	}
-
 	writeLine(b, "file", quote(it.File), "")
 	if it.Duration > 0 {
 		writeLine(b, "duration", strconv.Itoa(it.Duration), "Seconds. Images only.")

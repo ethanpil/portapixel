@@ -118,12 +118,11 @@ func TestScanMalformedPlaylists(t *testing.T) {
 		want string // text that the problem message must hold
 	}{
 		{"broken toml", "[playlist\nname = ", "skipped"},
-		{"item with a file and a url", "[[item]]\nfile = \"a.jpg\"\nurl = \"http://x/\"\n", "use one of them"},
-		{"item with nothing", "[[item]]\nduration = 5\n", "needs a file or a url"},
+		{"item with nothing", "[[item]]\nduration = 5\n", "needs a file"},
+		{"a web page item", "[[item]]\nurl = \"https://dash.example.com/\"\nduration = 5\n", "needs a file"},
 		{"path step", "[[item]]\nfile = \"../secret.jpg\"\n", "outside the playlist directory"},
 		{"absolute path", "[[item]]\nfile = \"/etc/shadow\"\n", "relative path"},
 		{"bad transition", "[playlist]\ntransition = \"spin\"\n[[item]]\nfile = \"a.jpg\"\n", "transition"},
-		{"url without a scheme", "[[item]]\nurl = \"dash.example.com\"\nduration = 5\n[[item]]\nfile = \"a.jpg\"\n", "http://"},
 		{"negative duration", "[[item]]\nfile = \"a.jpg\"\nduration = -3\n", "less than zero"},
 		{"wrong type", "[[item]]\nfile = 7\n", "skipped"},
 	}

@@ -50,14 +50,12 @@ type Playlist struct {
 	Items      []Item `json:"items"`
 }
 
-// Item is one entry of a fleet playlist. It is a media item or a URL item.
+// Item is one entry of a fleet playlist: one media object, named by its hash.
 type Item struct {
-	SHA256         string `json:"sha256,omitempty"` // media item
-	URL            string `json:"url,omitempty"`    // url item
-	Duration       int    `json:"duration,omitempty"`
-	Mute           bool   `json:"mute,omitempty"`
-	MaxDuration    int    `json:"max_duration,omitempty"`
-	RefreshSeconds int    `json:"refresh_seconds,omitempty"`
+	SHA256      string `json:"sha256,omitempty"`
+	Duration    int    `json:"duration,omitempty"`
+	Mute        bool   `json:"mute,omitempty"`
+	MaxDuration int    `json:"max_duration,omitempty"`
 }
 
 // Rule is one schedule rule. The first rule that matches wins.

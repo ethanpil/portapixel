@@ -6,6 +6,6 @@
 // an error, never a panic: the device skips the playlist, writes a line in the
 // ops log, and keeps playing.
 //
-// The package also decides if an item is an image, a video or a URL, because
-// the player, the admin UI and the fleet client must all get the same answer.
+// The package also decides if an item is an image or a video, because the
+// player, the admin UI and the fleet client must all get the same answer.
 package playlist

@@ -10,16 +10,16 @@ import (
 const (
 	KindImage   = "image"
 	KindVideo   = "video"
-	KindURL     = "url"
 	KindUnknown = "unknown"
 )
 
-// imageExt and videoExt hold the extensions that the browser can show. WPE
-// WebKit gives the images; GStreamer gives the video.
+// imageExt and videoExt hold the extensions that the player can show. The
+// player is mpv, which decodes the images and the video with FFmpeg. SVG is not
+// on the list.
 var (
 	imageExt = map[string]bool{
 		".jpg": true, ".jpeg": true, ".png": true, ".gif": true,
-		".webp": true, ".svg": true, ".avif": true, ".bmp": true,
+		".webp": true, ".avif": true, ".bmp": true,
 	}
 	videoExt = map[string]bool{
 		".mp4": true, ".m4v": true, ".mov": true,
@@ -30,9 +30,6 @@ var (
 // Kind says what an item is. A file with an extension that we do not know is
 // "unknown": the player skips it and the admin UI marks it.
 func Kind(it Item) string {
-	if it.URL != "" && it.File == "" {
-		return KindURL
-	}
 	ext := strings.ToLower(path.Ext(it.File))
 	switch {
 	case imageExt[ext]:
