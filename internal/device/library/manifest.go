@@ -33,6 +33,8 @@ type ManifestItem struct {
 	Kind  string `json:"kind"` // image | video
 	Name  string `json:"name"`
 	Src   string `json:"src"`
+	// Path is the absolute path of the file. mpv reads the file directly.
+	Path string `json:"-"`
 
 	Duration    int  `json:"duration"`
 	Mute        bool `json:"mute"`
@@ -67,6 +69,7 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 			Kind:        it.Kind,
 			Name:        it.Name,
 			Src:         it.Src,
+			Path:        it.path,
 			Duration:    duration,
 			Mute:        it.Mute,
 			MaxDuration: it.MaxDuration,

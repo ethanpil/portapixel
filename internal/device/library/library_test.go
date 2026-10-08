@@ -625,6 +625,10 @@ file = "notes.txt"
 	if m.Playlist.Items[1].Kind != "video" || m.Playlist.Items[1].MaxDuration != 60 {
 		t.Errorf("video item = %+v", m.Playlist.Items[1])
 	}
+	// mpv opens the file itself, so the item names the file on the disk.
+	if want := filepath.Join(f.media, "default", "b.mp4"); m.Playlist.Items[1].Path != want {
+		t.Errorf("path = %q, want %q", m.Playlist.Items[1].Path, want)
+	}
 	for i, it := range m.Playlist.Items {
 		if it.Index != i {
 			t.Errorf("item %d has index %d", i, it.Index)

@@ -1,0 +1,510 @@
+package player
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/ethanpil/portapixel/internal/device/library"
+)
+
+func videos() library.PlayerManifest {
+	return playlist("clips", "fade", 400,
+		library.ManifestItem{Name: "a.mp4"}, library.ManifestItem{Name: "b.mp4"})
+}
+
+func threeItems() library.PlayerManifest {
+	return playlist("lobby", "fade", 400,
+		library.ManifestItem{Name: "welcome.jpg", Duration: 15},
+		library.ManifestItem{Name: "promo.mp4", Mute: true, MaxDuration: 30},
+		library.ManifestItem{Name: "tour.mp4"},
+	)
+}
+
+// The supervisor gives mpv the whole playlist, each item with its own options,
+// and the transition of the playlist goes to transitions.lua.
+func TestPlaylistLoadsWithFileOptions(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+
+	d := h.dump()
+	if len(d.List) != 3 {
+		t.Fatalf("mpv has %d entries, want 3: %+v", len(d.List), d.List)
+	}
+	for i, name := range []string{"welcome.jpg", "promo.mp4", "tour.mp4"} {
+		if want := "/media/lobby/" + name; d.List[i].Path != want {
+			t.Errorf("entry %d is %q, want %q", i, d.List[i].Path, want)
+		}
+		if got := d.List[i].Opts["script-opts"]; got != "pptr-kind=fade,pptr-ms=400" {
+			t.Errorf("entry %d script-opts = %q", i, got)
+		}
+	}
+	img, promo, tour := d.List[0].Opts, d.List[1].Opts, d.List[2].Opts
+	if img["image-display-duration"] != "15" {
+		t.Errorf("image options = %v", img)
+	}
+	if promo["mute"] != "yes" || promo["end"] != "30" || promo["loop-file"] != "" {
+		t.Errorf("muted video with a cap: options = %v", promo)
+	}
+	if tour["mute"] != "no" || tour["end"] != "" {
+		t.Errorf("video options = %v", tour)
+	}
+
+	// The command line: the override program gets the arguments of the daemon
+	// first, and the socket and the script are in the run directory.
+	for _, want := range []string{"--input-ipc-server=" + h.sup.opt.Command.SocketPath(),
+		"--script=" + h.sup.opt.Command.ScriptPath(), "--vo=drm", "--loop-playlist=inf", "--hwdec=auto-safe"} {
+		if !slices.Contains(d.Args, want) {
+			t.Errorf("the arguments %q do not hold %q", d.Args, want)
+		}
+	}
+	if data, err := os.ReadFile(h.sup.opt.Command.ScriptPath()); err != nil || !strings.Contains(string(data), "on_unload") {
+		t.Errorf("the transition script is not in the run directory: %v", err)
+	}
+	st := h.sup.State()
+	if st.Player != StateRunning || st.VideoOutput != OutputDRM {
+		t.Errorf("state = %+v, want running on drm (virtio_gpu has no GL driver)", st)
+	}
+	if !h.sup.Started() {
+		t.Error("Started is false after the first picture")
+	}
+}
+
+// One image alone stays on the screen and one video alone loops in its file:
+// neither gets a transition into itself.
+func TestSingleItemsStay(t *testing.T) {
+	h := newHarness(t, playlist("one", "fade", 400, library.ManifestItem{Name: "only.jpg"}), nil)
+	h.waitPlaying(0)
+	if got := h.dump().List[0].Opts["image-display-duration"]; got != "inf" {
+		t.Errorf("one image has image-display-duration=%q, want inf", got)
+	}
+
+	h.setManifest(playlist("clip", "fade", 400, library.ManifestItem{Name: "loop.mp4"}))
+	waitFor(t, "the video", func() bool { item, _ := h.playing(); return item == "loop.mp4" })
+	if got := h.dump().List[0].Opts["loop-file"]; got != "inf" {
+		t.Errorf("one video has loop-file=%q, want inf", got)
+	}
+}
+
+// now_playing follows mpv: the item, its kind and its start time, the decoder
+// of a video, and the frames that it dropped.
+func TestNowPlayingFollowsMPV(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+	start := h.clock.Now()
+
+	np := h.sup.State().NowPlaying
+	if np.Playlist != "lobby" || np.Item != "welcome.jpg" || np.Kind != kindImage || !np.Since.Equal(start) {
+		t.Fatalf("now_playing = %+v", np)
+	}
+	if hw := h.sup.State().Hwdec; hw != "" {
+		t.Errorf("hwdec = %q for an image, want \"\"", hw)
+	}
+
+	h.clock.Advance(15 * time.Second)
+	h.ctl("fake-next")
+	h.waitPlaying(1)
+	np = h.sup.State().NowPlaying
+	if np.Item != "promo.mp4" || np.Kind != kindVideo || !np.Since.Equal(h.clock.Now()) {
+		t.Fatalf("now_playing = %+v", np)
+	}
+	waitFor(t, "the decoder of the video", func() bool { return h.sup.State().Hwdec == fakeHwdec })
+	// The start values of the counters are in, before the counters move.
+	h.advance(2 * time.Second)
+	h.ctl("fake-drops", 5, 2)
+	h.advance(2 * time.Second)
+	if got := h.sup.State().NowPlaying.DroppedFrames; got != 7 {
+		t.Errorf("dropped_frames = %d, want 7", got)
+	}
+	// The next item starts its own count.
+	h.ctl("fake-next")
+	h.waitPlaying(2)
+	h.advance(2 * time.Second)
+	h.ctl("fake-drops", 6, 2)
+	h.advance(2 * time.Second)
+	if got := h.sup.State().NowPlaying.DroppedFrames; got != 1 {
+		t.Errorf("dropped_frames of the next video = %d, want 1", got)
+	}
+}
+
+// A schedule change replaces the list. The same manifest again changes nothing:
+// a rescan must not start the playlist from the top.
+func TestPlaylistChangeReplacesTheList(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+	loads := h.dump().Loads
+
+	h.setManifest(threeItems())
+	h.advance(2 * time.Second) // the loop handled the message before this poll
+	if got := h.dump().Loads; got != loads {
+		t.Fatalf("the same manifest made %d new loads", got-loads)
+	}
+
+	h.setManifest(playlist("evening", "cut", 0,
+		library.ManifestItem{Name: "night.jpg"}, library.ManifestItem{Name: "stars.mp4"}))
+	waitFor(t, "the evening playlist", func() bool {
+		np := h.sup.State().NowPlaying
+		return np != nil && np.Playlist == "evening"
+	})
+	d := h.dump()
+	if len(d.List) != 2 || !strings.HasSuffix(d.List[0].Path, "night.jpg") {
+		t.Fatalf("mpv has %+v", d.List)
+	}
+	if got := d.List[1].Opts["script-opts"]; got != "pptr-kind=cut,pptr-ms=0" {
+		t.Errorf("script-opts = %q", got)
+	}
+}
+
+// With no content, mpv shows the fallback picture that the daemon draws. The
+// picture is drawn again for a new minute and for new data, at the size of the
+// display.
+func TestFallbackScreen(t *testing.T) {
+	h := newHarness(t, library.PlayerManifest{Fallback: true}, func(o *Options, h *harness) {
+		writeFile(t, filepath.Join(h.drm, "card0-HDMI-A-1", "status"), "connected\n")
+		writeFile(t, filepath.Join(h.drm, "card0-HDMI-A-1", "modes"), "1280x720\n1920x1080\n")
+	})
+	path := h.sup.opt.Command.FallbackPath()
+	waitFor(t, "the fallback picture", func() bool {
+		d, _ := h.tryDump()
+		return len(d.List) == 1 && d.List[0].Path == path
+	})
+	opts := h.dump().List[0].Opts
+	if opts["image-display-duration"] != "inf" || opts["script-opts"] != "pptr-kind=cut,pptr-ms=0" {
+		t.Errorf("fallback options = %v", opts)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || !strings.HasPrefix(string(data), "PNG 1280x720 12:00") {
+		t.Fatalf("fallback.png = %q, %v; want the render at the mode of the connector", data, err)
+	}
+	waitFor(t, "the first picture", h.sup.Started)
+	if h.sup.State().NowPlaying != nil {
+		t.Error("now_playing is set while the fallback screen shows")
+	}
+
+	// A new minute draws the clock again.
+	h.settle()
+	n := h.renderCount()
+	h.advance(61 * time.Second)
+	waitFor(t, "a new render", func() bool { return h.renderCount() > n })
+	waitFor(t, "the new clock in the file", func() bool {
+		data, _ := os.ReadFile(path)
+		return strings.Contains(string(data), "12:01")
+	})
+
+	// New data draws it again at once.
+	n = h.renderCount()
+	h.mu.Lock()
+	h.info.PairingCode = "ABC234"
+	h.mu.Unlock()
+	h.advance(6 * time.Second)
+	waitFor(t, "a render with the pairing code", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return len(h.renders) > n && h.renders[len(h.renders)-1].PairingCode == "ABC234"
+	})
+
+	// The layout moves a little every few minutes, against burn-in.
+	h.settle()
+	h.advance(shiftEvery)
+	waitFor(t, "a shifted render", func() bool {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return h.renders[len(h.renders)-1].Shift > 0
+	})
+
+	// Content comes back.
+	h.setManifest(threeItems())
+	h.waitPlaying(0)
+}
+
+// When no item can play, mpv goes idle. The fallback screen then shows, each
+// fault is in the ops log, and the player tries the list again later.
+func TestEveryItemFails(t *testing.T) {
+	m := playlist("bad", "fade", 400,
+		library.ManifestItem{Name: "broken-a.mp4"}, library.ManifestItem{Name: "broken-b.jpg"})
+	h := newHarness(t, m, nil)
+	waitFor(t, "the fallback screen", func() bool {
+		d, _ := h.tryDump()
+		return len(d.List) == 1 && d.List[0].Path == h.sup.opt.Command.FallbackPath()
+	})
+	if !h.eventWith("player.item.fail", "broken-a.mp4") || !h.eventWith("player.item.fail", "broken-b.jpg") {
+		t.Errorf("the faults of the items are not in the ops log:\n%s", h.events())
+	}
+	if h.countEvent("player.playlist.fail") != 1 {
+		t.Errorf("player.playlist.fail lines:\n%s", h.events())
+	}
+
+	h.settle()
+	loads := h.dump().Loads
+	h.advance(failedRetry)
+	waitFor(t, "a second try of the playlist", func() bool { return h.dump().Loads >= loads+2 })
+}
+
+// The watchdog: an mpv that ends is started again, the restart counts, and the
+// new mpv starts on the item after the one that was on the screen.
+func TestRestartAfterExit(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+
+	h.ctl("fake-exit", 9)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	h.waitPlaying(1)
+	if got := h.sup.State().Restarts; got != 1 {
+		t.Errorf("restarts = %d, want 1", got)
+	}
+	if h.countEvent("player.exit") != 1 {
+		t.Errorf("player.exit lines:\n%s", h.events())
+	}
+	d := h.dump()
+	if !strings.HasSuffix(d.List[0].Path, "promo.mp4") || !strings.HasSuffix(d.List[2].Path, "welcome.jpg") {
+		t.Errorf("the new list does not start at the next item: %+v", d.List)
+	}
+}
+
+// An mpv that does not answer its IPC (SIGSTOP, a dead lock) is restarted.
+func TestRestartWhenIPCIsSilent(t *testing.T) {
+	h := newHarness(t, videos(), nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+
+	h.ctl("fake-hang")
+	// Each look moves the clock. A poll goes out and gets no answer, and three
+	// looks later the answer is late by the timeout.
+	waitFor(t, "the restart", func() bool {
+		if h.eventWith("player.restart", "did not answer") {
+			return true
+		}
+		h.clock.Advance(10 * time.Second)
+		return false
+	})
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "did not answer") || h.sup.State().Restarts != 1 {
+		t.Fatalf("restarts = %d:\n%s", h.sup.State().Restarts, h.events())
+	}
+}
+
+// A video whose position does not move is restarted.
+func TestRestartWhenVideoStalls(t *testing.T) {
+	h := newHarness(t, videos(), nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+
+	// A video that moves is not a stall, also after a long time.
+	for range 20 {
+		h.advance(2 * time.Second)
+	}
+	if h.sup.State().Restarts != 0 {
+		t.Fatalf("a moving video was restarted:\n%s", h.events())
+	}
+
+	h.ctl("fake-stall")
+	h.advance(2 * time.Second)
+	h.advance(heartbeatTimeout)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "did not move") || h.sup.State().Restarts != 1 {
+		t.Fatalf("restarts = %d:\n%s", h.sup.State().Restarts, h.events())
+	}
+}
+
+// An image that stays longer than its duration and the grace is restarted.
+func TestRestartWhenImageOverruns(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+
+	h.settle()
+	h.advance(15*time.Second + heartbeatTimeout - 4*time.Second)
+	if h.sup.State().Restarts != 0 {
+		t.Fatalf("restarted before the grace ended:\n%s", h.events())
+	}
+	h.clock.Advance(3 * time.Second)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "welcome.jpg stayed on the screen") {
+		t.Fatalf("no overrun line:\n%s", h.events())
+	}
+}
+
+// Four counted restarts in one hour reboot the device. A restart that a person
+// asks for does not count.
+func TestRebootRule(t *testing.T) {
+	h := newHarness(t, videos(), nil)
+	h.waitPlaying(0)
+
+	first := h.sup.proc.pid()
+	if err := h.sup.Restart("the admin asked"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the restart", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	for i := 1; i <= 4; i++ {
+		waitFor(t, "a running mpv", func() bool {
+			return h.sup.State().Player == StateRunning && h.sup.State().NowPlaying != nil
+		})
+		pid := h.sup.proc.pid()
+		h.ctl("fake-exit", 1)
+		waitFor(t, "the exit", func() bool { return h.sup.proc.pid() != pid })
+	}
+	waitFor(t, "the reboot", func() bool { return h.rebootCount() == 1 })
+	h.mu.Lock()
+	reason := h.reboots[0]
+	h.mu.Unlock()
+	if !strings.Contains(reason, "4 player restarts") {
+		t.Errorf("reboot reason = %q", reason)
+	}
+}
+
+// No display is a wait, not a fault: mpv does not start and nothing counts.
+func TestDisplayWait(t *testing.T) {
+	var status string
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) {
+		status = filepath.Join(h.drm, "card0-HDMI-A-1", "status")
+		writeFile(t, status, "disconnected\n")
+	})
+	waitFor(t, "the wait state", func() bool { return h.sup.State().Player == StateWaiting })
+	if h.sup.proc.pid() != 0 || h.sup.State().DisplayConnected {
+		t.Fatalf("mpv started with no display: %+v", h.sup.State())
+	}
+	if !h.sup.Started() {
+		t.Error("a device that waits for a display is not up for the health marker")
+	}
+	h.clock.Advance(10 * time.Minute)
+	if h.countEvent("player.display.wait") != 1 || h.sup.State().Restarts != 0 {
+		t.Fatalf("the wait wrote or counted too much:\n%s", h.events())
+	}
+
+	writeFile(t, status, "connected\n")
+	h.clock.Advance(displayWaitMax)
+	h.waitPlaying(0)
+	if !h.eventWith("player.display.found", "player starts") {
+		t.Errorf("no player.display.found line:\n%s", h.events())
+	}
+}
+
+// The nightly restart waits for an item boundary and does not count.
+func TestNightlyRestart(t *testing.T) {
+	h := newHarness(t, videos(), func(o *Options, h *harness) {
+		h.nightly = "03:30"
+		h.clock.Set(time.Date(2026, 10, 9, 3, 29, 0, 0, time.UTC))
+	})
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+
+	h.settle()
+	h.advance(58 * time.Second)
+	waitFor(t, "the grace", func() bool { return h.countEvent("player.nightly.grace") == 1 })
+	h.ctl("fake-next")
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "item boundary") || h.sup.State().Restarts != 0 {
+		t.Fatalf("restarts = %d:\n%s", h.sup.State().Restarts, h.events())
+	}
+	// Item 0 ended, so the new mpv starts at item 1.
+	h.waitPlaying(1)
+
+	// One time per day.
+	h.settle()
+	h.advance(60 * time.Second)
+	if h.countEvent("player.nightly.grace") != 1 {
+		t.Errorf("a second nightly restart on the same day:\n%s", h.events())
+	}
+}
+
+// With no item boundary, the grace time ends the wait.
+func TestNightlyRestartGraceEnds(t *testing.T) {
+	h := newHarness(t, videos(), func(o *Options, h *harness) {
+		h.nightly = "03:30"
+		h.clock.Set(time.Date(2026, 10, 9, 3, 30, 0, 0, time.UTC))
+	})
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+	waitFor(t, "the grace", func() bool { return h.countEvent("player.nightly.grace") == 1 })
+	h.settle()
+	h.clock.Advance(graceTimeout)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "grace time ended") {
+		t.Fatalf("no grace line:\n%s", h.events())
+	}
+}
+
+// A screen schedule that has the screen off at the time skips the restart.
+func TestNightlyRestartSkippedWhenTheScreenIsOff(t *testing.T) {
+	h := newHarness(t, videos(), func(o *Options, h *harness) {
+		h.nightly, h.covered = "03:30", true
+		h.clock.Set(time.Date(2026, 10, 9, 3, 30, 0, 0, time.UTC))
+	})
+	h.waitPlaying(0)
+	waitFor(t, "the skip", func() bool { return h.countEvent("player.nightly.skip") == 1 })
+}
+
+// Suspend returns only when mpv has ended, so the DPMS call can take the DRM
+// device. Resume starts mpv again. A watchdog restart while the screen is off
+// waits for the screen.
+func TestSuspendAndResume(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+
+	if err := h.sup.Suspend(); err != nil {
+		t.Fatal(err)
+	}
+	if h.sup.proc.alive() {
+		t.Fatal("Suspend returned while mpv still runs")
+	}
+	st := h.sup.State()
+	if !st.Suspended || st.Player != StateStopped || st.NowPlaying != nil {
+		t.Fatalf("state after Suspend = %+v", st)
+	}
+	if !h.sup.Started() {
+		t.Error("a device with the screen off is not up for the health marker")
+	}
+	h.clock.Advance(time.Hour)
+	if h.sup.proc.alive() || h.sup.State().Restarts != 0 {
+		t.Fatal("mpv started while the screen is off")
+	}
+
+	if err := h.sup.Resume(); err != nil {
+		t.Fatal(err)
+	}
+	h.waitPlaying(0)
+}
+
+// A fault of transitions.lua goes in the ops log one time.
+func TestTransitionFaultIsLogged(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+	h.ctl("fake-fault", "fade: the copy of the screen failed; the transition is a cut")
+	waitFor(t, "the fault line", func() bool {
+		return h.eventWith("player.transition.fault", "the copy of the screen failed")
+	})
+}
+
+// A disabled player starts nothing, and a screen-off does not wait for it.
+func TestDisabledPlayer(t *testing.T) {
+	s := New(Options{Command: CommandConfig{Override: DisableCommand}})
+	if s.State().Player != StateDisabled || !s.Started() {
+		t.Fatalf("state = %+v", s.State())
+	}
+	if err := s.Suspend(); err != nil || !s.State().Suspended {
+		t.Fatalf("Suspend = %v, state %+v", err, s.State())
+	}
+	if err := s.Resume(); err != nil || s.State().Suspended {
+		t.Fatalf("Resume = %v", err)
+	}
+}
+
+// A queue that is full answers ErrBusy, so a person learns that the command did
+// not happen.
+func TestBusyQueue(t *testing.T) {
+	s := New(Options{Command: CommandConfig{Override: "mpv"}})
+	for range cap(s.cmds) {
+		s.PlaylistChanged()
+	}
+	if err := s.Restart("test"); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Restart = %v, want ErrBusy", err)
+	}
+	if err := s.Suspend(); !errors.Is(err, ErrBusy) {
+		t.Fatalf("Suspend = %v, want ErrBusy", err)
+	}
+}
