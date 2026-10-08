@@ -152,6 +152,10 @@ var validateCases = []validateCase{
 		change:    func(c *Config) { c.Display.VideoMode = "1920x1080@60Hz" },
 		wantField: "display.video_mode",
 	},
+	{name: "bad video output", change: func(c *Config) { c.Display.VideoOutput = "x11" }, wantField: "display.video_output"},
+	{name: "empty video output", change: func(c *Config) { c.Display.VideoOutput = "" }, wantField: "display.video_output"},
+	{name: "gpu video output is good", change: func(c *Config) { c.Display.VideoOutput = "gpu" }},
+	{name: "drm video output is good", change: func(c *Config) { c.Display.VideoOutput = "drm" }},
 	{name: "bad power method", change: func(c *Config) { c.Display.PowerMethod = "hdmi" }, wantField: "display.power_method"},
 	{
 		name: "a screen schedule is good",

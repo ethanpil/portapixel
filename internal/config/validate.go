@@ -126,6 +126,7 @@ func (c Config) Validate() Errors {
 	if c.Display.VideoMode != "" && !videoModePattern.MatchString(c.Display.VideoMode) {
 		add("display.video_mode", "must be in the form 1920x1080 or 1920x1080@60")
 	}
+	oneOf("display.video_output", c.Display.VideoOutput, "auto", "gpu", "drm")
 	oneOf("display.power_method", c.Display.PowerMethod, "auto", "cec", "dpms", "none")
 	clockTime("display.on_time", c.Display.OnTime)
 	clockTime("display.off_time", c.Display.OffTime)

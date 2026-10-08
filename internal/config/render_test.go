@@ -144,7 +144,7 @@ func TestRenderHoldsEveryKey(t *testing.T) {
 	keys := []string{
 		"name", "id", "timezone",
 		"mode", "address", "gateway", "dns", "wifi_ssid", "wifi_psk",
-		"rotation", "video_mode", "power_method", "on_time", "off_time", "power_days",
+		"rotation", "video_mode", "video_output", "power_method", "on_time", "off_time", "power_days",
 		"output", "volume",
 		"default_playlist", "transition", "transition_ms", "image_duration", "shuffle", "nightly_restart",
 		"heartbeat_timeout", "restarts_before_reboot", "restart_window",

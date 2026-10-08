@@ -47,6 +47,8 @@ func Render(cfg Config) []byte {
 	b.WriteString("# video_mode forces the output mode when the display or an HDMI splitter\n")
 	b.WriteString("# gives a bad EDID. Leave it out to trust the display.\n")
 	optional(&b, "video_mode", Quote(cfg.Display.VideoMode), cfg.Display.VideoMode != "", `"1920x1080@60"`)
+	line(&b, "video_output", Quote(cfg.Display.VideoOutput), "auto | gpu | drm. auto: gpu when the GPU has")
+	comment(&b, "an OpenGL driver (Raspberry Pi, Intel, AMD), else drm.")
 	line(&b, "power_method", Quote(cfg.Display.PowerMethod), "auto | cec | dpms | none")
 	b.WriteString("# Set both times for a screen schedule. Leave both out to keep the screen on.\n")
 	optional(&b, "on_time", Quote(cfg.Display.OnTime), cfg.Display.OnTime != "", `"07:30"`)

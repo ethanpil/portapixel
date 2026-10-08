@@ -61,7 +61,11 @@ type Display struct {
 	Rotation int `toml:"rotation" json:"rotation"` // 0 | 90 | 180 | 270
 	// VideoMode forces the output mode of a display that gives a bad EDID
 	// (D49). An empty value trusts the display.
-	VideoMode   string   `toml:"video_mode,omitempty" json:"video_mode,omitempty"`
+	VideoMode string `toml:"video_mode,omitempty" json:"video_mode,omitempty"`
+	// VideoOutput is the video output of mpv: "gpu" (OpenGL on the GPU), "drm"
+	// (direct to the display, no GPU) or "auto" (gpu when the graphics card has a
+	// hardware OpenGL driver, else drm). See internal/device/player.
+	VideoOutput string   `toml:"video_output" json:"video_output"` // auto | gpu | drm
 	PowerMethod string   `toml:"power_method" json:"power_method"` // auto | cec | dpms | none
 	OnTime      string   `toml:"on_time,omitempty" json:"on_time,omitempty"`
 	OffTime     string   `toml:"off_time,omitempty" json:"off_time,omitempty"`
@@ -167,6 +171,7 @@ func Default() Config {
 		},
 		Display: Display{
 			Rotation:    0,
+			VideoOutput: "auto",
 			PowerMethod: "auto",
 		},
 		Audio: Audio{

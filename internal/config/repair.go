@@ -56,6 +56,8 @@ func Repair(cfg Config) (Config, Errors) {
 			out.Display.Rotation = def.Display.Rotation
 		case field == "display.video_mode":
 			out.Display.VideoMode = def.Display.VideoMode
+		case field == "display.video_output":
+			out.Display.VideoOutput = def.Display.VideoOutput
 		case field == "display.power_method":
 			out.Display.PowerMethod = def.Display.PowerMethod
 		case field == "display.on_time", field == "display.off_time":

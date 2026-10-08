@@ -40,6 +40,7 @@ func TestChangeClass(t *testing.T) {
 
 		{name: "rotation", change: func(c *Config) { c.Display.Rotation = 90 }, wantField: "display.rotation", wantClass: Player},
 		{name: "video mode", change: func(c *Config) { c.Display.VideoMode = "1920x1080" }, wantField: "display.video_mode", wantClass: Player},
+		{name: "video output", change: func(c *Config) { c.Display.VideoOutput = "drm" }, wantField: "display.video_output", wantClass: Player},
 		{name: "power method", change: func(c *Config) { c.Display.PowerMethod = "cec" }, wantField: "display.power_method", wantClass: Live},
 		{name: "on time", change: func(c *Config) { c.Display.OnTime = "07:30" }, wantField: "display.on_time", wantClass: Live},
 		{name: "off time", change: func(c *Config) { c.Display.OffTime = "22:00" }, wantField: "display.off_time", wantClass: Live},

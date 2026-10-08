@@ -55,11 +55,12 @@ func ChangeClass(old, next Config) []Change {
 	add("network.wifi_psk", Reboot, old.Network.WifiPSK != next.Network.WifiPSK)
 	add("network.wifi_country", Reboot, old.Network.WifiCountry != next.Network.WifiCountry)
 
-	// [display]. The player gets the rotation and the output mode when it starts,
-	// so a new player process applies them. The power method and the screen
-	// schedule are the daemon's work.
+	// [display]. mpv gets the rotation, the output mode and the video output on
+	// its command line, so a new player process applies them. The power method
+	// and the screen schedule are the daemon's work.
 	add("display.rotation", Player, old.Display.Rotation != next.Display.Rotation)
 	add("display.video_mode", Player, old.Display.VideoMode != next.Display.VideoMode)
+	add("display.video_output", Player, old.Display.VideoOutput != next.Display.VideoOutput)
 	add("display.power_method", Live, old.Display.PowerMethod != next.Display.PowerMethod)
 	add("display.on_time", Live, old.Display.OnTime != next.Display.OnTime)
 	add("display.off_time", Live, old.Display.OffTime != next.Display.OffTime)
