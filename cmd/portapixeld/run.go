@@ -41,7 +41,6 @@ import (
 	"github.com/ethanpil/portapixel/internal/httpguard"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
-	"github.com/ethanpil/portapixel/internal/playlist"
 	"github.com/ethanpil/portapixel/internal/updater"
 	"github.com/ethanpil/portapixel/internal/version"
 )
@@ -123,14 +122,13 @@ type daemon struct {
 	// same time lose one change. An unpair could then pair the device again.
 	cfgWriteMu sync.Mutex
 
-	mu           sync.Mutex
-	cfg          config.Config
-	fromShadow   bool
-	cfgWarning   string
-	cfgCode      string
-	cfgModified  time.Time
-	lastManifest library.PlayerManifest
-	shuffleSeed  uint64
+	mu          sync.Mutex
+	cfg         config.Config
+	fromShadow  bool
+	cfgWarning  string
+	cfgCode     string
+	cfgModified time.Time
+	shuffleSeed uint64
 	// hostList is the Host header allowlist. It is built from the network
 	// interfaces, so it is cached: every request would otherwise ask the kernel
 	// for the interface list.
@@ -622,7 +620,6 @@ func (d *daemon) deps() httpd.Deps {
 		ActivePlaylist: d.sched.Active,
 		PlayerManifest: d.playerManifest,
 		Heartbeat:      d.sup.Heartbeat,
-		URLItem:        d.urlItem,
 		PlayerReady:    d.sup.Ready,
 		Command:        d.command,
 		Rescan:         d.rescan,
@@ -921,9 +918,9 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 //
 // The hash comes from the snapshot, which holds only the hashes that the library
 // already knows. A local file that was not hashed yet gets no hash here: the
-// status call never reads a file. A URL item has no hash.
+// status call never reads a file.
 func nowPlayingSHA(np *manifest.NowPlaying, snap library.Snapshot) {
-	if np == nil || np.Kind == playlist.KindURL {
+	if np == nil {
 		return
 	}
 	np.SHA256 = snap.ItemSHA(np.Playlist, np.Item)
@@ -931,20 +928,12 @@ func nowPlayingSHA(np *manifest.NowPlaying, snap library.Snapshot) {
 
 // ---------------------------------------------------------------- the playlist
 
-// activePlaylist tells the browser what must play now. A playlist of one URL item
-// is kiosk mode: the browser parks on the page and the player does not run (D42).
+// activePlaylist tells the browser what must play now.
 func (d *daemon) activePlaylist() browser.Active {
-	name := d.sched.Active()
-	out := browser.Active{Playlist: name}
-	if p, ok := d.lib.Snapshot().Find(name); ok && p.Kiosk && len(p.Items) == 1 {
-		out.KioskURL = p.Items[0].URL
-		out.RefreshSeconds = p.Items[0].RefreshSeconds
-	}
-	return out
+	return browser.Active{Playlist: d.sched.Active()}
 }
 
-// playerManifest builds the manifest and remembers it, because the index in
-// POST /api/player/url-item counts in the list that the player received.
+// playerManifest builds the manifest of the active playlist.
 func (d *daemon) playerManifest() library.PlayerManifest {
 	cfg := d.config()
 	name := d.sched.Active()
@@ -953,38 +942,10 @@ func (d *daemon) playerManifest() library.PlayerManifest {
 	seed := d.shuffleSeed
 	d.mu.Unlock()
 
-	var out library.PlayerManifest
-	if p, ok := d.lib.Snapshot().Find(name); ok && !p.Kiosk {
-		out = library.BuildManifest(&p, cfg, seed)
-	} else {
-		out = library.BuildManifest(nil, cfg, seed)
+	if p, ok := d.lib.Snapshot().Find(name); ok {
+		return library.BuildManifest(&p, cfg, seed)
 	}
-
-	d.mu.Lock()
-	d.lastManifest = out
-	d.mu.Unlock()
-	return out
-}
-
-// urlItem hands the browser to the URL item at index. The index is a position in
-// the manifest that the player received.
-func (d *daemon) urlItem(index int) (bool, error) {
-	d.mu.Lock()
-	m := d.lastManifest
-	d.mu.Unlock()
-
-	if m.Playlist == nil || index < 0 || index >= len(m.Playlist.Items) {
-		return false, fmt.Errorf("there is no item %d in the playlist that you have", index)
-	}
-	item := m.Playlist.Items[index]
-	if item.Kind != playlist.KindURL {
-		return false, fmt.Errorf("item %d is not a URL item", index)
-	}
-	resume := index + 1
-	if resume >= len(m.Playlist.Items) {
-		resume = 0
-	}
-	return d.sup.URLItem(item.URL, item.Duration, item.RefreshSeconds, resume), nil
+	return library.BuildManifest(nil, cfg, seed)
 }
 
 // newSeed makes the shuffle order of a playlist that starts now (D17).
@@ -995,18 +956,15 @@ func (d *daemon) newSeed() {
 }
 
 // libraryChanged runs after each scan of the media root. The player asks for the
-// manifest again, and the browser looks at the kiosk mode: a playlist that became
-// one URL item, or stopped being one, changes what the browser must show (D42).
+// manifest again.
 func (d *daemon) libraryChanged() {
 	if d.sup == nil {
 		return // the first scan, before the browser exists
 	}
-	d.sup.PlaylistChanged()
 	d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": d.sched.Active()})
 }
 
-// watchSchedule turns a playlist change into an event for the player and a look
-// at the kiosk mode for the browser.
+// watchSchedule turns a playlist change into an event for the player.
 func (d *daemon) watchSchedule(done <-chan struct{}) {
 	changes, cancel := d.sched.Subscribe()
 	defer cancel()
@@ -1017,7 +975,6 @@ func (d *daemon) watchSchedule(done <-chan struct{}) {
 			return
 		case name := <-changes:
 			d.newSeed()
-			d.sup.PlaylistChanged()
 			d.hub.Send(httpd.EventPlaylist, map[string]string{"playlist": name})
 		}
 	}
@@ -1307,7 +1264,6 @@ func (d *daemon) playlistRenamed(old, next string) {
 	d.adopt(updated, false, "", "")
 	d.log.Log("playlist.rename.refs", fmt.Sprintf("%d references in portapixel.toml now name %s", count, next))
 	d.sched.Evaluate()
-	d.sup.PlaylistChanged()
 }
 
 // renamePlaylistRefs puts the new name in every place that names the old one. It

@@ -247,11 +247,13 @@ func TestUnpairKeepsTheCacheAndStopsUsingFleet(t *testing.T) {
 // fall back to the rules of the TOML between its start and its first poll.
 func TestRestoreGivesTheFleetScheduleBackAtStart(t *testing.T) {
 	f := newFakeServer(t)
+	ref := f.addObject("a.jpg", "a picture")
 	f.setManifest(manifest.Manifest{
 		DefaultPlaylist: "lobby",
 		Schedule:        []manifest.Rule{{Playlist: "lobby", Start: "08:00", End: "18:00"}},
+		Media:           []manifest.MediaRef{ref},
 		Playlists: []manifest.Playlist{{
-			Name: "lobby", Items: []manifest.Item{{URL: "https://example.com/a", Duration: 30}},
+			Name: "lobby", Items: []manifest.Item{{SHA256: ref.SHA256, Duration: 30}},
 		}},
 	})
 	d := newDev(t, f)

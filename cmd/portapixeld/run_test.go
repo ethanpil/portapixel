@@ -653,8 +653,6 @@ func TestNowPlayingCarriesTheHashThatTheLibraryKnows(t *testing.T) {
 			want: sha},
 		{name: "a file that has no hash yet",
 			np: &manifest.NowPlaying{Playlist: "hall", Item: "aabbccdd-clip.mp4", Kind: "video"}},
-		{name: "a URL item",
-			np: &manifest.NowPlaying{Playlist: "lobby", Item: "55efb67e-lab2-teal.png", Kind: "url"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -89,7 +89,7 @@ func TestScanGoodPlaylist(t *testing.T) {
 		t.Fatalf("playlists = %d, want 1: %+v", len(snap.Playlists), snap)
 	}
 	p := snap.Playlists[0]
-	if p.Name != "default" || p.Title != "Lobby loop" || p.Fleet || p.Kiosk {
+	if p.Name != "default" || p.Title != "Lobby loop" || p.Fleet {
 		t.Fatalf("playlist = %+v", p)
 	}
 	if len(p.Items) != 2 {
@@ -320,15 +320,6 @@ func TestFleetRefIsRefusedInALocalPlaylist(t *testing.T) {
 	}
 }
 
-func TestKioskPlaylist(t *testing.T) {
-	f := newFixture(t)
-	f.dir(t, "board", "[[item]]\nurl = \"https://dash.example.com/board\"\n")
-	snap := f.lib.Rescan()
-	if !snap.Playlists[0].Kiosk {
-		t.Fatalf("a playlist of one URL item is not kiosk: %+v", snap.Playlists[0])
-	}
-}
-
 func TestEmptyPlaylistIsNotAFault(t *testing.T) {
 	f := newFixture(t)
 	f.dir(t, "new", "[playlist]\nname = \"New\"\n")
@@ -403,8 +394,7 @@ func TestItemSHA(t *testing.T) {
 	f.dir(t, "_fleet/media", "", "55efb67e-lab2-teal.png", "aabbccdd-clip.mp4")
 	f.dir(t, "_fleet/lobby", "[playlist]\nname = \"Fleet lobby\"\n"+
 		"[[item]]\nfile = \"../media/55efb67e-lab2-teal.png\"\n"+
-		"[[item]]\nfile = \"../media/aabbccdd-clip.mp4\"\n"+
-		"[[item]]\nurl = \"https://example.com/board\"\nduration = 30\n")
+		"[[item]]\nfile = \"../media/aabbccdd-clip.mp4\"\n")
 	f.lib.Rescan()
 
 	// The fleet client records the hash of each object that it holds. The clip
@@ -419,7 +409,6 @@ func TestItemSHA(t *testing.T) {
 	}{
 		{name: "a fleet object", playlist: "lobby", item: "55efb67e-lab2-teal.png", want: tealSHA},
 		{name: "a file with no hash yet", playlist: "lobby", item: "aabbccdd-clip.mp4", want: ""},
-		{name: "a URL item", playlist: "lobby", item: "https://example.com/board", want: ""},
 		{name: "a name that the playlist does not hold", playlist: "lobby", item: "other.png", want: ""},
 		{name: "a playlist that is not there", playlist: "gone", item: "55efb67e-lab2-teal.png", want: ""},
 		{name: "no name", playlist: "lobby", item: "", want: ""},
@@ -616,10 +605,6 @@ max_duration = 60
 file = "gone.jpg"
 [[item]]
 file = "notes.txt"
-[[item]]
-url = "https://dash.example.com/board"
-duration = 60
-refresh_seconds = 300
 `, "a.jpg", "b.mp4", "notes.txt")
 	snap := f.lib.Rescan()
 	p, _ := snap.Find("default")
@@ -632,14 +617,14 @@ refresh_seconds = 300
 	if m.Playlist.Transition != "cut" || m.Playlist.TransitionMS != 500 {
 		t.Errorf("transition = %q %d", m.Playlist.Transition, m.Playlist.TransitionMS)
 	}
-	if len(m.Playlist.Items) != 3 {
+	if len(m.Playlist.Items) != 2 {
 		t.Fatalf("items = %+v", m.Playlist.Items)
 	}
 	if m.Playlist.Items[0].Duration != cfg.Playback.ImageDuration {
 		t.Errorf("the image did not get the default duration: %+v", m.Playlist.Items[0])
 	}
-	if m.Playlist.Items[2].Kind != "url" || m.Playlist.Items[2].RefreshSeconds != 300 {
-		t.Errorf("url item = %+v", m.Playlist.Items[2])
+	if m.Playlist.Items[1].Kind != "video" || m.Playlist.Items[1].MaxDuration != 60 {
+		t.Errorf("video item = %+v", m.Playlist.Items[1])
 	}
 	for i, it := range m.Playlist.Items {
 		if it.Index != i {

@@ -26,30 +26,6 @@ func (d Deps) postHeartbeat(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, ok)
 }
 
-// POST /api/player/url-item {"index": 2}
-//
-// The player stops and the daemon takes the browser. An answer of {"skip": true}
-// means that the page does not answer, and the player goes to the next item
-// (D19).
-func (d Deps) postURLItem(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Index int `json:"index"`
-	}
-	if !readJSON(w, r, &body) {
-		return
-	}
-	skip, err := d.URLItem(body.Index)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if skip {
-		writeJSON(w, http.StatusOK, map[string]bool{"skip": true})
-		return
-	}
-	writeJSON(w, http.StatusOK, ok)
-}
-
 // POST /api/player/ready is the answer of the player to a grace request: it has
 // reached an item boundary and the browser may restart now (plan 3.3).
 func (d Deps) postPlayerReady(w http.ResponseWriter, r *http.Request) {

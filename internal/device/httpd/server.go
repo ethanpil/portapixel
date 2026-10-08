@@ -79,9 +79,6 @@ type Deps struct {
 	PlayerManifest func() library.PlayerManifest
 	// Heartbeat takes one player heartbeat.
 	Heartbeat func(browser.Heartbeat)
-	// URLItem hands the browser to a URL item. It gives true when the player must
-	// skip the item (D19).
-	URLItem func(index int) (skip bool, err error)
 	// PlayerReady is the answer of the player to a grace request.
 	PlayerReady func()
 	// Command runs a device command: reboot, restart-browser, screen-on,
@@ -227,7 +224,6 @@ func New(d Deps) http.Handler {
 	player("GET /api/player/manifest", d.getPlayerManifest)
 	player("POST /api/player/heartbeat", d.postHeartbeat)
 	player("GET /api/player/events", d.Hub.serve)
-	player("POST /api/player/url-item", d.postURLItem)
 	player("POST /api/player/ready", d.postPlayerReady)
 	player("GET /api/player/qr.svg", d.getQR)
 

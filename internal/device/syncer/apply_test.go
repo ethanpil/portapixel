@@ -22,7 +22,7 @@ func pairedDev(t *testing.T, f *fakeServer) *dev {
 	return d
 }
 
-// lobbyManifest is one playlist with one media item and one URL item.
+// lobbyManifest is one playlist with one media item.
 func lobbyManifest(ref manifest.MediaRef) manifest.Manifest {
 	return manifest.Manifest{
 		DefaultPlaylist: "lobby",
@@ -33,7 +33,6 @@ func lobbyManifest(ref manifest.MediaRef) manifest.Manifest {
 			Name: "lobby", Title: "Lobby loop", Transition: "cut",
 			Items: []manifest.Item{
 				{SHA256: ref.SHA256, Duration: 15},
-				{URL: "https://dash.example.com/board", Duration: 60, RefreshSeconds: 300},
 			},
 		}},
 	}
@@ -64,16 +63,13 @@ func TestApplyWritesTheFleetPlaylistAndTheObject(t *testing.T) {
 	if !strings.Contains(text, `file = "../media/`+ref.SHA256[:8]+`-Welcome-Sign.jpg"`) {
 		t.Errorf("the fleet playlist is:\n%s", text)
 	}
-	if !strings.Contains(text, `url = "https://dash.example.com/board"`) {
-		t.Errorf("the URL item is missing:\n%s", text)
-	}
 
 	// The library serves it, because the device is paired.
 	p, ok := d.lib.Snapshot().Find("lobby")
 	if !ok {
 		t.Fatal("the library does not serve the fleet playlist")
 	}
-	if len(p.Items) != 2 || p.Items[0].Missing {
+	if len(p.Items) != 1 || p.Items[0].Missing {
 		t.Errorf("the library read %+v", p.Items)
 	}
 	if !p.Fleet {
@@ -459,7 +455,7 @@ func TestAFailedRenameLeavesTheOldSetWhole(t *testing.T) {
 	// place.
 	next := lobbyManifest(ref)
 	next.Playlists = append(next.Playlists, manifest.Playlist{
-		Name: "news", Items: []manifest.Item{{URL: "https://news.example.com", Duration: 30}},
+		Name: "news", Items: []manifest.Item{{SHA256: ref.SHA256, Duration: 30}},
 	})
 	f.setManifest(next)
 	d.renameErr = func(oldPath, _ string) error {
@@ -506,7 +502,7 @@ func TestAPlaylistThatTheManifestDroppedGoesAway(t *testing.T) {
 	ref := f.addObject("welcome.jpg", "the picture of the lobby")
 	with := lobbyManifest(ref)
 	with.Playlists = append(with.Playlists, manifest.Playlist{
-		Name: "news", Items: []manifest.Item{{URL: "https://news.example.com", Duration: 30}},
+		Name: "news", Items: []manifest.Item{{SHA256: ref.SHA256, Duration: 30}},
 	})
 	f.setManifest(with)
 
@@ -640,7 +636,7 @@ func TestApplyRefusesAFleetPlaylistNamedLikeTheObjectStore(t *testing.T) {
 	// The same manifest, with a second playlist that carries the reserved name.
 	m.Playlists = append(m.Playlists, manifest.Playlist{
 		Name: library.FleetMediaDir, Title: "Media",
-		Items: []manifest.Item{{URL: "https://dash.example.com/board", Duration: 30}},
+		Items: []manifest.Item{{SHA256: ref.SHA256, Duration: 30}},
 	})
 	f.setManifest(m)
 

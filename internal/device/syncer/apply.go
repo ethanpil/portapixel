@@ -559,26 +559,17 @@ func (s *Syncer) buildPlaylist(objects map[string]object, p manifest.Playlist) (
 		out.Meta.Name = p.Name
 	}
 	for _, it := range p.Items {
-		switch {
-		case it.URL != "":
-			out.Items = append(out.Items, playlist.Item{
-				URL:            it.URL,
-				Duration:       it.Duration,
-				RefreshSeconds: it.RefreshSeconds,
-			})
-		case it.SHA256 != "":
-			o, ok := objects[it.SHA256]
-			if !ok {
-				notes = append(notes, note{"sync.item.skipped", p.Name + ": this device has no object for one item"})
-				continue
-			}
-			out.Items = append(out.Items, playlist.Item{
-				File:        playlist.FleetRef(o.name),
-				Duration:    it.Duration,
-				Mute:        it.Mute,
-				MaxDuration: it.MaxDuration,
-			})
+		o, ok := objects[it.SHA256]
+		if !ok {
+			notes = append(notes, note{"sync.item.skipped", p.Name + ": this device has no object for one item"})
+			continue
 		}
+		out.Items = append(out.Items, playlist.Item{
+			File:        playlist.FleetRef(o.name),
+			Duration:    it.Duration,
+			Mute:        it.Mute,
+			MaxDuration: it.MaxDuration,
+		})
 	}
 	if errs := out.Validate(playlist.Options{AllowFleetRefs: true}); len(errs) > 0 {
 		notes = append(notes, note{"sync.playlist.skipped", p.Name + ": " + errs.Error()})

@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -101,8 +100,7 @@ type Inputs struct {
 	// /api/status needs no session, because the fallback screen and the login page
 	// read it (D46). A few of its fields are therefore a gift to anybody on the
 	// LAN. The two change-me warnings name a box whose password is in the manual.
-	// The URL of the item that plays now is very often a dashboard link with a share
-	// token in it. redact takes those out for an untrusted caller.
+	// redact takes those out for an untrusted caller.
 	Trusted bool
 }
 
@@ -208,10 +206,6 @@ func (r *Reporter) Status(in Inputs) manifest.Status {
 //     answers to the password that the manual prints (D22, D23).
 //   - the address of the fleet server and the text of a sync fault. The two draw
 //     the map of the site and name its internal hosts.
-//   - the URL of a url item. A signage dashboard link very often carries a share
-//     token in its query, and the whole value would go to any caller while the
-//     item is on the screen. The scheme and the host stay, so a person can still
-//     see which site is up.
 func redact(out *manifest.Status) {
 	kept := out.Warnings[:0]
 	for _, w := range out.Warnings {
@@ -224,27 +218,6 @@ func redact(out *manifest.Status) {
 
 	out.ServerURL = ""
 	out.SyncError = ""
-
-	// The hash of a file stays: it tells nothing that the file name does not. A URL
-	// item has no file, so it carries no hash.
-	if out.NowPlaying != nil && out.NowPlaying.Kind == "url" {
-		short := *out.NowPlaying
-		short.Item = urlOrigin(short.Item)
-		short.SHA256 = ""
-		out.NowPlaying = &short
-	}
-}
-
-// urlOrigin gives the scheme and the host of an address and drops the path and
-// the query, which is where a share token lives. A value that is not an address
-// becomes the one word "url", because a name that we cannot read may hold
-// anything.
-func urlOrigin(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme == "" || u.Host == "" {
-		return "url"
-	}
-	return u.Scheme + "://" + u.Host
 }
 
 // warnings gives the loud messages of the dashboard and the fallback screen.

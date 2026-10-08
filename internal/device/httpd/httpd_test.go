@@ -41,8 +41,6 @@ type fx struct {
 	commands   []string
 	rootPW     string
 	beats      []browser.Heartbeat
-	urlSkip    bool
-	urlIndex   int
 	readyHits  int
 	cookie     *http.Cookie
 	commandErr error
@@ -151,11 +149,7 @@ func (f *fx) rebuild() {
 		PlayerManifest: func() library.PlayerManifest {
 			return library.PlayerManifest{Fallback: true}
 		},
-		Heartbeat: func(hb browser.Heartbeat) { f.beats = append(f.beats, hb) },
-		URLItem: func(index int) (bool, error) {
-			f.urlIndex = index
-			return f.urlSkip, nil
-		},
+		Heartbeat:   func(hb browser.Heartbeat) { f.beats = append(f.beats, hb) },
 		PlayerReady: func() { f.readyHits++ },
 		Command: func(name string) error {
 			f.commands = append(f.commands, name)
@@ -734,25 +728,6 @@ func TestPlayerProtocol(t *testing.T) {
 	}
 	if len(f.beats) != 1 || f.beats[0].Frames != 18211 || f.beats[0].Name != "promo.mp4" {
 		t.Fatalf("the daemon got %+v", f.beats)
-	}
-
-	// A URL item that the daemon takes.
-	w = f.do(http.MethodPost, "/api/player/url-item", map[string]int{"index": 2}, withSecret)
-	if w.Code != http.StatusOK {
-		t.Fatalf("url-item gave %d", w.Code)
-	}
-	if f.urlIndex != 2 {
-		t.Errorf("index = %d", f.urlIndex)
-	}
-	if answer := body(t, w); answer["skip"] != nil {
-		t.Errorf("answer = %v, want no skip", answer)
-	}
-
-	// A URL item that does not answer.
-	f.urlSkip = true
-	w = f.do(http.MethodPost, "/api/player/url-item", map[string]int{"index": 3}, withSecret)
-	if answer := body(t, w); answer["skip"] != true {
-		t.Errorf("answer = %v, want skip", answer)
 	}
 
 	// The answer to a grace request.

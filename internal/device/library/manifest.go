@@ -27,19 +27,16 @@ type ManifestPlaylist struct {
 }
 
 // ManifestItem is one item that the player can show. Index is the position in
-// this list, not the position in playlist.toml: the resume index that the daemon
-// sends after a URL item counts in this list.
+// this list, not the position in playlist.toml.
 type ManifestItem struct {
 	Index int    `json:"index"`
-	Kind  string `json:"kind"` // image | video | url
+	Kind  string `json:"kind"` // image | video
 	Name  string `json:"name"`
-	Src   string `json:"src,omitempty"` // media item
-	URL   string `json:"url,omitempty"` // url item
+	Src   string `json:"src"`
 
-	Duration       int  `json:"duration"`
-	Mute           bool `json:"mute"`
-	MaxDuration    int  `json:"max_duration"`
-	RefreshSeconds int  `json:"refresh_seconds,omitempty"`
+	Duration    int  `json:"duration"`
+	Mute        bool `json:"mute"`
+	MaxDuration int  `json:"max_duration"`
 }
 
 // BuildManifest makes the manifest for one playlist.
@@ -59,16 +56,6 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 
 	items := make([]ManifestItem, 0, len(p.Items))
 	for _, it := range p.Items {
-		if it.Kind == playlist.KindURL {
-			items = append(items, ManifestItem{
-				Kind:           it.Kind,
-				Name:           it.Name,
-				URL:            it.URL,
-				Duration:       it.Duration,
-				RefreshSeconds: it.RefreshSeconds,
-			})
-			continue
-		}
 		if it.Missing || it.Kind == playlist.KindUnknown {
 			continue
 		}

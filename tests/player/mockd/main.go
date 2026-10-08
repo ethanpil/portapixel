@@ -143,7 +143,6 @@ func (m *mock) routes() http.Handler {
 	mux.HandleFunc("GET /api/status", m.status)
 	mux.HandleFunc("GET /api/player/manifest", m.manifest)
 	mux.HandleFunc("POST /api/player/heartbeat", m.heartbeat)
-	mux.HandleFunc("POST /api/player/url-item", m.urlItem)
 	mux.HandleFunc("POST /api/player/ready", m.ready)
 	mux.HandleFunc("GET /api/player/events", m.events)
 	mux.HandleFunc("GET /api/player/qr.svg", m.qr)
@@ -225,8 +224,6 @@ var scenarios = []struct{ name, about string }{
 	{"broken", "every item fails: two are absent, one never answers"},
 	{"fallback", "no content, clock in order"},
 	{"fallback-code", "no content, pairing code, warnings, no clock"},
-	{"urlskip", "url items that the daemon skips, one of them last"},
-	{"urlgo", "a url item that the daemon takes; the player stops"},
 	{"single-image", "one image, no transition"},
 	{"single-video", "one video, it loops"},
 }
@@ -247,12 +244,6 @@ func (m *mock) build() playerManifest {
 
 	case "broken":
 		list = []item{missing(1), slow(2), missing(3)}
-
-	case "urlskip":
-		list = []item{card(1, 4), webPage(1, 20), webPage(2, 20), raster(2, 4), webPage(3, 20)}
-
-	case "urlgo":
-		list = []item{card(1, 4), webPage(9, 30)}
 
 	case "single-image":
 		list = []item{card(7, 10)}
@@ -310,11 +301,6 @@ func (m *mock) clip(mute bool, max int) item {
 		Src: "/media/video/clip.mp4", Mute: mute, MaxDuration: max}
 }
 
-func webPage(n, dur int) item {
-	u := fmt.Sprintf("https://dash.example.com/board-%d", n)
-	return item{Kind: "url", Name: u, URL: u, Duration: dur, RefreshSeconds: 300}
-}
-
 /* ------------------------------------------------------------- API handlers */
 
 func (m *mock) manifest(w http.ResponseWriter, r *http.Request) {
@@ -358,24 +344,6 @@ func (m *mock) heartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Print(line)
 	writeJSON(w, map[string]bool{"ok": true})
-}
-
-func (m *mock) urlItem(w http.ResponseWriter, r *http.Request) {
-	if !m.gate(w, r) {
-		return
-	}
-	var body struct{ Index int }
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	m.mu.Lock()
-	sc := m.scenario
-	m.mu.Unlock()
-	if sc == "urlgo" {
-		log.Printf("url-item %d: the daemon takes the browser. The player must stop now.", body.Index)
-		writeJSON(w, map[string]any{})
-		return
-	}
-	log.Printf("url-item %d: skip (D19)", body.Index)
-	writeJSON(w, map[string]bool{"skip": true})
 }
 
 func (m *mock) ready(w http.ResponseWriter, r *http.Request) {

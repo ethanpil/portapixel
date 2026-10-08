@@ -27,21 +27,19 @@ const MediaURLPrefix = "/media/"
 // Item is one entry of a playlist, with the facts that the scan found.
 type Item struct {
 	Index int    `json:"index"`
-	Kind  string `json:"kind"` // image | video | url | unknown
-	// Name is what the admin UI shows: the file name or the URL.
+	Kind  string `json:"kind"` // image | video | unknown
+	// Name is what the admin UI shows: the file name.
 	Name string `json:"name"`
 	// File is the path that the playlist gave, relative to the playlist
-	// directory. It is empty for a URL item.
+	// directory.
 	File string `json:"file,omitempty"`
-	URL  string `json:"url,omitempty"`
 	// Src is the URL that serves the file, for example
-	// /media/default/welcome.jpg. It is empty for a URL item.
+	// /media/default/welcome.jpg.
 	Src string `json:"src,omitempty"`
 
-	Duration       int  `json:"duration"`
-	Mute           bool `json:"mute"`
-	MaxDuration    int  `json:"max_duration"`
-	RefreshSeconds int  `json:"refresh_seconds"`
+	Duration    int  `json:"duration"`
+	Mute        bool `json:"mute"`
+	MaxDuration int  `json:"max_duration"`
 
 	Size    int64  `json:"size"`
 	SHA256  string `json:"sha256,omitempty"` // empty until the background hash finishes
@@ -71,8 +69,6 @@ type Playlist struct {
 	// admin UI still shows it, and the scheduler never selects it (plan section
 	// 13: sideloaded content stays visible but unscheduled).
 	Unscheduled bool `json:"unscheduled"`
-	// Kiosk is true for a playlist of exactly one URL item (D42).
-	Kiosk bool `json:"kiosk"`
 
 	// dir is the absolute path of the directory.
 	dir string
@@ -136,7 +132,7 @@ func (s Snapshot) ItemSHA(playlistName, itemName string) string {
 	}
 	sha := ""
 	for _, it := range p.Items {
-		if it.Kind == playlist.KindURL || it.Name != itemName || it.SHA256 == "" {
+		if it.Name != itemName || it.SHA256 == "" {
 			continue
 		}
 		if sha != "" && sha != it.SHA256 {
@@ -444,7 +440,6 @@ func (l *Library) readPlaylist(snap *Snapshot, name, dir string, fleet bool) {
 		Shuffle:     p.Meta.Shuffle,
 		Fleet:       fleet,
 		Unscheduled: snap.Paired && !fleet,
-		Kiosk:       p.IsKiosk(),
 		dir:         dir,
 	}
 	if out.Title == "" {
@@ -463,20 +458,13 @@ func (l *Library) readPlaylist(snap *Snapshot, name, dir string, fleet bool) {
 // readItem turns one playlist entry into an Item and looks at the file.
 func (l *Library) readItem(index int, it playlist.Item, dir string) Item {
 	out := Item{
-		Index:          index,
-		Kind:           playlist.Kind(it),
-		File:           it.File,
-		URL:            it.URL,
-		Duration:       it.Duration,
-		Mute:           it.Mute,
-		MaxDuration:    it.MaxDuration,
-		RefreshSeconds: it.RefreshSeconds,
+		Index:       index,
+		Kind:        playlist.Kind(it),
+		File:        it.File,
+		Duration:    it.Duration,
+		Mute:        it.Mute,
+		MaxDuration: it.MaxDuration,
 	}
-	if out.Kind == playlist.KindURL {
-		out.Name = it.URL
-		return out
-	}
-
 	out.Name = path.Base(it.File)
 	out.path = filepath.Join(dir, filepath.FromSlash(it.File))
 	out.Src = l.srcURL(out.path)

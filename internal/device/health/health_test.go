@@ -264,11 +264,9 @@ func TestHosts(t *testing.T) {
 // /api/status needs no session, so an untrusted caller must not read a secret
 // from it.
 //
-// Two faults hid here. The two change-me warnings told a port sweep which box on
-// the LAN still answers to the password that the manual prints, so every hit was a
-// confirmed root shell and a confirmed admin session. And the URL of the item that
-// plays now went out whole, and a signage dashboard link very often carries a
-// share token in its query.
+// The two change-me warnings told a port sweep which box on the LAN still answers
+// to the password that the manual prints, so every hit was a confirmed root shell
+// and a confirmed admin session.
 func TestUntrustedReportHoldsNoSecret(t *testing.T) {
 	f := newRoots(t)
 	// The default root password: the same hash in both files.
@@ -276,24 +274,18 @@ func TestUntrustedReportHoldsNoSecret(t *testing.T) {
 	f.write(t, filepath.Join(f.src.StateDir, RootHashFile), "$6$abc$hash\n")
 
 	in := Inputs{
-		Config:    config.Default(), // the default web password
-		DeviceID:  "px-1a2b3c4d",
-		Paired:    true,
-		ServerURL: "https://fleet.example.com/pp",
-		SyncError: "dial tcp 10.1.2.3:443: connect: no route to host",
-		NowPlaying: &manifest.NowPlaying{
-			Playlist: "lobby", Index: 2, Kind: "url",
-			Item: "https://dash.example.com/board?token=s3cr3t-share-token",
-		},
+		Config:     config.Default(), // the default web password
+		DeviceID:   "px-1a2b3c4d",
+		Paired:     true,
+		ServerURL:  "https://fleet.example.com/pp",
+		SyncError:  "dial tcp 10.1.2.3:443: connect: no route to host",
+		NowPlaying: &manifest.NowPlaying{Playlist: "lobby", Index: 2, Kind: "image", Item: "welcome.jpg"},
 	}
 
 	// The trusted view keeps everything. The dashboard and the fleet need it.
 	full := New(f.src).Status(withTrust(in, true))
 	if full.ServerURL == "" || full.SyncError == "" {
 		t.Fatal("the trusted report lost the fleet fields")
-	}
-	if !strings.Contains(full.NowPlaying.Item, "s3cr3t") {
-		t.Fatal("the trusted report lost the URL of the item")
 	}
 	if !hasCode(full.Warnings, manifest.WarnWebPassword) || !hasCode(full.Warnings, manifest.WarnRootPassword) {
 		t.Fatal("the trusted report lost a change-me warning")
@@ -312,15 +304,10 @@ func TestUntrustedReportHoldsNoSecret(t *testing.T) {
 	if hasCode(got.Warnings, manifest.WarnRootPassword) {
 		t.Error("the report names a device whose root password is the default one")
 	}
-	if got.NowPlaying == nil {
-		t.Fatal("the report holds no now playing at all; the playlist and the kind may go out")
-	}
-	if got.NowPlaying.Item != "https://dash.example.com" {
-		t.Errorf("the item is %q, want the scheme and the host only", got.NowPlaying.Item)
-	}
-	// The trusted report must not have changed: redact works on a copy.
-	if !strings.Contains(in.NowPlaying.Item, "s3cr3t") {
-		t.Error("redact changed the value that the caller gave it")
+	// A picture keeps its file name: the names of the slides are not a secret, and
+	// the dashboard of the fleet shows them.
+	if got.NowPlaying == nil || got.NowPlaying.Item != "welcome.jpg" {
+		t.Errorf("now playing is %+v, want the file name", got.NowPlaying)
 	}
 	// The warnings that name no secret stay, so a monitor still sees a real fault.
 	if !hasCode(got.Warnings, manifest.WarnTimezoneUTC) {
@@ -335,28 +322,8 @@ func TestUntrustedReportHoldsNoSecret(t *testing.T) {
 	}
 }
 
-// An item name that is not an address must never go out whole: we cannot tell what
-// is in it.
-func TestUntrustedReportHidesAnItemThatIsNotAnAddress(t *testing.T) {
-	f := newRoots(t)
-	in := Inputs{
-		Config:     config.Default(),
-		DeviceID:   "px-1a2b3c4d",
-		NowPlaying: &manifest.NowPlaying{Kind: "url", Item: "not an address at all"},
-	}
-	if got := New(f.src).Status(in).NowPlaying.Item; got != "url" {
-		t.Errorf("the item is %q, want %q", got, "url")
-	}
-	// A picture keeps its file name: the names of the slides are not a secret, and
-	// the dashboard of the fleet shows them.
-	in.NowPlaying = &manifest.NowPlaying{Kind: "image", Item: "welcome.jpg"}
-	if got := New(f.src).Status(in).NowPlaying.Item; got != "welcome.jpg" {
-		t.Errorf("the item is %q, want the file name", got)
-	}
-}
-
 // The hash of a file tells a caller nothing that the file name does not. It stays
-// for every caller, and a URL item carries none, whatever the input says.
+// for every caller.
 func TestUntrustedReportKeepsTheHashOfAFile(t *testing.T) {
 	f := newRoots(t)
 	sha := strings.Repeat("ab", 32)
@@ -370,10 +337,6 @@ func TestUntrustedReportKeepsTheHashOfAFile(t *testing.T) {
 	}
 	if got := New(f.src).Status(withTrust(in, true)).NowPlaying.SHA256; got != sha {
 		t.Errorf("a trusted caller got the hash %q, want %q", got, sha)
-	}
-	in.NowPlaying = &manifest.NowPlaying{Kind: "url", Item: "https://dash.example.com/board?k=s3cr3t", SHA256: sha}
-	if got := New(f.src).Status(in).NowPlaying.SHA256; got != "" {
-		t.Errorf("an untrusted caller got the hash %q for a URL item", got)
 	}
 }
 
