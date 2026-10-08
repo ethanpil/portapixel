@@ -4,6 +4,14 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## Unreleased
 
+### Removed
+
+- Web page items, single-URL kiosk mode, the device tier and the codec report (37115a5 to 002b7bb). The player becomes mpv, which shows images and videos only. Server migration 2 deletes the web page items and changes old transition words to `fade`.
+
+### Changed
+
+- A transition is `cut` or `fade` for now (ea016cb). The status names the player state `player_state` (37115a5).
+
 - Fix 13 findings of the review of the preview and rename work (83fa177 to a59af14). A remote rename does not write over a config file that has a fault. One lock holds each config write. A name has 1 to 63 characters, with no invisible or bidi characters. A clone does not change the name of the row. A first boot copy leaves no short file. CI runs the node tests.
 - Show what plays in the two admin UIs, and rename a screen from the server as a command (bb7ba5c to c440e62). The name of a row now follows the name of the device. A name that only the old rename route set goes back to the name of the device at its first heartbeat. Note: the tree does not pass `go vet` at 37930f6, because its test uses a field that a5a36ec adds; skip 37930f6 in a bisect. 37930f6 also holds the admin route for video frames, a5a36ec holds the hash report of the daemon, and bb7ba5c holds the name rule.
 - Ship seven demo videos as the default content (e9f2a58, bddbc5e). They are not CC0; see `LICENSES-THIRD-PARTY.md`.
