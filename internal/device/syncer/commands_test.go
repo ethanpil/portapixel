@@ -17,13 +17,13 @@ func TestCommandsRunOnceAndAreAckedAgain(t *testing.T) {
 	f := newFakeServer(t)
 	f.setManifest(manifest.Manifest{Commands: []manifest.Command{
 		{ID: 7, Type: CmdRescan},
-		{ID: 8, Type: CmdRestartBrowser},
+		{ID: 8, Type: CmdRestartPlayer},
 	}})
 
 	d := pairedDev(t, f)
 	d.s.Once(context.Background())
 
-	if got := d.commands; !slices.Equal(got, []string{CmdRescan, CmdRestartBrowser}) {
+	if got := d.commands; !slices.Equal(got, []string{CmdRescan, CmdRestartPlayer}) {
 		t.Fatalf("the device ran %v", got)
 	}
 	if len(f.beats) != 1 || !slices.Equal(f.beats[0].Acks, []int64{7, 8}) {
@@ -51,7 +51,7 @@ func TestRebootIsAckedBeforeTheMachineGoesDown(t *testing.T) {
 	f.setManifest(manifest.Manifest{Commands: []manifest.Command{
 		{ID: 3, Type: CmdRescan},
 		{ID: 4, Type: CmdReboot},
-		{ID: 5, Type: CmdRestartBrowser},
+		{ID: 5, Type: CmdRestartPlayer},
 	}})
 
 	d := pairedDev(t, f)

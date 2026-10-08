@@ -192,7 +192,7 @@ export function freeSpace(freeBytes, totalBytes) {
 
 /** The commands that a screen takes, with the words that a person reads. */
 export const COMMANDS = [
-  { type: 'restart-browser', label: 'Restart the player', body: 'The picture goes away for a few seconds and comes back on the same item.' },
+  { type: 'restart-player', label: 'Restart the player', body: 'The picture goes away for a few seconds and comes back on the same item.' },
   { type: 'reboot', label: 'Reboot', body: 'The screen goes dark for about half a minute while the box starts again.' },
   { type: 'screen-on', label: 'Screen on', body: 'The panel comes on now, whatever its own times say.' },
   { type: 'screen-off', label: 'Screen off', body: 'The panel goes dark now. Its own times bring it back.' },

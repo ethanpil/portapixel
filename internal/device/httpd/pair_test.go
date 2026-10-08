@@ -173,7 +173,7 @@ func TestFleetLockTable(t *testing.T) {
 
 		// The manual commands stay with the local admin (plan section 13).
 		{"screen on", http.MethodPost, "/api/commands/screen-on", nil, false},
-		{"restart the browser", http.MethodPost, "/api/commands/restart-browser", nil, false},
+		{"restart the browser", http.MethodPost, "/api/commands/restart-player", nil, false},
 
 		// The local Apply button still works while paired: [updates] auto decides
 		// if an update waits for the fleet command or not (D28).

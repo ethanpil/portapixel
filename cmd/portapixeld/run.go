@@ -575,7 +575,7 @@ func (d *daemon) serve(listen string) int {
 	}
 
 	// The order matters. The HTTP server drains first, so that no handler can call
-	// a worker that has already gone. A POST /api/commands/restart-browser after the
+	// a worker that has already gone. A POST /api/commands/restart-player after the
 	// supervisor stopped reports success and does nothing.
 	//
 	// An install stream never ends by itself, and Shutdown does not cancel a
@@ -1328,7 +1328,7 @@ func (d *daemon) command(name string) error {
 	switch name {
 	case "reboot":
 		go d.reboot("the admin asked for a reboot")
-	case "restart-browser":
+	case "restart-player":
 		return d.sup.Restart("the admin asked for a player restart")
 	case "screen-on":
 		// The power controller owns the order and the manual override: the command

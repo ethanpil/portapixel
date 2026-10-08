@@ -104,9 +104,9 @@ export function mount(main, ctx) {
     body: [nowBody, nowEmpty],
     foot: [nowNext, h('button', {
       type: 'button', class: 'pp-btn', text: 'Restart player',
-      onClick: () => command('restart-browser', {
+      onClick: () => command('restart-player', {
         title: 'Restart the player?',
-        body: 'The screen goes black for a few seconds and then starts the playlist again.',
+        body: 'The screen goes black for a few seconds and comes back on the same item.',
         confirm: 'Restart it',
       }),
     })],
@@ -167,9 +167,9 @@ export function mount(main, ctx) {
         rescanBtn,
         h('button', {
           type: 'button', class: 'pp-btn', text: 'Restart player',
-          onClick: () => command('restart-browser', {
+          onClick: () => command('restart-player', {
             title: 'Restart the player?',
-            body: 'The screen goes black for a few seconds and then starts the playlist again.',
+            body: 'The screen goes black for a few seconds and comes back on the same item.',
             confirm: 'Restart it',
           }),
         }),

@@ -291,14 +291,14 @@ func TestManifestCommandsAreDeliveredOnce(t *testing.T) {
 	f := newFixture(t)
 	dev := f.device(t, "px-cmd00001", 0)
 
-	if _, err := f.d.QueueCommand(dev.ID, "restart-browser", nil); err != nil {
+	if _, err := f.d.QueueCommand(dev.ID, "restart-player", nil); err != nil {
 		t.Fatal(err)
 	}
 	m, err := f.d.Manifest(dev, opt)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(m.Commands) != 1 || m.Commands[0].Type != "restart-browser" {
+	if len(m.Commands) != 1 || m.Commands[0].Type != "restart-player" {
 		t.Fatalf("the commands are %+v", m.Commands)
 	}
 	if m, err = f.d.Manifest(dev, opt); err != nil {

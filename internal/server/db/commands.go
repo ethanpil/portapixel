@@ -15,7 +15,7 @@ var nameRule = "a screen needs a name of " + manifest.NameRule
 // commandTypes holds the commands that a device runs (contract section 5). The
 // server refuses every other word: the device would not know it, and a word that
 // goes into the queue and never runs is worse than an error at the button.
-var commandTypes = []string{"reboot", "restart-browser", "screen-on", "screen-off", "rescan", "update", CommandRename}
+var commandTypes = []string{"reboot", "restart-player", "screen-on", "screen-off", "rescan", "update", CommandRename}
 
 // CommandRename gives a screen a new display name. The device owns its name, so
 // the server does not write the row: the next heartbeat reports the new name, and

@@ -62,7 +62,7 @@ type Deps struct {
 	SaveConfig func(incoming config.Config) (Applied, error)
 	// ActivePlaylist gives the name of the playlist that plays now.
 	ActivePlaylist func() string
-	// Command runs a device command: reboot, restart-browser, screen-on,
+	// Command runs a device command: reboot, restart-player, screen-on,
 	// screen-off, rescan.
 	Command func(name string) error
 	// Rescan reads the media root again and looks for a sideloaded release bundle.

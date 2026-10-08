@@ -16,13 +16,13 @@ const MaxAcks = 100
 
 // The command types of the fleet queue (ARCHITECTURE section 5).
 const (
-	CmdReboot         = "reboot"
-	CmdRestartBrowser = "restart-browser"
-	CmdScreenOn       = "screen-on"
-	CmdScreenOff      = "screen-off"
-	CmdRescan         = "rescan"
-	CmdUpdate         = "update"
-	CmdRename         = "rename"
+	CmdReboot        = "reboot"
+	CmdRestartPlayer = "restart-player"
+	CmdScreenOn      = "screen-on"
+	CmdScreenOff     = "screen-off"
+	CmdRescan        = "rescan"
+	CmdUpdate        = "update"
+	CmdRename        = "rename"
 )
 
 // runCommands runs each command one time and gives the IDs to acknowledge.
@@ -86,7 +86,7 @@ func endsTheProcess(kind string) bool { return kind == CmdReboot || kind == CmdU
 // stop the device.
 func (s *Syncer) execute(ctx context.Context, c manifest.Command) {
 	switch c.Type {
-	case CmdRestartBrowser, CmdScreenOn, CmdScreenOff, CmdRescan:
+	case CmdRestartPlayer, CmdScreenOn, CmdScreenOff, CmdRescan:
 		s.log("sync.command", c.Type)
 		s.runLocal(c.Type)
 	case CmdUpdate:

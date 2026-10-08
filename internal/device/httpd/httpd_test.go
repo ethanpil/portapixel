@@ -579,7 +579,7 @@ func TestUploadNeedsAFileName(t *testing.T) {
 func TestCommands(t *testing.T) {
 	f := newFx(t)
 	f.login()
-	for _, name := range []string{"reboot", "restart-browser", "screen-on", "screen-off"} {
+	for _, name := range []string{"reboot", "restart-player", "screen-on", "screen-off"} {
 		if w := f.do(http.MethodPost, "/api/commands/"+name, nil); w.Code != http.StatusOK {
 			t.Errorf("%s gave %d: %s", name, w.Code, w.Body)
 		}
@@ -996,14 +996,14 @@ func TestCommandReportsABusyPlayer(t *testing.T) {
 	f := newFx(t)
 	f.login()
 	f.commandErr = player.ErrBusy
-	w := f.do(http.MethodPost, "/api/commands/restart-browser", nil)
+	w := f.do(http.MethodPost, "/api/commands/restart-player", nil)
 	if w.Code != http.StatusServiceUnavailable {
 		t.Fatalf("a busy player gave %d: %s", w.Code, w.Body)
 	}
 	mustJSON(t, w)
 
 	f.commandErr = nil
-	if w := f.do(http.MethodPost, "/api/commands/restart-browser", nil); w.Code != http.StatusOK {
+	if w := f.do(http.MethodPost, "/api/commands/restart-player", nil); w.Code != http.StatusOK {
 		t.Fatalf("a command that worked gave %d", w.Code)
 	}
 }

@@ -190,7 +190,7 @@ func TestHeartbeatAndCommandAck(t *testing.T) {
 
 	// Queue a command through the admin API.
 	res := f.mustOK(f.adminCall(http.MethodPost, "/api/admin/devices/px-hb000001/commands",
-		map[string]any{"type": "restart-browser"}), "queue a command")
+		map[string]any{"type": "restart-player"}), "queue a command")
 	var queued struct {
 		ID int64 `json:"id"`
 	}
@@ -203,7 +203,7 @@ func TestHeartbeatAndCommandAck(t *testing.T) {
 
 	// The manifest delivers it.
 	m := f.getManifest(token)
-	if len(m.Commands) != 1 || m.Commands[0].ID != queued.ID || m.Commands[0].Type != "restart-browser" {
+	if len(m.Commands) != 1 || m.Commands[0].ID != queued.ID || m.Commands[0].Type != "restart-player" {
 		t.Fatalf("the manifest commands are %+v", m.Commands)
 	}
 	if state := f.commandState(t, "px-hb000001", queued.ID); state != "delivered" {

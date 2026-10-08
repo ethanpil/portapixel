@@ -124,7 +124,7 @@ type Options struct {
 	ClearFleetRules func()
 	// Rescan reads the media root again and tells the player one time.
 	Rescan func()
-	// Command runs a local device command: restart-browser, screen-on, screen-off,
+	// Command runs a local device command: restart-player, screen-on, screen-off,
 	// rescan or reboot.
 	Command func(name string) error
 	// Update checks the release source of a paired device and applies what it

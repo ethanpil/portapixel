@@ -224,7 +224,7 @@ type MediaRef struct {
 }
 type Command struct {
     ID   int64             `json:"id"`
-    Type string            `json:"type"` // reboot | restart-browser | screen-on | screen-off | rescan | update | rename
+    Type string            `json:"type"` // reboot | restart-player | screen-on | screen-off | rescan | update | rename
     Args map[string]string `json:"args,omitempty"` // rename: {"name": "<new name>"}
 }
 type ScreenRule struct {
