@@ -80,6 +80,7 @@ Alpine package manager installed.
 |---|---|---|
 | Noto (`font-noto`, `font-noto-cjk`, `font-noto-emoji`) | SIL Open Font License 1.1 | The system fonts. Live web pages use them. |
 | IBM Plex Sans and IBM Plex Mono | SIL Open Font License 1.1 | Shipped as local `woff2` files in `web/shared/fonts/`. A device on a closed network cannot fetch a remote font. |
+| Go Regular, Go Bold and Go Mono (Bigelow & Holmes) | BSD-3-Clause | Compiled into `portapixeld` through `golang.org/x/image/font/gofont`. The fallback screen uses them. |
 
 ## Go modules
 
@@ -103,6 +104,8 @@ and `portapixel-server`. The versions are in `go.mod`.
 | `github.com/hashicorp/mdns` | MIT | The mDNS announcement (D20). |
 | `github.com/miekg/dns` | BSD-3-Clause | Dependency of `github.com/hashicorp/mdns`. |
 | `github.com/skip2/go-qrcode` | MIT | The QR code on the fallback screen (D18). |
+| `golang.org/x/image` | BSD-3-Clause | Draws the text of the fallback screen (D18): the OpenType reader and the Go fonts. |
+| `golang.org/x/text` | BSD-3-Clause | Dependency of `golang.org/x/image`. |
 | The Go standard library | BSD-3-Clause | Everything else. |
 
 ## Default content
