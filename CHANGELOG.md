@@ -6,10 +6,15 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ### Removed
 
+- The Chromium player: the browser package, the web player, `cage`, the DevTools control and the `--browser-*` flags (9b3031f, 0d30320).
 - Web page items, single-URL kiosk mode, the device tier and the codec report (37115a5 to 002b7bb). The player becomes mpv, which shows images and videos only. Server migration 2 deletes the web page items and changes old transition words to `fade`.
 
 ### Changed
 
+- The device player is mpv on DRM/KMS, driven over JSON IPC, with a watchdog that measures time with the monotonic clock (3a619c0, 0d30320, ab9b606). An embedded Lua script makes the transitions inside mpv (e0c3738).
+- The fallback screen is a PNG that the daemon draws (65f2578). The screen goes off through DRM DPMS, not `wlr-randr` (a56c330).
+- The command `restart-browser` is now `restart-player` (d5791ce). New setting `display.video_output` (a42c1c9).
+- Fix 8 findings of the stage 2 review (0de6a4f to 6a98d3c).
 - A transition is `cut` or `fade` for now (ea016cb). The status names the player state `player_state` (37115a5).
 
 - Fix 13 findings of the review of the preview and rename work (83fa177 to a59af14). A remote rename does not write over a config file that has a fault. One lock holds each config write. A name has 1 to 63 characters, with no invisible or bidi characters. A clone does not change the name of the row. A first boot copy leaves no short file. CI runs the node tests.
