@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -958,12 +959,54 @@ func TestLoadStopsAfterAFailedWrite(t *testing.T) {
 func TestBusyQueue(t *testing.T) {
 	s := New(Options{Command: CommandConfig{Override: "mpv"}})
 	for range cap(s.cmds) {
-		s.PlaylistChanged()
+		s.Resume()
 	}
 	if err := s.Restart("test"); !errors.Is(err, ErrBusy) {
 		t.Fatalf("Restart = %v, want ErrBusy", err)
 	}
 	if err := s.Suspend(); !errors.Is(err, ErrBusy) {
 		t.Fatalf("Suspend = %v, want ErrBusy", err)
+	}
+}
+
+// PlaylistChanged and DisplayChanged say that something changed, and nothing asks
+// again. A full queue dropped them, and the screen kept the old playlist and the
+// old rotation until the next change.
+func TestAChangeIsNotLostWhenTheQueueIsFull(t *testing.T) {
+	inRender := make(chan struct{}, 1)
+	release := make(chan struct{})
+	var hold atomic.Bool
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) {
+		o.Render = func(info fallback.Info, w, h2 int) ([]byte, error) {
+			if hold.Load() {
+				inRender <- struct{}{}
+				<-release
+			}
+			return []byte("PNG"), nil
+		}
+	})
+	h.waitPlaying(0)
+
+	// The loop draws the fallback screen and waits in the render.
+	hold.Store(true)
+	h.setManifest(library.PlayerManifest{})
+	<-inRender
+	hold.Store(false)
+	for range cap(h.sup.cmds) {
+		h.sup.Resume() // a message that changes nothing fills the queue
+	}
+	h.mu.Lock()
+	h.display.Rotation = 90
+	h.mu.Unlock()
+	h.sup.DisplayChanged()
+	h.setManifest(playlist("evening", "cut", 0, library.ManifestItem{Name: "night.jpg"}, library.ManifestItem{Name: "stars.mp4"}))
+	close(release)
+
+	waitFor(t, "the evening playlist", func() bool {
+		np := h.sup.State().NowPlaying
+		return np != nil && np.Playlist == "evening"
+	})
+	if d := h.dump(); !slices.Contains(d.Args, "--video-rotate=90") {
+		t.Errorf("the display change was lost: the arguments are %q", d.Args)
 	}
 }

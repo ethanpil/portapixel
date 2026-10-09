@@ -180,8 +180,6 @@ const (
 	cmdRestart = iota
 	cmdSuspend
 	cmdResume
-	cmdPlaylist
-	cmdDisplay
 )
 
 // resumeAt says where a new mpv starts in the playlist.
@@ -262,6 +260,8 @@ type Supervisor struct {
 	opt  Options
 	proc *launcher
 	cmds chan command
+	// wake tells the loop that a change flag is set (see mark).
+	wake chan struct{}
 	// model is the board name (BoardModel). It does not change while the
 	// daemon runs.
 	model string
@@ -333,6 +333,10 @@ type Supervisor struct {
 	heard time.Time
 	// notes remembers when each note last went in the ops log.
 	notes map[string]time.Time
+	// playlistDue and displayDue are the changes that the loop did not take
+	// yet. They are flags and not messages of the queue: a full queue dropped
+	// such a message, and nothing asked again.
+	playlistDue, displayDue bool
 }
 
 // New makes a Supervisor.
@@ -372,6 +376,7 @@ func New(opt Options) *Supervisor {
 		model:       BoardModel(opt.ModelPath),
 		proc:        newLauncher(opt.Command, opt.Log),
 		cmds:        make(chan command, 8),
+		wake:        make(chan struct{}, 1),
 		cur:         -1,
 		state:       StateStopped,
 		displayOK:   true,
@@ -412,6 +417,8 @@ func (s *Supervisor) Run(done <-chan struct{}) {
 			return
 		case c := <-s.cmds:
 			s.handle(c)
+		case <-s.wake:
+			s.takeChanges()
 		case m, ok := <-msgs:
 			if !ok {
 				// mpv closed the socket. It ends, or it is broken: the exit rule or
@@ -535,11 +542,39 @@ func (s *Supervisor) Resume() error {
 // PlaylistChanged tells the supervisor that what must play can be different: a
 // schedule change, a library change or a playback setting. The supervisor
 // replaces the list of mpv when the manifest is different.
-func (s *Supervisor) PlaylistChanged() { s.send(command{kind: cmdPlaylist}) }
+func (s *Supervisor) PlaylistChanged() { s.mark(&s.playlistDue) }
 
 // DisplayChanged tells the supervisor that a setting of the mpv command line is
 // different: the rotation, the output mode, the video output or the sound card.
-func (s *Supervisor) DisplayChanged() { s.send(command{kind: cmdDisplay}) }
+func (s *Supervisor) DisplayChanged() { s.mark(&s.displayDue) }
+
+// mark sets a change flag and wakes the loop. It never blocks, and it never
+// loses a change: the loop reads the flags, and two changes before that are one
+// change.
+func (s *Supervisor) mark(flag *bool) {
+	s.mu.Lock()
+	*flag = true
+	s.mu.Unlock()
+	select {
+	case s.wake <- struct{}{}:
+	default: // the loop has a wake already
+	}
+}
+
+// takeChanges acts on the change flags. It runs in the loop goroutine. A display
+// change restarts mpv, and the new mpv loads the manifest when it connects.
+func (s *Supervisor) takeChanges() {
+	s.mu.Lock()
+	playlist, display := s.playlistDue, s.displayDue
+	s.playlistDue, s.displayDue = false, false
+	s.mu.Unlock()
+	if display {
+		s.restart("the display settings changed", false, resumeSame)
+	}
+	if playlist {
+		s.playlistChanged(s.opt.Now())
+	}
+}
 
 // queue puts a message in the queue and reports a full queue as ErrBusy.
 func (s *Supervisor) queue(c command) error {
@@ -584,10 +619,6 @@ func (s *Supervisor) handle(c command) {
 			}
 			s.step()
 		}
-	case cmdPlaylist:
-		s.playlistChanged(s.opt.Now())
-	case cmdDisplay:
-		s.restart("the display settings changed", false, resumeSame)
 	}
 }
 
