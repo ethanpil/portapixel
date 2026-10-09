@@ -171,6 +171,12 @@ export function mount(main, ctx) {
   // Display.
   const cRotation = segmented([['0', 'Normal'], ['90', '90°'], ['180', '180°'], ['270', '270°']], 'Rotation');
   const cVideoMode = text({ mono: true, placeholder: 'trust the display' });
+  // display.video_output. docs/settings.md, "The video output", has the rule.
+  const cVideoOutput = select([
+    ['auto', 'Automatic — the graphics chip when it has a driver'],
+    ['gpu', 'Graphics chip (gpu)'],
+    ['drm', 'No graphics chip (drm)'],
+  ]);
   const cPowerMethod = select([
     ['auto', 'Automatic — HDMI control when the display answers'],
     ['cec', 'HDMI control (CEC) only'],
@@ -312,6 +318,8 @@ export function mount(main, ctx) {
           group('display.rotation', 'Rotation', cRotation, 'The player restarts to turn the picture.'),
           field('display.video_mode', 'Force the output mode', cVideoMode,
             'Leave it empty and the display is trusted. Fill it in only when a display or an HDMI splitter reports the wrong modes, for example 1920x1080@60.'),
+          field('display.video_output', 'How the player draws', cVideoOutput,
+            'Set drm when the picture drops frames or the CPU load is high with gpu. Ken Burns needs gpu. The player restarts.'),
           field('display.power_method', 'Turning the screen on and off', cPowerMethod, powerHelp),
           screenTimesNote,
           h('div', { class: 'pp-fields' },
@@ -338,7 +346,7 @@ export function mount(main, ctx) {
             field('playback.transition', 'Between items', cTransition),
             field('playback.transition_ms', 'Transition length (ms)', cTransitionMS)),
           field('playback.motion', 'Moving crossfade', cMotion,
-            'In a crossfade from a video, the video keeps moving while the next item comes in. Automatic is on for a PC and a Raspberry Pi 5. The player turns it off until the next start when the device drops too many frames.'),
+            'In a crossfade from a video, the video keeps moving while the next item comes in. Automatic is on for a PC and a Raspberry Pi 5, and it turns itself off until the device restarts when a crossfade drops too many frames or fails. On stays on.'),
           h('div', { class: 'pp-fields' },
             field('playback.image_duration', 'Default image time (seconds)', cImageDuration),
             field('playback.nightly_restart', 'Nightly restart', cNightly)),
@@ -410,6 +418,7 @@ export function mount(main, ctx) {
 
     cRotation.value = String(cfg.display.rotation || 0);
     cVideoMode.value = cfg.display.video_mode || '';
+    cVideoOutput.value = cfg.display.video_output || 'auto';
     cPowerMethod.value = cfg.display.power_method || 'auto';
     cOnTime.value = cfg.display.on_time || '';
     cOffTime.value = cfg.display.off_time || '';
@@ -476,6 +485,7 @@ export function mount(main, ctx) {
 
     next.display.rotation = Number(cRotation.value);
     next.display.video_mode = cVideoMode.value.trim();
+    next.display.video_output = cVideoOutput.value;
     next.display.power_method = cPowerMethod.value;
     next.display.on_time = cOnTime.value;
     next.display.off_time = cOffTime.value;
