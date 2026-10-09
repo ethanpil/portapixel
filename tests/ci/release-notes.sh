@@ -29,8 +29,9 @@ else
 The binaries of this release have NO minisign signature, and the binaries hold
 NO public key. A device from this release cannot install an update: every check
 answers that the build holds no key. Set the repository secret
-MINISIGN_SECRET_KEY and the repository variable MINISIGN_PUBLIC_KEY, then build
-the release again. docs/RELEASING.md gives the commands.
+PORTAPIXEL_MINISIGN_SECRET_KEY and the repository variable
+PORTAPIXEL_MINISIGN_PUBLIC_KEY, then build the release again.
+docs/RELEASING.md gives the commands.
 
 EOF
 fi

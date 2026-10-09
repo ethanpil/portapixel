@@ -87,7 +87,7 @@ func newSigner(t *testing.T) signer {
 
 // publicText is the key in the ONE LINE form, which is the base64 line of a
 // minisign.pub file with no comment line. -ldflags -X cannot carry a newline, so
-// the repository variable MINISIGN_PUBLIC_KEY holds this form too.
+// the repository variable PORTAPIXEL_MINISIGN_PUBLIC_KEY holds this form too.
 func (s signer) publicText(t *testing.T) string {
 	t.Helper()
 	return s.public.String()
