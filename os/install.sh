@@ -22,23 +22,10 @@ IMAGE=0                  # 1 = the PPBOOT/PPROOT/PPMEDIA partition layout
 # The mirror. Set PP_MIRROR to build behind a local mirror.
 MIRROR="${PP_MIRROR:-https://dl-cdn.alpinelinux.org/alpine}"
 
-# Fixed ids for the kiosk user. A number, not a name, because the capped tmpfs
-# for the browser cache needs a numeric uid in /etc/fstab: busybox mount gives
-# the option string to the kernel as it is, and the kernel cannot read a name.
+# Fixed ids for the kiosk user, so that two builds of one release write the
+# same /etc/passwd and /etc/group (D50).
 KIOSK_UID=1300
 KIOSK_GID=1300
-# The seat group. seatd normally makes it in a post-install script, which cannot
-# run in a foreign architecture root, so install.sh makes it instead.
-SEAT_GID=1301
-
-# Mount point of the size capped tmpfs that holds the browser profile and the
-# browser cache (D39). The browser must never write to the flash.
-# 256M, not the 96M the plan named for WPE WebKit: a Chromium user-data-dir is
-# much bigger than a WebKit data directory. It holds the Local State file, the
-# GPU shader cache, the code cache and the site data. 96M fills up and Chromium
-# then fails in ways that look like a rendering bug.
-KIOSK_CACHE=/var/cache/kiosk
-KIOSK_CACHE_SIZE=256M
 
 # The mkinitfs feature list. THIS IS THE ONLY PLACE IT IS WRITTEN (D53).
 # base   the initramfs itself: busybox, the init script, modprobe
@@ -277,31 +264,28 @@ say "install $(printf '%s\n' "$PKGS" | wc -l | tr -d ' ') packages"
 $APK --arch "$ARCH" add --no-interactive $PKGS
 
 # ------------------------------------------------------------ 3. the kiosk user
-# The browser renders web pages from the internet. It must not run as root. The
-# kiosk user is the security boundary (D43). Write the account files directly.
-# The same code then works in a foreign architecture root. adduser cannot run
-# there, and no post-install script can run there either.
+# mpv parses files that come from a USB stick and from the network. It must not
+# run as root. The kiosk user is the security boundary (D43). Write the account
+# files directly. The same code then works in a foreign architecture root.
+# adduser cannot run there, and no post-install script can run there either.
 say "create the kiosk user"
 if ! grep -q '^kiosk:' "$ROOT/etc/group" 2>/dev/null; then
 	printf 'kiosk:x:%s:\n' "$KIOSK_GID" >>"$ROOT/etc/group"
 fi
-# The seatd package makes the "seat" group in a post-install script. That script
-# never runs in a foreign architecture root, so make the group ourselves when it
-# is missing. seatd looks the group up by name, so the number does not matter.
-if ! grep -q '^seat:' "$ROOT/etc/group" 2>/dev/null; then
-	printf 'seat:x:%s:\n' "$SEAT_GID" >>"$ROOT/etc/group"
-fi
 if ! grep -q '^kiosk:' "$ROOT/etc/passwd" 2>/dev/null; then
-	printf 'kiosk:x:%s:%s:PortaPixel browser:/home/kiosk:/sbin/nologin\n' \
+	printf 'kiosk:x:%s:%s:PortaPixel player:/home/kiosk:/sbin/nologin\n' \
 		"$KIOSK_UID" "$KIOSK_GID" >>"$ROOT/etc/passwd"
 fi
 if ! grep -q '^kiosk:' "$ROOT/etc/shadow" 2>/dev/null; then
 	# "!" means the password is locked. Nobody logs in as kiosk.
 	printf 'kiosk:!::0:::::\n' >>"$ROOT/etc/shadow"
 fi
-# video for /dev/dri, input for /dev/input, audio for /dev/snd, seat so cage can
-# ask seatd for DRM master without being root (plan 3.2).
-for g in video input audio seat; do
+# video for /dev/dri and for the V4L2 decoder of a Pi (/dev/video*), audio for
+# /dev/snd. mpv needs no root for the display: the first process that opens a
+# DRM card becomes the DRM master (plan 3.2). Alpine has no "render" group:
+# eudev gives /dev/dri/renderD* to video, with mode 0666. mpv reads no input
+# device, so the kiosk user is not in "input".
+for g in video audio; do
 	awk -v grp="$g" -F: 'BEGIN { OFS=":" }
 		$1 == grp {
 			n = split($4, m, ",")
@@ -369,6 +353,11 @@ say "write the fstab block"
 FSTAB="$ROOT/etc/fstab"
 [ -f "$FSTAB" ] || : >"$FSTAB"
 BEGIN='# >>> portapixel >>>'
+# exFAT has no owner and no mode for each file: the mount options give them.
+# mpv runs as the kiosk user and opens each media file directly, so the files
+# must be readable by others. Say so here, and do not depend on the umask of
+# the process that mounts the partition.
+MEDIA_OPTS="rw,noatime,nofail,fmask=0022,dmask=0022"
 END='# <<< portapixel <<<'
 {
 	awk -v b="$BEGIN" -v e="$END" '
@@ -385,27 +374,21 @@ END='# <<< portapixel <<<'
 		# holds only the loader and the kernel, which a re-flash replaces.
 		echo "LABEL=PPBOOT   /boot            vfat   rw,noatime,nofail         0 0"
 		echo "# exFAT has no journal. fsck.exfat runs every boot (plan section 5)."
-		echo "LABEL=PPMEDIA  $MEDIA_ROOT   exfat  rw,noatime,nofail         0 2"
+		echo "LABEL=PPMEDIA  $MEDIA_ROOT   exfat  $MEDIA_OPTS  0 2"
 	elif [ -n "$MEDIA_PARTITION" ]; then
-		echo "LABEL=PPMEDIA  $MEDIA_ROOT   exfat  rw,noatime,nofail         0 2"
+		echo "LABEL=PPMEDIA  $MEDIA_ROOT   exfat  $MEDIA_OPTS  0 2"
 	fi
 	echo "# Logs, temporary files and run state stay in RAM (D2, D35)."
 	echo "tmpfs          /tmp             tmpfs  rw,nosuid,nodev,mode=1777,size=64M   0 0"
 	echo "tmpfs          /run             tmpfs  rw,nosuid,nodev,mode=0755,size=32M   0 0"
 	echo "tmpfs          /var/log         tmpfs  rw,nosuid,nodev,mode=0755,size=32M   0 0"
-	echo "# The Chromium profile (--user-data-dir) and cache (--disk-cache-dir)."
-	echo "# The cap is what keeps the browser off the flash (D39). 256M, not the"
-	echo "# 96M the plan named for WPE WebKit: a Chromium profile is much bigger,"
-	echo "# because it also holds the GPU shader cache and the code cache."
-	echo "# uid and gid are numbers: busybox mount cannot translate a user name"
-	echo "# for the kernel."
-	echo "tmpfs          $KIOSK_CACHE  tmpfs  rw,nosuid,nodev,mode=0700,uid=$KIOSK_UID,gid=$KIOSK_GID,size=$KIOSK_CACHE_SIZE  0 0"
+	echo "# mpv writes only under /run/portapixel/player, which is in RAM (D39)."
 	echo "$END"
 } >"$FSTAB.new"
 mv "$FSTAB.new" "$FSTAB"
 
 say "make the mount points"
-mkdir -p "$ROOT/tmp" "$ROOT/run" "$ROOT/var/log" "$ROOT$KIOSK_CACHE" "$ROOT$MEDIA_ROOT"
+mkdir -p "$ROOT/tmp" "$ROOT/run" "$ROOT/var/log" "$ROOT$MEDIA_ROOT"
 [ "$IMAGE" = 0 ] || mkdir -p "$ROOT/boot"
 chmod 1777 "$ROOT/tmp"
 
@@ -468,7 +451,7 @@ else
 fi
 
 # ---------------------------------------------------------------- 8. the console
-# The screen belongs to the browser. No getty on tty1, ever (plan section 5).
+# The screen belongs to the player. No getty on tty1, ever (plan section 5).
 # In --root mode the tree is ours and the whole file is ours to write. On-box the
 # inittab belongs to the owner of the system, and replacing it would take away
 # every getty and every respawn line they set. Use a marked block there, the same
@@ -476,8 +459,8 @@ fi
 if [ -n "$ROOT" ]; then
 	say "write the inittab"
 	{
-		echo "# PortaPixel inittab. The display is for the cage session only: there"
-		echo "# is no getty on tty1."
+		echo "# PortaPixel inittab. The display is for the player only: there is no"
+		echo "# getty on tty1."
 		echo "# Serial login stays on. It is the last way in when the network is down."
 		echo "::sysinit:/sbin/openrc sysinit"
 		echo "::sysinit:/sbin/openrc boot"
@@ -510,7 +493,7 @@ else
 			$0 == b { skip = 1 } !skip { print } $0 == e { skip = 0 }
 		' "$INITTAB"
 		echo "$BEGIN"
-		echo "# The display belongs to the browser: PortaPixel adds no getty on tty1."
+		echo "# The display belongs to the player: PortaPixel adds no getty on tty1."
 		echo "# The host keeps every getty it had, above this block."
 		echo "$END"
 	} >"$INITTAB.new"
@@ -580,12 +563,12 @@ else
 	rc_add hwclock boot
 fi
 
-# default: the rest. seatd must be up before the daemon starts cage.
+# default: the rest.
 # acpid turns the ACPI power button into a clean poweroff. Without it, a
 # hypervisor shutdown order does nothing. A UPS that signals a low battery does
 # nothing either. The power then goes off under an exFAT card, which has no
 # journal.
-for s in udev-postmount dbus alsa chronyd sshd seatd acpid; do rc_add "$s" default; done
+for s in udev-postmount alsa chronyd sshd acpid; do rc_add "$s" default; done
 rc_add portapixel-firstboot default
 rc_add portapixeld default
 
@@ -593,7 +576,7 @@ rc_add portapixeld default
 for s in killprocs mount-ro savecache; do rc_add "$s" shutdown; done
 
 # zram swap for a machine with little memory (plan section 4). The service is in
-# the "boot" runlevel, so the swap is there before the daemon starts the browser,
+# the "boot" runlevel, so the swap is there before the daemon starts the player,
 # ON THE FIRST BOOT TOO. Its conf.d below decides the size, and the size decides
 # whether the service does anything at all.
 #
@@ -619,17 +602,9 @@ PP_RUN="$RUN_DIR"
 # Release directories and the current symlink.
 PP_RELEASES="$RELEASE_ROOT"
 
-# The browser account. cage and Chromium run here, never as root (D43).
-# Groups: video, input, audio, seat.
+# The player account. mpv runs here, never as root (D43). Groups: video and
+# audio. HOME of mpv is \$PP_RUN/player, in RAM.
 PP_KIOSK_USER="kiosk"
-PP_KIOSK_UID="$KIOSK_UID"
-# The size capped tmpfs for the Chromium profile and cache (D39). Give Chromium
-# --user-data-dir and --disk-cache-dir under this path. A tmpfs mount always
-# starts empty, so the daemon makes the subdirectories it needs.
-PP_KIOSK_CACHE="$KIOSK_CACHE"
-# XDG_RUNTIME_DIR for the kiosk session. cage and Wayland need it. /run is a
-# tmpfs, so portapixeld makes this directory again on every boot.
-PP_KIOSK_RUNTIME="/run/user/$KIOSK_UID"
 
 # Seconds the new release has to write its health marker before the update
 # rolls back (plan section 15). health-gate.sh reads this too. The marker itself
@@ -650,12 +625,12 @@ EOF
 #   any other machine                           -> size 0
 # A size of 0 makes the init script pass over the device, so a machine with enough
 # memory pays nothing and a host that already has swap keeps what its owner set.
-# 1 GiB is the same number that internal/device/health uses for the low tier, so a
-# machine is never "low tier with no swap".
+# 1 GiB is the same number that internal/device/health uses for its zram warning,
+# so the warning and this rule always agree.
 #
-# Measured: 512 MB with no swap gives Chromium error code 4 and a restart loop.
-# 512 MB with 512 MB of zram works. zram costs no flash wear, which a swap file on
-# an SD card would (D2).
+# Measured on a 512 MB guest with this zram: with mpv the guest used 23 to 62 MB
+# of swap in a 10 minute run, with no OOM. zram costs no flash wear, which a
+# swap file on an SD card would (D2).
 say "write /etc/conf.d/zram-init"
 cat >"$ROOT/etc/conf.d/zram-init" <<'EOF'
 # PortaPixel writes this file. See os/install.sh, step 12b.
