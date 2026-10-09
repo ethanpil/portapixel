@@ -26,8 +26,8 @@ func setPasswordCommand(args []string) int {
 		return 2
 	}
 
-	cfg, _, err := LoadConfig(*dataDir)
-	if err != nil {
+	// A file that the server cannot read stops the command before the prompt.
+	if _, err := readFile(*dataDir); err != nil {
 		return fail("%v", err)
 	}
 
@@ -50,8 +50,7 @@ func setPasswordCommand(args []string) int {
 	if err != nil {
 		return fail("%v", err)
 	}
-	cfg.AdminPasswordHash = hash
-	if err := SaveConfig(*dataDir, cfg); err != nil {
+	if err := saveField(*dataDir, func(c *Config) { c.AdminPasswordHash = hash }); err != nil {
 		return fail("%v", err)
 	}
 

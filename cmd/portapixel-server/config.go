@@ -71,33 +71,16 @@ func defaults() Config {
 // ConfigPath gives the name of the configuration file in a data directory.
 func ConfigPath(dataDir string) string { return filepath.Join(dataDir, ConfigName) }
 
-// LoadConfig reads server.toml. It makes the file with the defaults when it is
-// not there, so a first run needs no hand-written file.
+// LoadConfig reads server.toml and applies the environment. It makes the file with
+// the defaults when it is not there, so a first run needs no hand-written file.
 //
 // A bad value gets its default back and a warning. The device configuration works
 // the same way and for the same reason: one wrong line must never stop the whole
 // server (D38 in spirit).
 func LoadConfig(dataDir string) (Config, []string, error) {
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return Config{}, nil, fmt.Errorf("make %s: %w", dataDir, err)
-	}
-	path := ConfigPath(dataDir)
-
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		cfg := defaults()
-		if err := SaveConfig(dataDir, cfg); err != nil {
-			return Config{}, nil, err
-		}
-		return cfg, nil, nil
-	}
+	cfg, err := readFile(dataDir)
 	if err != nil {
-		return Config{}, nil, fmt.Errorf("read %s: %w", path, err)
-	}
-
-	cfg := defaults()
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, nil, fmt.Errorf("read %s: %w", path, err)
+		return Config{}, nil, err
 	}
 
 	var warnings []string
@@ -115,6 +98,45 @@ func LoadConfig(dataDir string) (Config, []string, error) {
 	}
 	cfg, envWarnings := applyEnv(cfg)
 	return cfg, append(warnings, envWarnings...), nil
+}
+
+// readFile reads server.toml as the file holds it: no repair, no environment and no
+// flag. It makes the file with the defaults when it is not there.
+func readFile(dataDir string) (Config, error) {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return Config{}, fmt.Errorf("make %s: %w", dataDir, err)
+	}
+	path := ConfigPath(dataDir)
+
+	data, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		cfg := defaults()
+		return cfg, SaveConfig(dataDir, cfg)
+	}
+	if err != nil {
+		return Config{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	cfg := defaults()
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return Config{}, fmt.Errorf("read %s: %w", path, err)
+	}
+	return cfg, nil
+}
+
+// saveField changes one value of server.toml and writes the file again.
+//
+// It reads the file first and changes that copy, never the configuration that runs.
+// The configuration that runs also holds the environment, the --listen flag and the
+// repairs. Those must never go into the file: a PORTAPIXEL_TRUSTED_PROXIES that a
+// person removes later would stay in the file, and the server would still believe
+// that proxy. A hand edit of another value also stays.
+func saveField(dataDir string, change func(*Config)) error {
+	cfg, err := readFile(dataDir)
+	if err != nil {
+		return err
+	}
+	change(&cfg)
+	return SaveConfig(dataDir, cfg)
 }
 
 // applyEnv lets the environment replace three values of the file.
