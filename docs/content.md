@@ -45,8 +45,19 @@ item" below.
 ### Transitions
 
 A playlist can set its own transition, which replaces the device's default
-transition for that playlist only. The choices are `crossfade`, `push-left`,
-`push-right`, `push-up`, `push-down`, and `cut`.
+transition for that playlist only. An item can set its own `transition` and
+`transition_ms`: they are the transition into that item, from the item before
+it. An item with nothing set uses the playlist, and the playlist with nothing
+set uses the device. The choices are `cut`, `fade`, `fade-white`, `crossfade`,
+`wipe-*`, `push-*`, `slide-in-*`, `slide-out-*`, `zoom-out` and `split`, where
+`*` is `left`, `right`, `up` or `down`.
+
+### Ken Burns
+
+`ken_burns = true` in the `[playlist]` table gives each image a slow zoom and
+pan while it shows. A screen that uses the software video output (a virtual
+machine, or a board with no graphics driver) shows the images still, and the
+ops log says so.
 
 ### Single-URL kiosk mode
 

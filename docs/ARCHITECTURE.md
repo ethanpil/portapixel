@@ -209,6 +209,7 @@ type Playlist struct {
     Title      string `json:"title"`
     Transition string `json:"transition,omitempty"` // a word of config.Transitions; empty = the device setting
     Shuffle    *bool  `json:"shuffle,omitempty"`
+    KenBurns   bool   `json:"ken_burns,omitempty"` // a slow zoom and pan on each image
     Items      []Item `json:"items"`
 }
 type Item struct {
@@ -216,6 +217,9 @@ type Item struct {
     Duration    int    `json:"duration,omitempty"`
     Mute        bool   `json:"mute,omitempty"`
     MaxDuration int    `json:"max_duration,omitempty"`
+    // The transition INTO this item. Empty and 0 = the playlist, then the device.
+    Transition   string `json:"transition,omitempty"` // a word of config.Transitions
+    TransitionMS int    `json:"transition_ms,omitempty"`
 }
 type Rule struct {
     Playlist string   `json:"playlist"`
@@ -261,14 +265,30 @@ The content model. An item is an image or a video, and nothing else: there are n
 web page items and no single-URL kiosk mode. `internal/playlist` holds the one
 extension table (`Kind`, `MediaType`): images `jpg jpeg png gif webp avif bmp`, videos
 `mp4 m4v mov webm mkv ogv`. The device library, `/media/` and the server media types
-all use it. A transition is a word of `config.Transitions`: `cut`, `fade`, `crossfade`,
-`wipe-left`, `wipe-right`, `wipe-up`, `wipe-down`, `push-left`, `push-right`, `push-up`,
-`push-down` (owner decision of 2026-10-08). A fade goes through black. A wipe or a push
-moves in the direction of its word. `playback.transition_ms` is the length of each
-transition except `cut`. The config, the playlist files, the syncer, the server database,
-the playlist editor and the device settings page use this one list. The server schema
+all use it. A transition is a word of `config.Transitions`: `cut`, `fade`, `fade-white`,
+`crossfade`, `wipe-*`, `push-*`, `slide-in-*`, `slide-out-*`, `zoom-out` and `split`, where `*`
+is `left`, `right`, `up` or `down` (owner decisions of 2026-10-08). A fade goes through black
+and a fade-white through white. A wipe, a push, a slide-in and a slide-out move in the
+direction of their word: a push moves both items, a slide-in moves the new item over the old
+one, and a slide-out moves the old item away. `zoom-out` shrinks the old item into the centre,
+and `split` opens it from the centre like a barn door. `playback.transition_ms` is the length
+of each transition except `cut`. The config, the playlist files, the syncer, the server
+database, the playlist editor and the device settings page use this one list: a Go test and
+`web/embed_test.go` hold the Lua and the JavaScript lists equal to it. The server schema
 migration 2 removed the url items and changed each old transition word to `"fade"` in the
 rows of that time. Those words are transitions again, and the migration stays as it is.
+
+An item can name its own transition: `transition` and `transition_ms` in `playlist.toml`, in
+the manifest item and in the editor ("Playlist default" is the first choice). They are the
+transition INTO that item, from the item before it. For the first item, that is the last item,
+because the list loops. Each value falls back by itself: the item, then the playlist, then the
+device (`library.BuildManifest` applies the rule, so the player has none). A length with no word
+changes the length only. The server keeps the two values in `playlist_items` (migration 3).
+
+`ken_burns = true` in the `[playlist]` table of `playlist.toml` (and `Playlist.KenBurns` in the
+manifest, and `playlists.ken_burns`, migration 4) asks for a slow zoom and pan on each image of
+the playlist while it shows (section 7a). It is a choice of the playlist. The device has no
+setting for it.
 
 `rename` gives a screen a new display name. The device owns its name: mDNS, the host
 name and the fallback screen use it. The device saves `device.name` through the save
@@ -550,12 +570,20 @@ order of the playlist. The per-file options:
 
 | Option | Item | Value |
 |---|---|---|
-| `script-opts` | each | `pptr-kind=<transition>,pptr-ms=<transition_ms>` |
+| `script-opts` | each | `pptr-kind=<transition into the next item>,pptr-ms=<its length>`, and `pptr-kb=<seconds>` for an image with Ken Burns |
 | `image-display-duration` | image | the duration; `inf` for one image alone |
 | `mute` | video | `yes` or `no`, from the `mute` of the item |
 | `end` | video | `max_duration`, when it is set |
 | `vd-lavc-o` | video | `num_capture_buffers=8` on a Pi Zero 2 W, 3 and 4 (section 7) |
 | `loop-file` | video | `inf` for one video alone |
+
+The script works when an item ends, so each entry carries the transition INTO the next item
+of the list (`fileOptions`): the item after it, or the first item for the last entry. The list
+is in play order, also after a restart that starts it at the resume item. The manifest has the
+defaults applied already (item, then playlist, then device), so the player reads two fields.
+`pptr-kb` is set only when the playlist asks for Ken Burns, the output is `gpu`, and the item
+is an image that has an end (one image alone has `image-display-duration=inf`). On `drm`, the
+daemon writes one ops log line (`player.kenburns.off`) when it loads the playlist.
 
 `transitions.lua` sets more options on the file itself (`file-local-options/...`) for a
 moving crossfade: `lavfi-complex`, `end` and `hwdec` on the item that ends, and `start` on
@@ -586,7 +614,8 @@ the counters again at each file.
 The transition script `transitions.lua` is mpv Lua with the LuaJIT FFI. When an item ends,
 its `on_unload` hook covers the screen with a copy (`screenshot-raw window bgra`, OSD
 overlay 62). The next item loads under the copy. At its `playback-restart`, a 20 ms timer
-moves the copy away. The script uses the options of the item that ends. vo=drm has no
+moves the copy away. The script uses `pptr-kind` and `pptr-ms` of the item that ends (the
+transition into the next item) and `pptr-kb` of the item on the screen. vo=drm has no
 screenshot of its own and mpv stretches the frame to the window, so on vo=drm the script
 scales the copy back into the video rectangle (`osd-dimensions`) and makes the bars black.
 An item that shows no frame (it did not load) keeps the copy of the last good frame for
@@ -595,13 +624,43 @@ the next item.
 | Kind | Effect |
 |---|---|
 | `cut` | No copy. |
-| `fade` | Dip to black. The copy goes dark. Then one black pixel, scaled to the screen, takes its place in overlay 62 and goes clear over the next item. One overlay at a time. |
+| `fade` | Dip to black. The copy goes dark (a pass of LuaJIT over the copy). Then a black square of 256 x 256 pixels, scaled to the screen, takes its place in overlay 62 and goes clear over the next item. One overlay at a time. |
+| `fade-white` | The same, through white. |
 | `crossfade` | The copy goes clear over the next item. With motion, both items move (below). |
 | `wipe-left`, `-right`, `-up`, `-down` | The copy gets smaller; its edge moves in the direction of the word. |
 | `push-left`, `-right`, `-up`, `-down` | The copy moves out in the direction of the word, and `video-pan-x` or `video-pan-y` moves the next item in behind it. The script moves the next item first. |
+| `slide-in-left`, `-right`, `-up`, `-down` | The next item moves in over the copy, which stays where it is. The copy gets the crop of the wipe, and `video-pan` moves the next item as in the push. |
+| `slide-out-left`, `-right`, `-up`, `-down` | The copy moves out in the direction of the word and the next item stays where it is. The cheapest kind: only the position of the overlay changes. |
+| `zoom-out` | The copy gets smaller toward the centre of the screen (the destination size of the overlay). |
+| `split` | The copy is two halves in two overlays (62 and 63). They move apart from the centre. The two overlays do not touch, and they draw right on `drm` and on `gpu`. Stacked overlays are still wrong on `drm`. |
+
+Only `fade` and `fade-white` change pixels. Each other kind moves, crops or scales an overlay.
+The square of the dip is not one pixel: vo=gpu puts a clear border of one pixel around each
+bitmap and smooths the scaled bitmap into it, so a bitmap of one pixel made the dip half clear
+at the edges of the screen.
 
 Each fault of the copy ends in a cut: a failed copy, an overlay that fails, a Lua error, or a
 next item that does not show in 5 s. With no LuaJIT FFI, each transition is a cut.
+
+Ken Burns. An image with `pptr-kb` zooms and pans slowly while it shows. After the transition
+into the image is over (so it never uses `video-pan` together with a push or a slide-in), a
+timer sets `video-zoom`, `video-pan-x` and `video-pan-y` every 100 ms from the clock, over the
+rest of the time of the image. The zoom goes in or out between 1 and 1.12, and the drift goes to a
+random side and is 4 % of the picture at most, so the edge of the picture does not show. When
+the image ends, the script puts the copy of the screen on top and sets zoom and pan back to 0
+under it. A cut after Ken Burns holds the copy until the next item shows its first frame (the
+kind `join`), or the next item would show with the zoom of the old one.
+
+Ken Burns runs on vo=gpu only. On vo=drm (virtio_gpu, simpledrm, unknown drivers) mpv does a
+`reconfig` of the output and scales the whole picture in software at each step of the zoom, and
+`screenshot-raw window` there returns the frame with no zoom, so the copy of a transition would
+jump. Measured on the pp-zero lab VM (1280x800, one image of 8 s, CPU of mpv as a part of one
+core): vo=drm unthrottled 24 % at 10 steps in a second, 11 % at 4 and 6 % at 2; throttled
+(3 ms of run in 20 ms, the Pi Zero 2 W proxy) 131 %, 63 % and 36 %. The VM has no GPU, so its
+vo=gpu is llvmpipe and says little about a Pi: unthrottled 35 % at 10 steps in a second and
+16 % at 4. Each step on a real GPU is a change of two properties and one redraw. The step stays
+at 100 ms on vo=gpu, because the zoom of 12 % in 8 s then moves the picture by about 2 pixels
+at each step.
 
 The moving crossfade. `playback.motion` is `auto`, `on` or `off` (default `auto`, change
 class `live`). `auto` is on for an x86_64 device and for a Raspberry Pi 5 or Compute
