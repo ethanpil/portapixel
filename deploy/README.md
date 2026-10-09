@@ -139,7 +139,7 @@ rc-update add portapixel-server default
 rc-service portapixel-server start
 ```
 
-Then do these three steps, in this order:
+Then do these four steps, in this order:
 
 1. Read the admin password. The server writes it one time, at the first start.
    The log file is `/var/log/portapixel-server.log`:
@@ -149,15 +149,16 @@ Then do these three steps, in this order:
    ```
 
 2. Set the public URL. Put `public_url` in
-   `/var/lib/portapixel-server/server.toml`, or put `PORTAPIXEL_PUBLIC_URL` in
-   `/etc/conf.d/portapixel-server`. A screen reads this address from its
+   `/var/lib/portapixel-server/server.toml`. A screen reads this address from its
    enrollment card, so give the name or the address of this host.
 
-3. Open the admin UI and log in. **The service needs no restart.** The server
-   builds the host allowlist on every request, so a new `public_url` is live at
-   once. Only a change in `/etc/conf.d/portapixel-server` needs
-   `rc-service portapixel-server restart`, because OpenRC reads that file at the
-   start.
+3. Start the service again: `rc-service portapixel-server restart`. The server
+   reads `server.toml` only when it starts, so a hand edit of the file needs a
+   restart. A change of `public_url` on the Settings page of the admin UI needs
+   none. A variable in `/etc/conf.d/portapixel-server` does not reach the server:
+   OpenRC reads that file into the shell of the init script and exports nothing.
+
+4. Open the admin UI and log in.
 
 Change the data directory or the listen address in
 `/etc/conf.d/portapixel-server`.
@@ -185,12 +186,16 @@ make and no directory to own. The state directory is
 `/var/lib/portapixel-server`. `DynamicUser=yes` puts the real files in
 `/var/lib/private/portapixel-server`, which only root can read: name that path
 when you make a backup. Set `public_url` in the `server.toml` of the state
-directory. The unit needs no restart for that value.
+directory, then `systemctl restart portapixel-server`: the server reads the file
+only when it starts.
 
 ## The environment
 
 Three variables replace a value of `server.toml`. The environment wins over the
-file, and the server never writes such a value back into the file.
+file, and the server never writes such a value back into the file. A `--listen`
+flag wins over `PORTAPIXEL_LISTEN`. The OpenRC script and the systemd unit give
+`--listen`, so change the listen address there. The Docker image gives no
+`--listen`, so its health check and the server read the same port.
 
 | Variable | What it sets |
 |---|---|
