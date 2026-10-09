@@ -197,6 +197,7 @@ func TestConfigWarningCode(t *testing.T) {
 	}{
 		{"a repaired value", manifest.WarnConfigRepaired, manifest.WarnConfigRepaired},
 		{"a bad hand edit", manifest.WarnConfigBadEdit, manifest.WarnConfigBadEdit},
+		{"a key that the device does not know", manifest.WarnConfigUnknownKey, manifest.WarnConfigUnknownKey},
 		{"no code at all", "", manifest.WarnConfigRepaired},
 	}
 	for _, tt := range tests {
