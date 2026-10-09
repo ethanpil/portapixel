@@ -108,6 +108,9 @@ func killStray(kioskUser string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	if !sweepable(uid) {
+		return 0, nil
+	}
 	pids := processesOf(uid)
 	for _, pid := range pids {
 		syscall.Kill(pid, syscall.SIGKILL)
@@ -123,6 +126,11 @@ func killStray(kioskUser string) (int, error) {
 	}
 	return len(pids), nil
 }
+
+// sweepable reports if killStray may stop every process of an account. root and
+// the account of the daemon run more than mpv, and this daemon is one of their
+// processes, so a kiosk user with such a name is never swept.
+func sweepable(uid int) bool { return uid != 0 && uid != os.Getuid() }
 
 // processesOf gives the process IDs of the live processes of a user. A zombie
 // is not live: it holds no file any more.

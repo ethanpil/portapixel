@@ -48,3 +48,18 @@ func TestKillStrayWithNoKioskAccount(t *testing.T) {
 		t.Errorf("killStray(\"\") = %d, %v", n, err)
 	}
 }
+
+// root and the account of the daemon are never swept: they run more than mpv,
+// and the daemon is one of their processes. The test asks the rule and does not
+// call killStray, which would stop real processes if the rule were wrong.
+func TestTheAccountOfTheDaemonIsNeverSwept(t *testing.T) {
+	if sweepable(0) {
+		t.Error("root is sweepable")
+	}
+	if sweepable(os.Getuid()) {
+		t.Error("the account of this process is sweepable")
+	}
+	if !sweepable(os.Getuid() + 12345) {
+		t.Error("another account is not sweepable")
+	}
+}
