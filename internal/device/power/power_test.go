@@ -149,6 +149,52 @@ func checkSequence(t *testing.T, what, got string, want []string) {
 	}
 }
 
+// display.power_method can change while the screen is off. The DPMS off call left
+// the Blanker with the DRM device. The next screen-on must let go of it, also when
+// the new method is not DPMS. Else the player cannot take the device and the
+// screen stays black.
+func TestAMethodChangeWhileOffStillReleasesTheDisplay(t *testing.T) {
+	for _, next := range []string{MethodCEC, MethodNone} {
+		t.Run(next, func(t *testing.T) {
+			r := newRecorder()
+			method := MethodDPMS
+			c := New(Options{
+				Method:     func() string { return method },
+				Run:        r,
+				Blank:      r,
+				Player:     r,
+				CECDevices: func() []string { return []string{"/dev/cec0"} },
+			})
+			c.cecDevice = "/dev/cec0"
+
+			if err := c.Set(false, "a test"); err != nil {
+				t.Fatalf("off: %v", err)
+			}
+			method = next
+			r.steps = nil
+			if err := c.Set(true, "a test"); err != nil {
+				t.Fatalf("on: %v", err)
+			}
+			checkSequence(t, "on", r.joined(), []string{"dpms on", "player resume"})
+			if strings.Count(r.joined(), "dpms on") != 1 {
+				t.Errorf("steps = %q, want one display release", r.joined())
+			}
+
+			// The hold is gone: a second screen-on does not call the display again.
+			if err := c.Set(false, "a test"); err != nil {
+				t.Fatalf("second off: %v", err)
+			}
+			r.steps = nil
+			if err := c.Set(true, "a test"); err != nil {
+				t.Fatalf("second on: %v", err)
+			}
+			if strings.Contains(r.joined(), "dpms") {
+				t.Errorf("steps = %q, want no display call", r.joined())
+			}
+		})
+	}
+}
+
 // A display that does not switch must not keep a player running. The fault is a
 // log line; the player is stopped and stays stopped.
 func TestADisplayFaultStillStopsThePlayer(t *testing.T) {

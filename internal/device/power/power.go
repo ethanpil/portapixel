@@ -83,6 +83,10 @@ type Controller struct {
 	// seconds, and /api/status must answer in that time.
 	applyMu sync.Mutex
 
+	// dpmsHeld is true after a DPMS off call, until a call puts the displays on
+	// again. The Blanker then holds the DRM device. applyMu guards it.
+	dpmsHeld bool
+
 	mu sync.Mutex
 	// on is the state that the controller last applied.
 	on bool
@@ -293,6 +297,15 @@ func (c *Controller) resume() error {
 // player running through the night.
 func (c *Controller) screen(on bool) {
 	method := c.pick()
+	// display.power_method can change while the screen is off. The Blanker holds
+	// the DRM device since the DPMS off call. If the new method is not DPMS, nothing
+	// else lets go of it, and the player cannot take the device.
+	if on && c.dpmsHeld && method != MethodDPMS {
+		c.dpmsHeld = false
+		if err := c.opt.Blank.On(); err != nil {
+			c.log("power.dpms.fail", "the display did not go on: "+err.Error())
+		}
+	}
 	if method == MethodNone {
 		return
 	}
@@ -308,8 +321,10 @@ func (c *Controller) screen(on bool) {
 		err = c.cec(ctx, device, address, on)
 	case MethodDPMS:
 		if on {
+			c.dpmsHeld = false
 			err = c.opt.Blank.On()
 		} else {
+			c.dpmsHeld = true
 			err = c.opt.Blank.Off()
 		}
 	}
