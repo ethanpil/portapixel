@@ -470,6 +470,46 @@ func TestNightlyRestart(t *testing.T) {
 	}
 }
 
+// The nightly restart time, the clock of the fallback screen and the start time
+// of an item are times of day in the zone of the device. Options.Local gives them.
+func TestLocalTimeComesFromTheZone(t *testing.T) {
+	zone := time.FixedZone("test", 2*3600)
+	local := func(t time.Time) time.Time { return t.In(zone) }
+
+	// 03:29 UTC is 05:29 in the zone, so the restart at 05:30 is one minute away.
+	h := newHarness(t, videos(), func(o *Options, h *harness) {
+		o.Local = local
+		h.nightly = "05:30"
+		h.clock.Set(time.Date(2026, 10, 9, 3, 29, 0, 0, time.UTC))
+	})
+	h.waitPlaying(0)
+	if got := h.sup.State().NowPlaying.Since.Location(); got != zone {
+		t.Errorf("the start time of the item is in %v, want the zone of the device", got)
+	}
+	h.settle()
+	h.advance(58 * time.Second)
+	waitFor(t, "the grace", func() bool { return h.countEvent("player.nightly.grace") == 1 })
+
+	f := newHarness(t, library.PlayerManifest{Fallback: true}, func(o *Options, h *harness) { o.Local = local })
+	waitFor(t, "a render", func() bool { return f.renderCount() > 0 })
+	f.mu.Lock()
+	got := f.renders[0].Now.Location()
+	f.mu.Unlock()
+	if got != zone {
+		t.Errorf("the clock of the fallback screen is in %v, want the zone of the device", got)
+	}
+}
+
+// The supervisor measures each duration with Now. The default is time.Now, which
+// keeps the monotonic reading. A step of the system clock then changes no
+// duration, and the watchdog does not restart mpv at the first sync of the clock.
+func TestDefaultNowKeepsTheMonotonicReading(t *testing.T) {
+	s := New(Options{Command: CommandConfig{Override: DisableCommand}})
+	if now := s.opt.Now(); !strings.Contains(now.String(), "m=") {
+		t.Errorf("the default Now gives %q, which has no monotonic reading", now)
+	}
+}
+
 // With no item boundary, the grace time ends the wait.
 func TestNightlyRestartGraceEnds(t *testing.T) {
 	h := newHarness(t, videos(), func(o *Options, h *harness) {

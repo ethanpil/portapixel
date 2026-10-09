@@ -462,6 +462,12 @@ Each fault above is a counted restart. `restarts_before_reboot` counted restarts
 nightly job does not count. After a fault, the new mpv starts at the item after the item
 on the screen. After a restart from a person, it starts at the same item.
 
+The supervisor measures each duration with `time.Now`, which has a monotonic reading. A device
+with no RTC gets a step of its wall clock, of hours or days, at the first sync of the clock,
+while mpv already runs. That step is not a stall. `Options.Local` gives a time of day (the
+nightly restart, the clock of the fallback screen) in the zone of the device, and it is never
+used to measure a duration.
+
 No display is a wait and never a fault (D44). The daemon reads `/sys/class/drm/*/status`
 every 5 s. While nothing is connected, the period doubles up to 60 s, mpv stops, and
 `player_state` is `waiting-for-display`.

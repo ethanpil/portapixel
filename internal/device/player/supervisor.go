@@ -121,9 +121,17 @@ type State struct {
 type Options struct {
 	Command CommandConfig
 	Log     *opslog.Log
-	// Now gives the local time of the device: the nightly restart time and the
-	// clock of the fallback screen are local times.
+	// Now gives the time. The supervisor measures each duration with it, so a value
+	// from time.Now is right: its monotonic reading hides a step of the system
+	// clock. A device with no RTC gets such a step, of hours or days, at the first
+	// sync of the clock, while the player already runs. Without the reading, that
+	// step looks like a stall. A nil function uses time.Now.
 	Now func() time.Time
+	// Local gives t in the time zone of the device. The nightly restart time and the
+	// clock of the fallback screen are local times. The supervisor never measures a
+	// duration with its result, because it removes the monotonic reading. A nil
+	// function leaves t as it is.
+	Local func(t time.Time) time.Time
 	// Manifest gives what must play now.
 	Manifest func() library.PlayerManifest
 	// Fallback gives the data of the fallback screen. The supervisor adds the
@@ -913,7 +921,7 @@ func (s *Supervisor) setIndex(pos int, now time.Time, restart bool) {
 			Index:    idx,
 			Item:     it.Name,
 			Kind:     it.Kind,
-			Since:    now,
+			Since:    s.local(now),
 		}
 		s.mu.Unlock()
 		restart = true
@@ -1098,7 +1106,7 @@ func (s *Supervisor) drawFallback(now time.Time) bool {
 // fallbackInfo gives the data of the fallback screen at now.
 func (s *Supervisor) fallbackInfo(now time.Time) fallback.Info {
 	info := s.opt.Fallback()
-	info.Now = now.Truncate(time.Minute)
+	info.Now = s.local(now).Truncate(time.Minute)
 	info.Shift = int(now.Sub(s.fb.since) / shiftEvery)
 	return info
 }
@@ -1250,11 +1258,12 @@ func (s *Supervisor) checkNightly(now time.Time) {
 		return
 	}
 	s.badNightly = ""
-	day := now.Format("2006-01-02")
+	local := s.local(now)
+	day := local.Format("2006-01-02")
 	if s.lastDay == day {
 		return
 	}
-	minute := now.Hour()*60 + now.Minute()
+	minute := local.Hour()*60 + local.Minute()
 	// A two minute window, so that a busy loop or a short suspend cannot miss the
 	// time.
 	if minute < target || minute > target+1 {
@@ -1262,7 +1271,7 @@ func (s *Supervisor) checkNightly(now time.Time) {
 	}
 	s.lastDay = day
 
-	if s.opt.ScreenOffCovers != nil && s.opt.ScreenOffCovers(now) {
+	if s.opt.ScreenOffCovers != nil && s.opt.ScreenOffCovers(local) {
 		s.log("player.nightly.skip", "the screen schedule has the screen off at this time")
 		return
 	}
@@ -1273,6 +1282,14 @@ func (s *Supervisor) checkNightly(now time.Time) {
 	}
 	s.log("player.nightly.grace", "the player has "+graceTimeout.String()+" to reach an item boundary")
 	s.graceUntil = now.Add(graceTimeout)
+}
+
+// local gives t in the time zone of the device.
+func (s *Supervisor) local(t time.Time) time.Time {
+	if s.opt.Local == nil {
+		return t
+	}
+	return s.opt.Local(t)
 }
 
 func (s *Supervisor) setState(state, reason string) {

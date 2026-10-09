@@ -243,8 +243,10 @@ func newDaemon(p paths, listen, playerCmd, kioskUser, drmRoot string) (*daemon, 
 			KioskUser: kioskUser,
 			RunDir:    p.run,
 		},
-		Log:             d.log,
-		Now:             d.localNow,
+		Log: d.log,
+		// No Now: the player measures durations with time.Now, which a step of the
+		// system clock does not change. The zone is for the wall clock only.
+		Local:           d.inZone,
 		Manifest:        d.playerManifest,
 		Fallback:        d.fallbackInfo,
 		Display:         d.displaySettings,
@@ -717,11 +719,17 @@ func (d *daemon) deviceState() identity.State {
 
 // localNow gives the time in the time zone of the device. The schedules, the
 // nightly restart and the clock of the fallback screen are local times (D40).
-//
-// scheduler.Location caches the zone object. The player supervisor asks for the
-// time once a second for months, and time.LoadLocation reads files.
 func (d *daemon) localNow() time.Time {
-	return time.Now().In(scheduler.Location(d.config().Device.Timezone))
+	return d.inZone(time.Now())
+}
+
+// inZone gives t in the time zone of the device. It removes the monotonic reading
+// of t, so use it for a time of day and never to measure a duration.
+//
+// scheduler.Location caches the zone object. The player supervisor converts a time
+// once a second for months, and time.LoadLocation reads files.
+func (d *daemon) inZone(t time.Time) time.Time {
+	return t.In(scheduler.Location(d.config().Device.Timezone))
 }
 
 // clockSynced gives the last answer of the clock probe.
