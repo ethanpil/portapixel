@@ -293,8 +293,10 @@ type Supervisor struct {
 	waitDelay   time.Duration
 	waitLogged  bool
 	// motionOff says that the guard switched the moving crossfade off. It stays
-	// off until the daemon stops, also through a restart of mpv.
+	// off until the daemon stops, also through a restart of mpv, or until
+	// playback.motion changes. motionFor is the value that the guard belongs to.
 	motionOff bool
+	motionFor string
 	// pendingRestart holds the reason of a restart that arrived while the screen
 	// was off. The resume starts a new mpv, which is that restart.
 	pendingRestart string
@@ -729,19 +731,25 @@ func (s *Supervisor) connect(now time.Time) {
 
 // sendMotion tells transitions.lua if it may make a moving crossfade: the
 // value of playback.motion for this board, unless the guard switched it off.
-// mpv answers the requests in order, so the value is there before the first
-// file of the list starts.
+// A new value of the setting clears the guard. mpv answers the requests in
+// order, so the value is there before the first file of the list starts.
 func (s *Supervisor) sendMotion(now time.Time) {
+	setting := s.opt.Motion()
+	if setting != s.motionFor {
+		s.motionFor, s.motionOff = setting, false
+	}
 	value := "no"
-	if !s.motionOff && ResolveMotion(s.opt.Motion(), runtime.GOARCH, s.model) {
+	if !s.motionOff && ResolveMotion(setting, runtime.GOARCH, s.model) {
 		value = "yes"
 	}
 	s.request(now, reqOther, 0, "set_property", "user-data/pptr/motion", value)
 }
 
-// onMoved takes the result of a moving crossfade. The guard switches the
-// moving crossfade off for the rest of the boot when the device is too slow
-// for it: the crossfade then keeps the last frame of the video still.
+// onMoved takes the result of a moving crossfade. With playback.motion "auto",
+// the guard switches the moving crossfade off for the rest of the boot when the
+// device is too slow for it: the crossfade then keeps the last frame of the
+// video still. "on" is the choice of the owner: the guard writes the fault and
+// changes nothing.
 func (s *Supervisor) onMoved(data json.RawMessage, now time.Time) {
 	m, ok := parseMoved(data)
 	if !ok || s.motionOff {
@@ -749,6 +757,10 @@ func (s *Supervisor) onMoved(data json.RawMessage, now time.Time) {
 	}
 	reason := tooSlow(m)
 	if reason == "" {
+		return
+	}
+	if s.motionFor == MotionOn {
+		s.logRepeat("player.motion.slow", MotionOn, reason+"; playback.motion is on, so the moving crossfade stays on")
 		return
 	}
 	s.motionOff = true

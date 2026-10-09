@@ -80,26 +80,41 @@ func TestMotionFollowsTheSetting(t *testing.T) {
 	waitFor(t, "motion no", func() bool { return h.motionValue() == "no" })
 }
 
-// A moving crossfade that drops too many frames switches the moving crossfade
-// off for the rest of the boot, with one ops log line. A playlist change and a
-// new mpv keep it off.
-func TestTheGuardSwitchesMotionOff(t *testing.T) {
-	h := newHarness(t, videos(), nil)
-	h.waitPlaying(0)
+// report puts the result of a moving crossfade into the fake, as transitions.lua
+// does.
+func (h *harness) report(count, dropped, frames int, failed bool) {
+	h.ctl("set_property", "user-data/pptr/moved",
+		map[string]any{"count": count, "dropped": dropped, "frames": frames, "failed": failed})
+}
 
-	report := func(count, dropped, frames int, failed bool) {
-		h.ctl("set_property", "user-data/pptr/moved",
-			map[string]any{"count": count, "dropped": dropped, "frames": frames, "failed": failed})
+// pi5 makes the harness a Raspberry Pi 5 with playback.motion "auto", so that
+// auto is on whatever the processor of the test machine is.
+func pi5(o *Options, h *harness) {
+	o.ModelPath = filepath.Join(h.run, "model")
+	writeFile(h.t, o.ModelPath, "Raspberry Pi 5 Model B Rev 1.0")
+	h.motion = MotionAuto
+}
+
+// With "auto", a moving crossfade that drops too many frames switches the
+// moving crossfade off for the rest of the boot, with one ops log line. A
+// playlist change and a new mpv keep it off. A new value of the setting clears
+// the guard.
+func TestTheGuardSwitchesMotionOff(t *testing.T) {
+	h := newHarness(t, videos(), pi5)
+	h.waitPlaying(0)
+	if got := h.motionValue(); got != "yes" {
+		t.Fatalf("motion = %q on a Pi 5 with auto, want yes", got)
 	}
-	report(1, 2, 25, false)
+
+	h.report(1, 2, 25, false)
 	h.settle()
 	if got := h.motionValue(); got != "yes" || h.countEvent("player.motion.off") != 0 {
 		t.Fatalf("a good crossfade gave motion %q and the log:\n%s", got, h.events())
 	}
 
-	report(2, 20, 25, false)
+	h.report(2, 20, 25, false)
 	waitFor(t, "motion no", func() bool { return h.motionValue() == "no" })
-	report(3, 0, 0, true)
+	h.report(3, 0, 0, true)
 	h.settle()
 	if n := h.countEvent("player.motion.off"); n != 1 || !h.eventWith("player.motion.off", "dropped 20 of 25") {
 		t.Fatalf("the guard wrote %d lines:\n%s", n, h.events())
@@ -118,5 +133,33 @@ func TestTheGuardSwitchesMotionOff(t *testing.T) {
 	h.waitPlaying(0)
 	if got := h.motionValue(); got != "no" {
 		t.Errorf("the new mpv got motion %q, want no until the daemon starts again", got)
+	}
+
+	// The owner changes the setting: the guard starts again.
+	h.mu.Lock()
+	h.motion = MotionOff
+	h.mu.Unlock()
+	h.sup.PlaylistChanged()
+	h.settle()
+	h.mu.Lock()
+	h.motion = MotionAuto
+	h.mu.Unlock()
+	h.sup.PlaylistChanged()
+	waitFor(t, "motion yes after a new setting", func() bool { return h.motionValue() == "yes" })
+}
+
+// "on" is the choice of the owner. The guard writes the fault one time and
+// keeps the moving crossfade on.
+func TestTheGuardKeepsAnExplicitOn(t *testing.T) {
+	h := newHarness(t, videos(), nil) // the harness sets "on"
+	h.waitPlaying(0)
+	h.report(1, 20, 25, false)
+	h.report(2, 0, 0, true)
+	h.settle()
+	if got := h.motionValue(); got != "yes" {
+		t.Errorf("motion = %q after a slow crossfade with on, want yes", got)
+	}
+	if n := h.countEvent("player.motion.slow"); n != 1 || h.countEvent("player.motion.off") != 0 {
+		t.Errorf("the guard wrote %d slow lines:\n%s", n, h.events())
 	}
 }
