@@ -11,10 +11,12 @@ import (
 	"syscall"
 )
 
-// kioskGroups are the groups that mpv needs: video for /dev/dri/card*, render for
-// the render node that Mesa opens for vo=gpu on some boards (a Pi 4 renders on
-// v3d and shows on vc4), and audio for /dev/snd. mpv reads no input device.
-var kioskGroups = []string{"video", "render", "audio"}
+// kioskGroups are the groups that mpv needs: video for /dev/dri/card* and audio
+// for /dev/snd. mpv reads no input device. Alpine has no render group: eudev
+// gives /dev/dri/renderD* to the group video with mode 0666, so the render node
+// that Mesa opens for vo=gpu (a Pi 4 renders on v3d and shows on vc4) needs
+// nothing more. Seen on the pp-zero lab VM.
+var kioskGroups = []string{"video", "audio"}
 
 // applyCredential makes the command run as the kiosk account (D43). mpv parses
 // files that come from a USB stick and from the network, so it must never be
