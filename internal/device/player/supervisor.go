@@ -1250,7 +1250,13 @@ func (s *Supervisor) newList(l *loaded) {
 }
 
 // clearList forgets the list. mpv has none: it ended or it stops.
+//
+// The grace of the nightly restart ends too. It waits for an item boundary of
+// this mpv, and the next mpv is a new start. A screen-off in the grace minute
+// kept the deadline, and the deadline then stopped the new mpv just after the
+// screen came on again.
 func (s *Supervisor) clearList() {
+	s.graceUntil = time.Time{}
 	s.list = nil
 	s.cur = -1
 	s.mu.Lock()

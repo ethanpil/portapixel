@@ -821,6 +821,51 @@ func TestNightlyRestartGraceEnds(t *testing.T) {
 	}
 }
 
+// The grace of the nightly restart ends with the mpv that it waits for. A
+// screen-off or an exit in the grace minute stops that mpv, and the next mpv is a
+// new start. The old deadline stopped the new mpv again just after it started.
+func TestNightlyGraceEndsWithItsMPV(t *testing.T) {
+	t.Run("a screen-off", func(t *testing.T) {
+		h := newHarness(t, videos(), func(o *Options, h *harness) {
+			h.nightly = "03:30"
+			h.clock.Set(time.Date(2026, 10, 9, 3, 30, 0, 0, time.UTC))
+		})
+		h.waitPlaying(0)
+		waitFor(t, "the grace", func() bool { return h.countEvent("player.nightly.grace") == 1 })
+		if err := h.sup.Suspend(); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.Advance(time.Hour)
+		if err := h.sup.Resume(); err != nil {
+			t.Fatal(err)
+		}
+		h.waitPlaying(0)
+		h.settle()
+		h.advance(pollEvery)
+		if h.eventWith("player.restart", "grace time ended") {
+			t.Fatalf("the old grace stopped the new mpv:\n%s", h.events())
+		}
+	})
+	t.Run("an exit", func(t *testing.T) {
+		h := newHarness(t, videos(), func(o *Options, h *harness) {
+			h.nightly = "03:30"
+			h.clock.Set(time.Date(2026, 10, 9, 3, 30, 0, 0, time.UTC))
+		})
+		h.waitPlaying(0)
+		first := h.sup.proc.pid()
+		waitFor(t, "the grace", func() bool { return h.countEvent("player.nightly.grace") == 1 })
+		h.ctl("fake-exit", 9)
+		waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+		h.waitPlaying(1)
+		h.settle()
+		h.advance(graceTimeout)
+		h.advance(pollEvery)
+		if h.eventWith("player.restart", "grace time ended") {
+			t.Fatalf("the old grace stopped the new mpv:\n%s", h.events())
+		}
+	})
+}
+
 // A screen schedule that has the screen off at the time skips the restart.
 func TestNightlyRestartSkippedWhenTheScreenIsOff(t *testing.T) {
 	h := newHarness(t, videos(), func(o *Options, h *harness) {
