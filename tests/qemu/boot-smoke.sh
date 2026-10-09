@@ -1,7 +1,7 @@
 #!/bin/sh
 # tests/qemu/boot-smoke.sh -- boot a PortaPixel image in QEMU and check it.
 #
-# It proves four things:
+# It proves five things:
 #   1. the image boots to a login prompt (the boot chain works),
 #   2. the daemon answers on port 80 through a host forwarded port,
 #   3. /api/status returns something that looks like our status,
