@@ -151,7 +151,18 @@ if [ -n "$MEDIA_PARTITION" ]; then
 		[ "$(findfs "LABEL=$_l" 2>/dev/null || true)" != "$MEDIA_PARTITION" ] || die \
 			"$MEDIA_PARTITION carries the label $_l, which belongs to a PortaPixel system. Refusing."
 	done
-	if [ "${PP_ASSUME_YES:-0}" != 1 ]; then
+	# A partition that is PPMEDIA already keeps its files: a second run must not
+	# erase the media of the owner. Ask THIS device for its label, never the whole
+	# system. "findfs LABEL=PPMEDIA" gives the first match anywhere, so with a
+	# PortaPixel stick plugged in the test failed and mkfs ran on every run.
+	# "blkid DEV" takes no options in busybox, and in busybox and util-linux it
+	# prints the tags of DEV only: /dev/sdb1: LABEL="PPMEDIA" UUID="..." ...
+	# The space before LABEL keeps PARTLABEL out of the match.
+	MEDIA_KEEP=0
+	if blkid "$MEDIA_PARTITION" 2>/dev/null | grep -qF ' LABEL="PPMEDIA"'; then
+		MEDIA_KEEP=1
+	fi
+	if [ "$MEDIA_KEEP" = 0 ] && [ "${PP_ASSUME_YES:-0}" != 1 ]; then
 		printf '\n'
 		printf 'WARNING: install.sh is about to write a new exFAT file system on\n'
 		printf '  %s\n' "$MEDIA_PARTITION"
@@ -394,14 +405,10 @@ chmod 1777 "$ROOT/tmp"
 
 # On-box, format and mount the spare partition now (plan section 5).
 if [ -n "$MEDIA_PARTITION" ]; then
-	# Ask THIS device for its label, never the whole system. "findfs
-	# LABEL=PPMEDIA" answers with the first match anywhere. Leave a PortaPixel
-	# stick plugged in, and the test never matches the target. mkfs then ran on
-	# every run.
-	# findfs, not "blkid -s LABEL -o value": the busybox blkid takes no options
-	# at all, and the util-linux one is a separate package we do not install.
-	_have="$(findfs LABEL=PPMEDIA 2>/dev/null || true)"
-	if [ "$_have" != "$MEDIA_PARTITION" ] || [ -z "$_have" ]; then
+	# MEDIA_KEEP comes from the label of this device (see the validation).
+	if [ "$MEDIA_KEEP" = 1 ]; then
+		say "keep $MEDIA_PARTITION: it is PPMEDIA already"
+	else
 		say "format $MEDIA_PARTITION as exFAT PPMEDIA"
 		mkfs.exfat -L PPMEDIA "$MEDIA_PARTITION"
 	fi

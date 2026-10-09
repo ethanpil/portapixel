@@ -152,10 +152,12 @@ media partition, name a spare partition instead:
 sh install.sh --binary portapixeld --version 0.1.0 --media-partition /dev/sdb1
 ```
 
-**`--media-partition` erases everything on that partition.** `install.sh`
-refuses a partition that is mounted, that is the running root file system, or
-that already carries a PortaPixel label. For every other partition, it asks
-you to type the device path back before it formats it:
+**`--media-partition` erases everything on that partition**, unless it is
+PPMEDIA already. `install.sh` refuses a partition that is mounted, that is the
+running root file system, or that carries the label PPROOT or PPBOOT. A
+partition with the label PPMEDIA keeps its files, so a second run does not
+erase your media. For every other partition, it asks you to type the device
+path back before it formats it:
 
 ```
 WARNING: install.sh is about to write a new exFAT file system on
