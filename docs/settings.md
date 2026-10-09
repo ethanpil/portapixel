@@ -90,8 +90,8 @@ the mixer refuses the volume, the status carries the warning
 | Key | Default | Values | What it does | Takes effect |
 |---|---|---|---|---|
 | `default_playlist` | `"default"` | a playlist name | Plays when no schedule rule matches, and while the clock is not yet synced. | live |
-| `transition` | `"crossfade"` | `crossfade`, `push-left`, `push-right`, `push-up`, `push-down`, `cut` | The transition between items, unless a playlist sets its own. | live |
-| `transition_ms` | `500` | `0` or more | The length of the transition, in milliseconds. | live |
+| `transition` | `"fade"` | `cut`, `fade`, `fade-white`, `crossfade`, `wipe-*`, `push-*`, `slide-in-*`, `slide-out-*`, `zoom-out`, `split` (`*` is `left`, `right`, `up` or `down`) | The transition between items, unless a playlist or an item sets its own. | live |
+| `transition_ms` | `500` | `0` or more | The length of the transition, in milliseconds, unless an item sets its own. | live |
 | `image_duration` | `10` | `1` or more | Seconds that an image with no duration of its own stays on the screen. | live |
 | `shuffle` | `false` | `true`, `false` | Plays each playlist's items in a new order each time it starts. | live |
 | `nightly_restart` | `"03:30"` | `HH:MM`, or empty to turn it off | The daily browser restart, which clears memory that a long-running browser has collected. | live |
