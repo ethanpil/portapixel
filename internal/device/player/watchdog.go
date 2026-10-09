@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"math"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/playlist"
 )
 
 // The thresholds of the watchdog ladder (plan 3.3). Three of them are the
@@ -113,7 +115,7 @@ func (s *Supervisor) checkWatchdog(now time.Time) {
 	// with more than one frame as a video, for its own length, and it ignores
 	// image-display-duration. Such an item is not stuck while its position
 	// moves. A still image keeps its position, so the rule is the same for it.
-	if it, ok := s.current(); ok && it.Kind == kindImage && !s.list.single && it.Duration > 0 {
+	if it, ok := s.current(); ok && it.Kind == playlist.KindImage && !s.list.single && it.Duration > 0 {
 		on := now.Sub(s.itemStart)
 		if on >= imageLimit(it.Duration, limit) && now.Sub(s.lastMove) >= limit {
 			s.restart(fmt.Sprintf("the image %s stayed on the screen for %s; its duration is %ds",
@@ -142,13 +144,13 @@ func (s *Supervisor) onTimePos(value float64, pos bool, now time.Time) {
 		return
 	}
 	if pos && (!s.posKnown || value != s.lastPos) {
-		if s.posKnown || it.Kind == kindVideo {
+		if s.posKnown || it.Kind == playlist.KindVideo {
 			s.lastMove = now
 		}
 		s.lastPos, s.posKnown = value, true
 		return
 	}
-	if it.Kind != kindVideo {
+	if it.Kind != playlist.KindVideo {
 		return
 	}
 	set := s.opt.Watchdog()

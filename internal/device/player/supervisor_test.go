@@ -15,15 +15,16 @@ import (
 
 	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/playlist"
 )
 
 func videos() library.PlayerManifest {
-	return playlist("clips", "fade", 400,
+	return manifestOf("clips", "fade", 400,
 		library.ManifestItem{Name: "a.mp4"}, library.ManifestItem{Name: "b.mp4"})
 }
 
 func threeItems() library.PlayerManifest {
-	return playlist("lobby", "fade", 400,
+	return manifestOf("lobby", "fade", 400,
 		library.ManifestItem{Name: "welcome.jpg", Duration: 15},
 		library.ManifestItem{Name: "promo.mp4", Mute: true, MaxDuration: 30},
 		library.ManifestItem{Name: "tour.mp4"},
@@ -108,7 +109,7 @@ func TestTheBoardModelChoosesTheDecoder(t *testing.T) {
 // entry before it. An item can name its own transition and its own length. The
 // last entry gets the transition into the first one, because the list loops.
 func TestItemTransitionsGoToTheEntryBefore(t *testing.T) {
-	h := newHarness(t, playlist("lobby", "fade", 400,
+	h := newHarness(t, manifestOf("lobby", "fade", 400,
 		library.ManifestItem{Name: "a.jpg"},
 		library.ManifestItem{Name: "b.jpg", Transition: "split", TransitionMS: 900},
 		library.ManifestItem{Name: "c.mp4", TransitionMS: 250},
@@ -145,7 +146,7 @@ func TestKenBurnsGoesToTheImagesOnGPU(t *testing.T) {
 	onGPU := func(o *Options, h *harness) { h.display = DisplaySettings{VideoOutput: OutputGPU} }
 	m := threeItems() // welcome.jpg 15 s, promo.mp4, tour.mp4
 	m.Playlist.KenBurns = true
-	m.Playlist.Items[2].Name, m.Playlist.Items[2].Kind, m.Playlist.Items[2].Duration = "tour.jpg", kindImage, 6
+	m.Playlist.Items[2].Name, m.Playlist.Items[2].Kind, m.Playlist.Items[2].Duration = "tour.jpg", playlist.KindImage, 6
 	h := newHarness(t, m, onGPU)
 	h.waitPlaying(0)
 	d := h.dump()
@@ -164,7 +165,7 @@ func TestKenBurnsGoesToTheImagesOnGPU(t *testing.T) {
 	}
 
 	// One image alone has no end, so it gets no Ken Burns.
-	one := playlist("one", "fade", 400, library.ManifestItem{Name: "only.jpg"})
+	one := manifestOf("one", "fade", 400, library.ManifestItem{Name: "only.jpg"})
 	one.Playlist.KenBurns = true
 	h.setManifest(one)
 	waitFor(t, "the single image", func() bool { item, _ := h.playing(); return item == "only.jpg" })
@@ -206,13 +207,13 @@ func TestKenBurnsIsOffOnDRM(t *testing.T) {
 // One image alone stays on the screen and one video alone loops in its file:
 // neither gets a transition into itself.
 func TestSingleItemsStay(t *testing.T) {
-	h := newHarness(t, playlist("one", "fade", 400, library.ManifestItem{Name: "only.jpg"}), nil)
+	h := newHarness(t, manifestOf("one", "fade", 400, library.ManifestItem{Name: "only.jpg"}), nil)
 	h.waitPlaying(0)
 	if got := h.dump().List[0].Opts["image-display-duration"]; got != "inf" {
 		t.Errorf("one image has image-display-duration=%q, want inf", got)
 	}
 
-	h.setManifest(playlist("clip", "fade", 400, library.ManifestItem{Name: "loop.mp4"}))
+	h.setManifest(manifestOf("clip", "fade", 400, library.ManifestItem{Name: "loop.mp4"}))
 	waitFor(t, "the video", func() bool { item, _ := h.playing(); return item == "loop.mp4" })
 	if got := h.dump().List[0].Opts["loop-file"]; got != "inf" {
 		t.Errorf("one video has loop-file=%q, want inf", got)
@@ -227,7 +228,7 @@ func TestNowPlayingFollowsMPV(t *testing.T) {
 	start := h.clock.Now()
 
 	np := h.sup.State().NowPlaying
-	if np.Playlist != "lobby" || np.Item != "welcome.jpg" || np.Kind != kindImage || !np.Since.Equal(start) {
+	if np.Playlist != "lobby" || np.Item != "welcome.jpg" || np.Kind != playlist.KindImage || !np.Since.Equal(start) {
 		t.Fatalf("now_playing = %+v", np)
 	}
 	if hw := h.sup.State().Hwdec; hw != "" {
@@ -238,7 +239,7 @@ func TestNowPlayingFollowsMPV(t *testing.T) {
 	h.ctl("fake-next")
 	h.waitPlaying(1)
 	np = h.sup.State().NowPlaying
-	if np.Item != "promo.mp4" || np.Kind != kindVideo || !np.Since.Equal(h.clock.Now()) {
+	if np.Item != "promo.mp4" || np.Kind != playlist.KindVideo || !np.Since.Equal(h.clock.Now()) {
 		t.Fatalf("now_playing = %+v", np)
 	}
 	waitFor(t, "the decoder of the video", func() bool { return h.sup.State().Hwdec == fakeHwdec })
@@ -273,7 +274,7 @@ func TestPlaylistChangeReplacesTheList(t *testing.T) {
 		t.Fatalf("the same manifest made %d new loads", got-loads)
 	}
 
-	h.setManifest(playlist("evening", "cut", 0,
+	h.setManifest(manifestOf("evening", "cut", 0,
 		library.ManifestItem{Name: "night.jpg"}, library.ManifestItem{Name: "stars.mp4"}))
 	waitFor(t, "the evening playlist", func() bool {
 		np := h.sup.State().NowPlaying
@@ -468,7 +469,7 @@ func TestFallbackRetryDoesNotReplaceContentThatCameBack(t *testing.T) {
 // When no item can play, mpv goes idle. The fallback screen then shows, each
 // fault is in the ops log, and the player tries the list again later.
 func TestEveryItemFails(t *testing.T) {
-	m := playlist("bad", "fade", 400,
+	m := manifestOf("bad", "fade", 400,
 		library.ManifestItem{Name: "broken-a.mp4"}, library.ManifestItem{Name: "broken-b.jpg"})
 	h := newHarness(t, m, nil)
 	waitFor(t, "the fallback screen", func() bool {
@@ -498,7 +499,7 @@ func TestManyBrokenItemsGiveOneLine(t *testing.T) {
 	for i := range 40 {
 		items = append(items, library.ManifestItem{Name: fmt.Sprintf("broken-%02d.jpg", i)})
 	}
-	h := newHarness(t, playlist("lobby", "fade", 400, items...), nil)
+	h := newHarness(t, manifestOf("lobby", "fade", 400, items...), nil)
 	h.waitPlaying(0)
 	for range 2 { // two passes of the loop
 		h.settle()
@@ -574,7 +575,7 @@ func TestRestartAfterExit(t *testing.T) {
 // mpv again and count a step on the ladder. A playlist change gives the file a
 // new try.
 func TestAFileThatEndsMPVIsLeftOut(t *testing.T) {
-	m := playlist("lobby", "fade", 400,
+	m := manifestOf("lobby", "fade", 400,
 		library.ManifestItem{Name: "a.jpg"},
 		library.ManifestItem{Name: "b.jpg"},
 		library.ManifestItem{Name: "crash.mp4"},
@@ -618,7 +619,7 @@ func TestAFileThatEndsMPVIsLeftOut(t *testing.T) {
 	}
 
 	// A new version of the playlist tries the file again.
-	m2 := playlist("lobby", "cut", 0,
+	m2 := manifestOf("lobby", "cut", 0,
 		library.ManifestItem{Name: "a.jpg"},
 		library.ManifestItem{Name: "b.jpg"},
 		library.ManifestItem{Name: "crash.mp4"},
@@ -659,7 +660,7 @@ func TestResumePointDoesNotOutliveAFallbackScreen(t *testing.T) {
 // An mpv that ends before its first picture waits for the launch backoff, and
 // no mpv runs in that time. /api/status said "running" for it.
 func TestAnExitIsStoppedDuringTheBackoff(t *testing.T) {
-	h := newHarness(t, playlist("lobby", "fade", 400, library.ManifestItem{Name: "crash.mp4"}), nil)
+	h := newHarness(t, manifestOf("lobby", "fade", 400, library.ManifestItem{Name: "crash.mp4"}), nil)
 	waitFor(t, "the exit", func() bool { return h.countEvent("player.exit") == 1 })
 	waitFor(t, "the state stopped", func() bool { return h.sup.State().Player == StateStopped })
 	if h.sup.proc.alive() {
@@ -762,7 +763,7 @@ func TestRestartWhenImageOverruns(t *testing.T) {
 // GIF in a loop rebooted the device every hour. An animation that stops moving
 // is still restarted.
 func TestAnAnimatedImageIsNotStuckWhileItMoves(t *testing.T) {
-	m := playlist("lobby", "fade", 400,
+	m := manifestOf("lobby", "fade", 400,
 		library.ManifestItem{Name: "anim.gif"}, // the fake moves the position of a .gif
 		library.ManifestItem{Name: "b.jpg"},
 	)
@@ -1175,7 +1176,7 @@ func TestAChangeIsNotLostWhenTheQueueIsFull(t *testing.T) {
 	h.display.Rotation = 90
 	h.mu.Unlock()
 	h.sup.DisplayChanged()
-	h.setManifest(playlist("evening", "cut", 0, library.ManifestItem{Name: "night.jpg"}, library.ManifestItem{Name: "stars.mp4"}))
+	h.setManifest(manifestOf("evening", "cut", 0, library.ManifestItem{Name: "night.jpg"}, library.ManifestItem{Name: "stars.mp4"}))
 	close(release)
 
 	waitFor(t, "the evening playlist", func() bool {

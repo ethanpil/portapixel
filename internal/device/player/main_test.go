@@ -16,6 +16,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/opslog"
+	"github.com/ethanpil/portapixel/internal/playlist"
 )
 
 func TestMain(m *testing.M) {
@@ -332,13 +333,13 @@ func (h *harness) eventWith(name, text string) bool {
 	return false
 }
 
-// playlist makes a manifest of items. A name that ends in .mp4 is a video.
-func playlist(name, transition string, ms int, items ...library.ManifestItem) library.PlayerManifest {
+// manifestOf makes a manifest of items. A name that ends in .mp4 is a video.
+func manifestOf(name, transition string, ms int, items ...library.ManifestItem) library.PlayerManifest {
 	for i := range items {
 		if items[i].Kind == "" {
-			items[i].Kind = kindImage
+			items[i].Kind = playlist.KindImage
 			if strings.HasSuffix(items[i].Name, ".mp4") {
-				items[i].Kind = kindVideo
+				items[i].Kind = playlist.KindVideo
 			}
 		}
 		if items[i].Path == "" {
@@ -352,7 +353,7 @@ func playlist(name, transition string, ms int, items ...library.ManifestItem) li
 		if items[i].TransitionMS == 0 {
 			items[i].TransitionMS = ms
 		}
-		if items[i].Kind == kindImage && items[i].Duration == 0 {
+		if items[i].Kind == playlist.KindImage && items[i].Duration == 0 {
 			items[i].Duration = 10
 		}
 	}

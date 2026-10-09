@@ -20,6 +20,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/fsutil"
 	"github.com/ethanpil/portapixel/internal/manifest"
 	"github.com/ethanpil/portapixel/internal/opslog"
+	"github.com/ethanpil/portapixel/internal/playlist"
 )
 
 // The times of the supervisor. Together with the block in watchdog.go this is
@@ -76,12 +77,6 @@ const (
 	StateRunning  = "running"
 	StateWaiting  = "waiting-for-display"
 	StateDisabled = "disabled"
-)
-
-// The item kinds of the manifest.
-const (
-	kindImage = "image"
-	kindVideo = "video"
 )
 
 // The properties that the supervisor observes. The number is the ID of the
@@ -484,7 +479,7 @@ func (s *Supervisor) State() State {
 		out.NowPlaying = &np
 		// "" when no video plays. mpv decodes an image with a video decoder and
 		// reports "no" for it, which is not a fact about the video.
-		if np.Kind == kindVideo {
+		if np.Kind == playlist.KindVideo {
 			out.Hwdec = s.hwdec
 		}
 	}
@@ -905,7 +900,7 @@ func (s *Supervisor) poll(now time.Time) {
 	if !ok {
 		return
 	}
-	if it.Kind == kindVideo {
+	if it.Kind == playlist.KindVideo {
 		// Before time-pos, so that the stall rule has it when the answer about
 		// the position comes (see onTimePos).
 		s.request(now, reqCacheTime, 0, "get_property", "demuxer-cache-time")
@@ -913,7 +908,7 @@ func (s *Supervisor) poll(now time.Time) {
 	// Also for an image: an animated GIF, PNG or WebP plays as a video in mpv,
 	// and its position moves (see checkWatchdog).
 	s.request(now, reqTimePos, 0, "get_property", "time-pos")
-	if it.Kind == kindVideo {
+	if it.Kind == playlist.KindVideo {
 		s.request(now, reqDropVO, 0, "get_property", "frame-drop-count")
 		s.request(now, reqDropDec, 0, "get_property", "decoder-frame-drop-count")
 	}
@@ -1248,12 +1243,12 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 // The script then zooms and pans the image while it shows, for the duration.
 func fileOptions(it, next library.ManifestItem, kenBurns, single bool, model string) map[string]string {
 	kb := 0
-	if kenBurns && it.Kind == kindImage && !single {
+	if kenBurns && it.Kind == playlist.KindImage && !single {
 		kb = it.Duration
 	}
 	opts := map[string]string{"script-opts": scriptOpts(next.Transition, next.TransitionMS, kb)}
 	switch it.Kind {
-	case kindImage:
+	case playlist.KindImage:
 		// One image alone stays on the screen. Nothing needs to change, and a
 		// reload of the same picture would only draw a transition into itself.
 		duration := strconv.Itoa(it.Duration)
@@ -1261,7 +1256,7 @@ func fileOptions(it, next library.ManifestItem, kenBurns, single bool, model str
 			duration = "inf"
 		}
 		opts["image-display-duration"] = duration
-	case kindVideo:
+	case playlist.KindVideo:
 		opts["mute"] = "no"
 		if it.Mute {
 			opts["mute"] = "yes"
