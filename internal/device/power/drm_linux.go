@@ -139,6 +139,18 @@ func ioctl(fd int, request uintptr, arg unsafe.Pointer) error {
 	}
 }
 
+// kernelBuffer makes a list for the kernel to fill. Its address goes into an
+// ioctl struct as a plain uint64, and Go does not follow such a value. Since Go
+// 1.25 a short list that does not escape is on the stack, and Go can copy a
+// stack to a new place before the call. The kernel then writes into free memory.
+// A list that a function returns is on the heap, and the heap does not move. So
+// this function must not be inlined.
+//
+//go:noinline
+func kernelBuffer[T uint32 | uint64](n uint32) []T {
+	return make([]T, n)
+}
+
 func (f *drmFile) close() error { return unix.Close(f.fd) }
 
 func (f *drmFile) takeMaster() error {
@@ -182,7 +194,7 @@ func (f *drmFile) connectorIDs() ([]uint32, error) {
 		if count == 0 {
 			return nil, nil
 		}
-		ids := make([]uint32, count)
+		ids := kernelBuffer[uint32](count)
 		res = modeCardRes{connectorIDPtr: uint64(uintptr(unsafe.Pointer(&ids[0]))), countConnectors: count}
 		err := ioctl(f.fd, ioctlGetResources, unsafe.Pointer(&res))
 		runtime.KeepAlive(ids)
@@ -212,8 +224,8 @@ func (f *drmFile) connector(id uint32) (drmConnector, error) {
 			return out, nil
 		}
 
-		props := make([]uint32, info.countProps)
-		values := make([]uint64, info.countProps)
+		props := kernelBuffer[uint32](info.countProps)
+		values := kernelBuffer[uint64](info.countProps)
 		info = modeGetConnector{
 			connectorID:   id,
 			propsPtr:      uint64(uintptr(unsafe.Pointer(&props[0]))),

@@ -43,3 +43,21 @@ func TestDRMStructSizes(t *testing.T) {
 		t.Errorf("drm_mode_obj_set_property is %d bytes, want 24", got)
 	}
 }
+
+// kernelCount is a variable, so the compiler cannot give the lists a fixed size.
+var kernelCount uint32 = 4
+
+// A list whose address goes to the kernel as a plain integer must be on the
+// heap. Go can move a stack, and it does not correct such an integer. A short
+// list is on the stack when the compiler can keep it there, and then the
+// allocation count is 0.
+func TestKernelBuffersAreOnTheHeap(t *testing.T) {
+	allocs := testing.AllocsPerRun(20, func() {
+		props := kernelBuffer[uint32](kernelCount)
+		values := kernelBuffer[uint64](kernelCount)
+		_ = uint64(uintptr(unsafe.Pointer(&props[0]))) + uint64(uintptr(unsafe.Pointer(&values[0])))
+	})
+	if allocs < 2 {
+		t.Errorf("the two lists made %v allocations on the heap, want 2", allocs)
+	}
+}
