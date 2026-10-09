@@ -224,6 +224,9 @@ func TestACollisionFallsBackToTheFactoryName(t *testing.T) {
 	if got := a.NameTaken(); got != "lobby.local" {
 		t.Errorf("NameTaken() = %q, want the name that the other device holds", got)
 	}
+	if got := a.Announced(); got != "portapixel-3c4d.local" {
+		t.Errorf("Announced() = %q, want the factory name", got)
+	}
 
 	// While the collision holds, every tick probes again: a collision that goes away
 	// must repair itself. The announcement itself must NOT be stopped and started

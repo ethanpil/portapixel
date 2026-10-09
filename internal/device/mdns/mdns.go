@@ -58,17 +58,15 @@ type Options struct {
 	Tick time.Duration
 }
 
-// Announcer keeps one announcement current. Only Run touches the fields, so it
-// needs no lock.
+// Announcer keeps one announcement current. Only Run writes the fields. The
+// fields under mu are read by other goroutines too.
 type Announcer struct {
 	opt Options
 
 	closer io.Closer
-	// host and ips are the values that the last refresh read. announced is the name
-	// that goes out now, which is the fallback name after a collision.
-	host      string
-	announced string
-	ips       []string
+	// host and ips are the values that the last refresh read.
+	host string
+	ips  []string
 	// announcedIPs are the addresses of the announcement that runs. A change of the
 	// addresses needs a new announcement even when the name is the same.
 	announcedIPs []string
@@ -76,10 +74,30 @@ type Announcer struct {
 	// line for every tick on a device with no network.
 	failed bool
 
+	mu sync.Mutex
 	// taken is the name that another device on the network holds, or "". The status
 	// report carries it as the warning mdns-name-taken.
-	mu    sync.Mutex
 	taken string
+	// announced is the name that goes out now, which is the fallback name after a
+	// collision, or "" when nothing goes out.
+	announced string
+}
+
+// Announced gives the name that the device announces now, or "": no network, no
+// name, or a fault. The fallback screen shows it. The name of the settings can
+// belong to another device, and its QR code then opened that device.
+func (a *Announcer) Announced() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.announced
+}
+
+// setAnnounced records the announcement that goes out now.
+func (a *Announcer) setAnnounced(name string, ips []string) {
+	a.mu.Lock()
+	a.announced = name
+	a.mu.Unlock()
+	a.announcedIPs = ips
 }
 
 // NameTaken gives the name that another device holds, or "". The daemon puts it in
@@ -164,7 +182,7 @@ func (a *Announcer) refresh() {
 		// No name or no address. There is nothing to announce, and that is not a
 		// fault: a device with no cable plays what it has.
 		a.stop()
-		a.announced, a.announcedIPs = "", nil
+		a.setAnnounced("", nil)
 		a.failed = false
 		a.setTaken("")
 		return
@@ -197,11 +215,11 @@ func (a *Announcer) refresh() {
 		// A collision and no factory name to fall back to. Announce nothing: two
 		// answers for one name are worse than none.
 		a.stop()
-		a.announced, a.announcedIPs = "", nil
+		a.setAnnounced("", nil)
 		a.failed = false
 		return
 	}
-	if want == a.announced && slices.Equal(ips, a.announcedIPs) && !a.failed {
+	if want == a.Announced() && slices.Equal(ips, a.announcedIPs) && !a.failed {
 		// Nothing that the announcement carries changed, so it stands. A stop and a
 		// start at every tick would make the device come and go in a browser.
 		return
@@ -210,7 +228,7 @@ func (a *Announcer) refresh() {
 	a.stop()
 	closer, err := a.opt.Publish(want, a.opt.Port, addresses)
 	if err != nil {
-		a.announced, a.announcedIPs = "", nil
+		a.setAnnounced("", nil)
 		if !a.failed {
 			a.failed = true
 			a.log("mdns.fail", err.Error()+"; the device tries again every "+a.opt.Tick.String())
@@ -218,8 +236,7 @@ func (a *Announcer) refresh() {
 		return
 	}
 	a.closer = closer
-	a.announced = want
-	a.announcedIPs = ips
+	a.setAnnounced(want, ips)
 	a.failed = false
 	a.log("mdns.announce", want+" on port "+strconv.Itoa(a.opt.Port)+" at "+strings.Join(ips, " "))
 }
