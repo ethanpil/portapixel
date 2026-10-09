@@ -58,6 +58,13 @@ ALTER TABLE playlist_items ADD COLUMN transition_ms INTEGER NOT NULL DEFAULT 0;`
 		_, err := tx.Exec(`ALTER TABLE playlists ADD COLUMN ken_burns INTEGER NOT NULL DEFAULT 0`)
 		return err
 	},
+	// Schema version 5: a release row says if GitHub marks the release as a
+	// pre-release. 0 is final, so each old row stays final until the next read of
+	// the release list sets the flag.
+	func(tx *tx) error {
+		_, err := tx.Exec(`ALTER TABLE releases ADD COLUMN prerelease INTEGER NOT NULL DEFAULT 0`)
+		return err
+	},
 }
 
 // DB is the database of the fleet server.

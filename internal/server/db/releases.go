@@ -8,7 +8,7 @@ import (
 
 // releaseColumns is the select list of a release row.
 const releaseColumns = `version, approved, notes, published_at, approved_at,
-	mirror_state, mirror_error`
+	mirror_state, mirror_error, prerelease`
 
 // Releases gives every release row, newest first.
 func (d *DB) Releases() ([]Release, error) {
@@ -43,14 +43,15 @@ func (d *DB) Release(version string) (Release, error) {
 func scanRelease(s interface{ Scan(...any) error }) (Release, error) {
 	var (
 		r                       Release
-		approved                int
+		approved, prerelease    int
 		publishedAt, approvedAt string
 	)
 	if err := s.Scan(&r.Version, &approved, &r.Notes, &publishedAt,
-		&approvedAt, &r.MirrorState, &r.MirrorError); err != nil {
+		&approvedAt, &r.MirrorState, &r.MirrorError, &prerelease); err != nil {
 		return Release{}, err
 	}
 	r.Approved = approved != 0
+	r.Prerelease = prerelease != 0
 	r.PublishedAt = parseTime(publishedAt)
 	r.ApprovedAt = parseTime(approvedAt)
 	// Mirrored is computed and never stored. One value cannot disagree with
@@ -93,11 +94,11 @@ func (d *DB) NoteReleases(list []ReleaseNote) error {
 		if !rel.PublishedAt.IsZero() {
 			stamp = d.stamp(rel.PublishedAt)
 		}
-		if _, err := tx.Exec(`INSERT INTO releases (version, notes, published_at)
-			VALUES (?, ?, ?)
+		if _, err := tx.Exec(`INSERT INTO releases (version, notes, published_at, prerelease)
+			VALUES (?, ?, ?, ?)
 			ON CONFLICT(version) DO UPDATE SET notes = excluded.notes,
-				published_at = excluded.published_at`,
-			rel.Version, rel.Notes, stamp); err != nil {
+				published_at = excluded.published_at, prerelease = excluded.prerelease`,
+			rel.Version, rel.Notes, stamp, rel.Prerelease); err != nil {
 			return err
 		}
 	}
@@ -109,6 +110,7 @@ type ReleaseNote struct {
 	Version     string
 	Notes       string
 	PublishedAt time.Time
+	Prerelease  bool
 }
 
 // ApproveRelease makes one version the approved version and takes the approval

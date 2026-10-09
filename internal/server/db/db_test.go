@@ -265,8 +265,8 @@ func TestMigrationFourAddsKenBurns(t *testing.T) {
 	defer d.Close()
 
 	var version int
-	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
-		t.Fatalf("the schema version is %d (%v), want 4", version, err)
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version < 4 {
+		t.Fatalf("the schema version is %d (%v), want 4 or more", version, err)
 	}
 	columns, err := d.columnsOf("playlists")
 	if err != nil {
@@ -293,6 +293,61 @@ func TestMigrationFourAddsKenBurns(t *testing.T) {
 	}
 	if p, err = d.PlaylistNoCount(1); err != nil || !p.KenBurns {
 		t.Fatalf("the saved playlist has ken burns %v (%v), want on", p.KenBurns, err)
+	}
+}
+
+// TestMigrationFiveAddsThePrereleaseFlag opens a file at schema version 4. A release
+// row that the file holds stays final. A read of the release list then sets the flag,
+// and a later read can change it.
+func TestMigrationFiveAddsThePrereleaseFlag(t *testing.T) {
+	path := fileAtVersion(t, 4,
+		`INSERT INTO releases (version, notes, published_at) VALUES ('0.4.0', 'old', '2026-09-01T00:00:00Z')`)
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("the migration failed: %v", err)
+	}
+	defer d.Close()
+
+	var version int
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
+		t.Fatalf("the schema version is %d (%v), want %d", version, err, len(migrations))
+	}
+	rel, err := d.Release("0.4.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.Prerelease {
+		t.Fatal("an old release row must stay final")
+	}
+
+	note := func(pre bool) {
+		t.Helper()
+		err := d.NoteReleases([]ReleaseNote{
+			{Version: "0.4.0", Notes: "old", Prerelease: false},
+			{Version: "0.5.0-rc.1", Notes: "candidate", Prerelease: pre},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	note(true)
+	list, err := d.Releases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := map[string]bool{}
+	for _, r := range list {
+		flags[r.Version] = r.Prerelease
+	}
+	if !flags["0.5.0-rc.1"] || flags["0.4.0"] {
+		t.Fatalf("the flags are %v, want 0.5.0-rc.1 true and 0.4.0 false", flags)
+	}
+
+	// GitHub can change the flag of a release, and the next read follows it.
+	note(false)
+	if rel, err = d.Release("0.5.0-rc.1"); err != nil || rel.Prerelease {
+		t.Fatalf("the flag after the change is %v (%v), want false", rel.Prerelease, err)
 	}
 }
 
