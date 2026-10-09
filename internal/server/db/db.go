@@ -58,6 +58,13 @@ ALTER TABLE playlist_items ADD COLUMN transition_ms INTEGER NOT NULL DEFAULT 0;`
 		_, err := tx.Exec(`ALTER TABLE playlists ADD COLUMN ken_burns INTEGER NOT NULL DEFAULT 0`)
 		return err
 	},
+	// Schema version 5: a release row says if GitHub marks the release as a
+	// pre-release. 0 is final, so each old row stays final until the next read of
+	// the release list sets the flag.
+	func(tx *tx) error {
+		_, err := tx.Exec(`ALTER TABLE releases ADD COLUMN prerelease INTEGER NOT NULL DEFAULT 0`)
+		return err
+	},
 }
 
 // DB is the database of the fleet server.
@@ -100,6 +107,9 @@ const openParams = "?_pragma=journal_mode(WAL)" +
 const writeParams = "&_txlock=immediate"
 
 // Open opens the database at path and brings the schema up to date.
+//
+// Open changes no row. A process that only checks the file, such as the selftest,
+// may open it while the server runs. The server calls ResetWorkingMirrors itself.
 func Open(path string) (*DB, error) {
 	w, err := sql.Open("sqlite", path+openParams+writeParams)
 	if err != nil {
@@ -133,12 +143,6 @@ func Open(path string) (*DB, error) {
 	// the wrong columns. Every query would then fail with a raw SQL error, which
 	// says nothing that an operator can act on.
 	if err := d.checkSchema(); err != nil {
-		d.Close()
-		return nil, err
-	}
-	// A mirror runs in a goroutine. A process that stopped in the middle of one
-	// left a row that says "working", and nothing else would ever clear it.
-	if err := d.resetWorkingMirrors(); err != nil {
 		d.Close()
 		return nil, err
 	}

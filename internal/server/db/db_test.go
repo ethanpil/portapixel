@@ -265,8 +265,8 @@ func TestMigrationFourAddsKenBurns(t *testing.T) {
 	defer d.Close()
 
 	var version int
-	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
-		t.Fatalf("the schema version is %d (%v), want 4", version, err)
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version < 4 {
+		t.Fatalf("the schema version is %d (%v), want 4 or more", version, err)
 	}
 	columns, err := d.columnsOf("playlists")
 	if err != nil {
@@ -296,6 +296,61 @@ func TestMigrationFourAddsKenBurns(t *testing.T) {
 	}
 }
 
+// TestMigrationFiveAddsThePrereleaseFlag opens a file at schema version 4. A release
+// row that the file holds stays final. A read of the release list then sets the flag,
+// and a later read can change it.
+func TestMigrationFiveAddsThePrereleaseFlag(t *testing.T) {
+	path := fileAtVersion(t, 4,
+		`INSERT INTO releases (version, notes, published_at) VALUES ('0.4.0', 'old', '2026-09-01T00:00:00Z')`)
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("the migration failed: %v", err)
+	}
+	defer d.Close()
+
+	var version int
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
+		t.Fatalf("the schema version is %d (%v), want %d", version, err, len(migrations))
+	}
+	rel, err := d.Release("0.4.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.Prerelease {
+		t.Fatal("an old release row must stay final")
+	}
+
+	note := func(pre bool) {
+		t.Helper()
+		err := d.NoteReleases([]ReleaseNote{
+			{Version: "0.4.0", Notes: "old", Prerelease: false},
+			{Version: "0.5.0-rc.1", Notes: "candidate", Prerelease: pre},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	note(true)
+	list, err := d.Releases()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flags := map[string]bool{}
+	for _, r := range list {
+		flags[r.Version] = r.Prerelease
+	}
+	if !flags["0.5.0-rc.1"] || flags["0.4.0"] {
+		t.Fatalf("the flags are %v, want 0.5.0-rc.1 true and 0.4.0 false", flags)
+	}
+
+	// GitHub can change the flag of a release, and the next read follows it.
+	note(false)
+	if rel, err = d.Release("0.5.0-rc.1"); err != nil || rel.Prerelease {
+		t.Fatalf("the flag after the change is %v (%v), want false", rel.Prerelease, err)
+	}
+}
+
 func TestIntegrityCheckSaysOK(t *testing.T) {
 	if got, err := open(t).IntegrityCheck(); err != nil || got != "ok" {
 		t.Fatalf("integrity check gave %q, %v", got, err)
@@ -312,10 +367,10 @@ func TestForeignKeysAreOn(t *testing.T) {
 	}
 }
 
-// TestOpenResetsAWorkingMirror covers the process that stopped in the middle of a
-// mirror. A row that says "working" for ever makes the mirror route answer 409 and
-// the admin has no button that works.
-func TestOpenResetsAWorkingMirror(t *testing.T) {
+// TestOpenLeavesAWorkingMirror covers a second process that opens the database
+// while the server runs, for example "selftest" in a container. The mirror of the
+// server is a live goroutine, so Open must not mark it as failed.
+func TestOpenLeavesAWorkingMirror(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := Open(path)
 	if err != nil {
@@ -331,6 +386,38 @@ func TestOpenResetsAWorkingMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer again.Close()
+
+	rel, err := again.Release("1.5.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.MirrorState != MirrorWorking {
+		t.Fatalf("Open changed the mirror state to %q", rel.MirrorState)
+	}
+}
+
+// TestResetWorkingMirrors covers the process that stopped in the middle of a
+// mirror. A row that says "working" for ever makes the mirror route answer 409 and
+// the admin has no button that works.
+func TestResetWorkingMirrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetMirrorState("1.5.0", MirrorWorking, ""); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if err := again.ResetWorkingMirrors(); err != nil {
+		t.Fatal(err)
+	}
 
 	rel, err := again.Release("1.5.0")
 	if err != nil {

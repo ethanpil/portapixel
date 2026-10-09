@@ -563,7 +563,7 @@ func Verify(dir, publicKey string) error {
 	if publicKey == "" {
 		return ErrNoKey
 	}
-	sums, err := readSums(filepath.Join(dir, SumsName))
+	sums, err := updater.ReadSums(filepath.Join(dir, SumsName))
 	if err != nil {
 		return err
 	}
@@ -585,36 +585,6 @@ func Verify(dir, publicKey string) error {
 		}
 	}
 	return nil
-}
-
-// readSums reads a SHA256SUMS file. Each line is a checksum, spaces, and a file
-// name. A name with a path in it is ignored: the checksum of a file outside the
-// release directory means nothing here.
-func readSums(path string) (map[string]string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)
-	}
-	if len(data) > maxSumsBytes {
-		return nil, fmt.Errorf("%s is too long", filepath.Base(path))
-	}
-	out := map[string]string{}
-	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) < 2 {
-			continue
-		}
-		// The second field can carry a "*" for a binary read.
-		name := strings.TrimPrefix(fields[len(fields)-1], "*")
-		if strings.ContainsAny(name, `/\`) {
-			continue
-		}
-		out[name] = fields[0]
-	}
-	if len(out) == 0 {
-		return nil, fmt.Errorf("%s holds no checksum", filepath.Base(path))
-	}
-	return out, nil
 }
 
 // limitReader is io.LimitReader. It is here so that every body from outside has

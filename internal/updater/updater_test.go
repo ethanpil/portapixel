@@ -686,6 +686,17 @@ func TestCompareVersions(t *testing.T) {
 		{"1.5.0", "1.5", 0},
 		{"1.5.0", "1.5.0-rc1", 1},
 		{"1.5.0-rc1", "1.5.0-rc2", -1},
+		// The numbers of a suffix are compared as numbers (semver, section 11).
+		{"0.5.0-rc.9", "0.5.0-rc.10", -1},
+		{"0.5.0-rc.10", "0.5.0-rc.9", 1},
+		{"0.5.0-rc.10", "0.5.0", -1},
+		{"0.5.0", "0.5.0-rc.10", 1},
+		{"v0.5.0-rc.10", "0.5.0-rc.10", 0},
+		{"0.5.0-rc.2", "0.5.0-rc.10", -1},
+		{"0.5.0-rc.1", "0.5.0-rc.1.1", -1},
+		{"0.5.0-1", "0.5.0-rc.1", -1},
+		{"0.5.0-alpha.1", "0.5.0-beta.1", -1},
+		{"0.5.0-rc.10", "0.5.1-rc.1", -1},
 		{"1.5.0", "dev", 1},
 		{"dev", "1.5.0", -1},
 		{"dev", "dev", 0},
@@ -734,7 +745,7 @@ func TestReadSums(t *testing.T) {
 			"\n"+
 			"oneFieldOnThisLine\n"))
 
-	sums, err := readSums(path)
+	sums, err := ReadSums(path)
 	if err != nil {
 		t.Fatal(err)
 	}

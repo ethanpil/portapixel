@@ -47,11 +47,6 @@ func (d Deps) createGroup(w http.ResponseWriter, r *http.Request) {
 			httpjson.Fields(w, "the request has a field that this server cannot use", fieldErrs)
 			return
 		}
-		if err.Error() == "a group needs a name" {
-			httpjson.Fields(w, "the request has a field that this server cannot use",
-				db.Errors{{Field: "name", Message: err.Error()}})
-			return
-		}
 		fail(w, err)
 		return
 	}
@@ -101,11 +96,8 @@ func (d Deps) updateGroup(w http.ResponseWriter, r *http.Request) {
 				db.Errors{{Field: "name", Message: "another group already has this name"}})
 			return
 		}
-		if err.Error() == "a group needs a name" {
-			httpjson.Fields(w, "the request has a field that this server cannot use",
-				db.Errors{{Field: "name", Message: err.Error()}})
-			return
-		}
+		// A group with no name is a db.Errors value, and fail answers it with the
+		// field list.
 		fail(w, err)
 		return
 	}

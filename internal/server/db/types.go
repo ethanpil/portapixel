@@ -198,6 +198,9 @@ type Release struct {
 	// Mirrored is computed from MirrorState. The admin UI reads it, so the field
 	// stays in the JSON; it is never a column.
 	Mirrored bool `json:"mirrored"`
+	// Prerelease is true when GitHub marks the release as a pre-release. The admin
+	// UI shows a mark, and the approval asks for a second look.
+	Prerelease bool `json:"prerelease"`
 }
 
 // The mirror states of a release.

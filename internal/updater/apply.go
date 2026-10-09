@@ -218,7 +218,7 @@ func (m *Manager) stage(ctx context.Context, rel Release, staging string) error 
 	if err := m.fetchSmall(ctx, rel, rel.SigURL, filepath.Join(staging, asset+SigSuffix), maxSigBytes); err != nil {
 		return err
 	}
-	sums, err := readSums(filepath.Join(staging, SumsName))
+	sums, err := ReadSums(filepath.Join(staging, SumsName))
 	if err != nil {
 		return err
 	}
@@ -285,7 +285,7 @@ func (m *Manager) verify(staging string, rel Release) (string, error) {
 	if err := sigverify.VerifyFile(binary, binary+SigSuffix, m.opt.PublicKey); err != nil {
 		return "", fmt.Errorf("the signature of %s is not valid: %w", asset, err)
 	}
-	sums, err := readSums(filepath.Join(staging, SumsName))
+	sums, err := ReadSums(filepath.Join(staging, SumsName))
 	if err != nil {
 		return "", err
 	}
@@ -532,10 +532,10 @@ func (m *Manager) fetchSmall(ctx context.Context, rel Release, address, dest str
 	return fsutil.WriteFileAtomic(dest, data, 0o644)
 }
 
-// readSums reads a SHA256SUMS file. Each line is a checksum, whitespace and a
+// ReadSums reads a SHA256SUMS file. Each line is a checksum, whitespace and a
 // file name. A name with a path in it is ignored: the checksum of a file outside
 // the release means nothing here.
-func readSums(path string) (map[string]string, error) {
+func ReadSums(path string) (map[string]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)

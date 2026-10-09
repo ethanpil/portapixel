@@ -29,6 +29,14 @@ Leave `[server]` `token` empty and set only `url`. The screen then shows a
 six-character code on its fallback screen and on its own Settings page. Open
 the server's Screens page, find the code, and approve it.
 
+The server limits the new pending requests. One address can make five new
+requests in one hour. The sixth gets the answer 429, "too many new screens
+from this address". A batch of cards behind one router shares one address.
+A card with an enrollment token that pairs at once makes no pending request,
+so it does not count. A screen that already has a pending request does not
+count when it asks again. At most 200 requests are pending at one time. A
+request that is pending for more than 24 hours goes away.
+
 ### 3. The pairing card on the screen
 
 Open the screen's own web UI, go to Settings, and type the server's address
@@ -49,6 +57,12 @@ UI reads that list instead of keeping a copy:
 
 The server also owns the playlists themselves and their media. Those are
 content, not settings: they arrive in `_fleet/` on the media partition.
+
+The server library takes images and videos only. These are the same files
+that a screen can show. The images are `jpg`, `jpeg`, `png`, `gif`, `webp`,
+`avif` and `bmp`. The videos are `mp4`, `m4v`, `mov`, `webm`, `mkv` and `ogv`.
+An upload with another extension (for example `svg` or `pdf`) gets the answer
+422 on the `name` field. A playlist cannot hold a file of another kind.
 
 A `PUT /api/config` that changes one of the five answers 403 and names every one
 of them in `fields`.
@@ -114,6 +128,17 @@ that release from the public release page, checks its signature, and serves
 it to every paired screen from its own mirror. See `docs/updates.md` for how
 the health check and rollback work.
 
+The server stores a version without the letter "v". The tag `v1.5.0` on the
+public release page is `1.5.0` in the list, in the manifest and in the mirror
+path. A screen reports the same name, so the two always match.
+
+The Versions page marks a pre-release with a "pre-release" badge. GitHub sets
+that flag. The dialog of the approval warns for such a release, and you can
+still approve it to test it. The server never chooses a version on its own:
+only the version that you approve goes out. A screen orders versions by the
+rules of semver. `0.5.0-rc.10` is newer than `0.5.0-rc.9` and older than
+`0.5.0`.
+
 ### Closed networks
 
 When the server itself cannot reach the public release page, upload a
@@ -132,6 +157,10 @@ update.
   token on every call. Over plain HTTP, anybody on the path between the
   screen and the server can read that token. The device warns you when its
   server address is `http://` and is not a local address.
+- **A revoked token.** The server tells a screen to forget its pairing only
+  when it does not know the token. This is the one answer with the code
+  `token-revoked`. A request with no token gets a plain 401. A fault of the
+  database gets a 500. The screen then keeps its pairing and tries again.
 - **`trusted_proxies`.** Behind a reverse proxy, every request the server
   sees comes from the address of the proxy, not the real screen or admin.
   Name the proxy's address in `trusted_proxies` in `server.toml`, and the

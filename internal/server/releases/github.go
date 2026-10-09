@@ -35,6 +35,8 @@ type GitHubRelease struct {
 	Version     string    `json:"version"`
 	Notes       string    `json:"notes"`
 	PublishedAt time.Time `json:"published_at"`
+	// Prerelease is the flag that GitHub sets on a release that is not final.
+	Prerelease bool `json:"prerelease"`
 	// Assets maps a file name to the URL that serves it.
 	Assets map[string]string `json:"-"`
 }
@@ -44,6 +46,7 @@ type apiRelease struct {
 	TagName     string    `json:"tag_name"`
 	Body        string    `json:"body"`
 	Draft       bool      `json:"draft"`
+	Prerelease  bool      `json:"prerelease"`
 	PublishedAt time.Time `json:"published_at"`
 	Assets      []struct {
 		Name string `json:"name"`
@@ -191,6 +194,7 @@ func (l *Lister) fetch(ctx context.Context) ([]GitHubRelease, error) {
 			Version:     version.Normalize(r.TagName),
 			Notes:       r.Body,
 			PublishedAt: r.PublishedAt,
+			Prerelease:  r.Prerelease,
 			Assets:      map[string]string{},
 		}
 		for _, a := range r.Assets {

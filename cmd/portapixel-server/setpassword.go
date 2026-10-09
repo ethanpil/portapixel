@@ -27,7 +27,7 @@ func setPasswordCommand(args []string) int {
 	}
 
 	// A file that the server cannot read stops the command before the prompt.
-	if _, err := readFile(*dataDir); err != nil {
+	if _, _, err := readFile(*dataDir); err != nil {
 		return fail("%v", err)
 	}
 

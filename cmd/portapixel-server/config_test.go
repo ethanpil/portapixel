@@ -87,6 +87,56 @@ func TestConfigRepairsBadValues(t *testing.T) {
 	}
 }
 
+// TestConfigRepairsAValueOfTheWrongType covers a hand edit such as `listen = 8080`.
+// The decode into the struct failed at the first wrong type, and LoadConfig then
+// stopped the server although its comment promises a repair.
+func TestConfigRepairsAValueOfTheWrongType(t *testing.T) {
+	dir := t.TempDir()
+	content := "listen = 8080\n" +
+		"trusted_proxies = \"10.0.0.1\"\n" +
+		"github_repo = [\"a\"]\n" +
+		"public_url = \"https://keep.example.com\"\n" +
+		"admin_password_hash = \"$2a$10$abcdefghijklmnopqrstuv\"\n"
+	if err := os.WriteFile(ConfigPath(dir), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, warnings, err := LoadConfig(dir)
+	if err != nil {
+		t.Fatalf("a value of the wrong type stopped the server: %v", err)
+	}
+	if len(warnings) != 3 {
+		t.Fatalf("the load gave %d warnings, want 3: %v", len(warnings), warnings)
+	}
+	for _, key := range []string{"listen", "github_repo", "trusted_proxies"} {
+		found := false
+		for _, w := range warnings {
+			found = found || strings.HasPrefix(w, key+" ")
+		}
+		if !found {
+			t.Errorf("no warning names %s: %v", key, warnings)
+		}
+	}
+	if cfg.Listen != defaultListen || cfg.GitHubRepo != defaultRepo || len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("the repair gave %+v", cfg)
+	}
+	if cfg.PublicURL != "https://keep.example.com" || cfg.AdminPasswordHash == "" {
+		t.Fatalf("a bad value cost the user a good one: %+v", cfg)
+	}
+}
+
+// TestConfigStopsOnAFileThatIsNotTOML keeps the one error that stays. The parser
+// cannot say which line of such a file is good.
+func TestConfigStopsOnAFileThatIsNotTOML(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(ConfigPath(dir), []byte("listen = \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), ConfigName) {
+		t.Fatalf("a file that is not TOML gave %v, want an error that names %s", err, ConfigName)
+	}
+}
+
 func TestConfigFileIsNotReadableByEverybody(t *testing.T) {
 	dir := t.TempDir()
 	if err := SaveConfig(dir, defaults()); err != nil {

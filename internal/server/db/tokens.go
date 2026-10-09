@@ -3,6 +3,8 @@ package db
 import (
 	"strings"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/rnd"
 )
 
 // prefixLength is how much of an enrollment token the list shows. The admin sees
@@ -62,7 +64,7 @@ func (d *DB) CreateEnrollToken(name, mode string, groupID int64, expiresAt time.
 		expires = d.stamp(expiresAt)
 	}
 
-	token := newToken()
+	token := rnd.Hex(tokenBytes)
 	res, err := d.w.Exec(`INSERT INTO enrollment_tokens
 		(name, token_hash, prefix, mode, group_id, expires_at, max_uses, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,

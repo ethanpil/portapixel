@@ -30,7 +30,7 @@ func TestTheFirstRunReadsTheEnvironment(t *testing.T) {
 		!reflect.DeepEqual(cfg.TrustedProxies, []string{"10.9.9.9"}) {
 		t.Fatalf("the first run ignored the environment: %+v", cfg)
 	}
-	file, err := readFile(dir)
+	file, _, err := readFile(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,7 +61,7 @@ func TestASaveKeepsTheEnvironmentOutOfTheFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	file, err := readFile(dir)
+	file, _, err := readFile(dir)
 	if err != nil {
 		t.Fatal(err)
 	}

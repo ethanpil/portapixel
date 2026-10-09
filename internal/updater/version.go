@@ -1,6 +1,7 @@
 package updater
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -100,9 +101,10 @@ func shortText(data []byte) string {
 // older than every real version, so a development build sees a release as an
 // upgrade and a real release never goes back to "dev".
 //
-// A suffix such as "-rc1" makes a version older than the same version with no
-// suffix. The release check already leaves prereleases out; this rule is here so
-// that a fleet server which names one cannot cause a silent downgrade.
+// A suffix such as "-rc.1" makes a version older than the same version with no
+// suffix. The release check already leaves prereleases out. This rule is here so
+// that a fleet server which names one cannot cause a silent downgrade. Two suffixes
+// follow the order of semver: see comparePrerelease.
 func CompareVersions(a, b string) int {
 	aParts, aRest, aOK := parseVersion(a)
 	bParts, bRest, bOK := parseVersion(b)
@@ -142,7 +144,37 @@ func CompareVersions(a, b string) int {
 	case bRest == "":
 		return -1
 	}
-	return strings.Compare(aRest, bRest)
+	return comparePrerelease(aRest, bRest)
+}
+
+// comparePrerelease compares two suffixes by the rule of semver, section 11. The
+// suffix is split at the full stops. Two numbers are compared as numbers, so
+// "rc.10" is newer than "rc.9". A number is older than a word. Two words are
+// compared as text. When all shared parts are equal, the shorter suffix is older.
+func comparePrerelease(a, b string) int {
+	aIDs := strings.Split(strings.TrimPrefix(a, "-"), ".")
+	bIDs := strings.Split(strings.TrimPrefix(b, "-"), ".")
+	for i := 0; i < len(aIDs) && i < len(bIDs); i++ {
+		if c := compareIdentifier(aIDs[i], bIDs[i]); c != 0 {
+			return c
+		}
+	}
+	return cmp.Compare(len(aIDs), len(bIDs))
+}
+
+// compareIdentifier compares one part of a suffix. See comparePrerelease.
+func compareIdentifier(a, b string) int {
+	aNum, aErr := strconv.ParseUint(a, 10, 64)
+	bNum, bErr := strconv.ParseUint(b, 10, 64)
+	switch {
+	case aErr == nil && bErr == nil:
+		return cmp.Compare(aNum, bNum)
+	case aErr == nil:
+		return -1
+	case bErr == nil:
+		return 1
+	}
+	return strings.Compare(a, b)
 }
 
 // parseVersion splits a release name into its numbers and the rest. It reports

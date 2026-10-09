@@ -74,16 +74,19 @@ func ConfigPath(dataDir string) string { return filepath.Join(dataDir, ConfigNam
 // LoadConfig reads server.toml and applies the environment. It makes the file with
 // the defaults when it is not there, so a first run needs no hand-written file.
 //
-// A bad value gets its default back and a warning. The device configuration works
-// the same way and for the same reason: one wrong line must never stop the whole
-// server (D38 in spirit).
+// A bad value gets its default back and a warning. This includes a value of the
+// wrong type, for example a number in place of the listen address. The device
+// configuration works the same way and for the same reason: one wrong line must
+// never stop the whole server (D38 in spirit).
+//
+// A file that is not TOML at all is the one error. The parser cannot say which
+// line is good, so the server stops and names the file.
 func LoadConfig(dataDir string) (Config, []string, error) {
-	cfg, err := readFile(dataDir)
+	cfg, warnings, err := readFile(dataDir)
 	if err != nil {
 		return Config{}, nil, err
 	}
 
-	var warnings []string
 	if strings.TrimSpace(cfg.Listen) == "" {
 		cfg.Listen = defaultListen
 		warnings = append(warnings, "listen was empty, so the server uses "+defaultListen)
@@ -100,27 +103,81 @@ func LoadConfig(dataDir string) (Config, []string, error) {
 	return cfg, append(warnings, envWarnings...), nil
 }
 
-// readFile reads server.toml as the file holds it: no repair, no environment and no
-// flag. It makes the file with the defaults when it is not there.
-func readFile(dataDir string) (Config, error) {
+// readFile reads server.toml as the file holds it: no environment and no flag. It
+// makes the file with the defaults when it is not there.
+//
+// A value of the wrong type keeps its default, and the warnings name it. The
+// check of the values comes later, in LoadConfig.
+func readFile(dataDir string) (Config, []string, error) {
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		return Config{}, fmt.Errorf("make %s: %w", dataDir, err)
+		return Config{}, nil, fmt.Errorf("make %s: %w", dataDir, err)
 	}
 	path := ConfigPath(dataDir)
 
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		cfg := defaults()
-		return cfg, SaveConfig(dataDir, cfg)
+		return cfg, nil, SaveConfig(dataDir, cfg)
 	}
 	if err != nil {
-		return Config{}, fmt.Errorf("read %s: %w", path, err)
+		return Config{}, nil, fmt.Errorf("read %s: %w", path, err)
+	}
+
+	// The file goes into a plain map first. A decode into the struct stops at the
+	// first value of the wrong type and gives up the rest of the file.
+	var raw map[string]any
+	if err := toml.Unmarshal(data, &raw); err != nil {
+		return Config{}, nil, fmt.Errorf("read %s: %w", path, err)
 	}
 	cfg := defaults()
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return Config{}, fmt.Errorf("read %s: %w", path, err)
+	var warnings []string
+	stringField(raw, "listen", &cfg.Listen, &warnings)
+	stringField(raw, "public_url", &cfg.PublicURL, &warnings)
+	stringField(raw, "admin_password_hash", &cfg.AdminPasswordHash, &warnings)
+	stringField(raw, "tls_cert", &cfg.TLSCert, &warnings)
+	stringField(raw, "tls_key", &cfg.TLSKey, &warnings)
+	stringField(raw, "github_repo", &cfg.GitHubRepo, &warnings)
+	listField(raw, "trusted_proxies", &cfg.TrustedProxies, &warnings)
+	return cfg, warnings, nil
+}
+
+// stringField copies a string of the file into dst. Any other type leaves dst as
+// it is and adds a warning.
+func stringField(raw map[string]any, key string, dst *string, warnings *[]string) {
+	v, ok := raw[key]
+	if !ok {
+		return
 	}
-	return cfg, nil
+	s, ok := v.(string)
+	if !ok {
+		*warnings = append(*warnings, key+" must be a string, so the server uses its default")
+		return
+	}
+	*dst = s
+}
+
+// listField copies a list of strings of the file into dst. Any other type, or a
+// list with one entry that is not a string, leaves dst as it is and adds a warning.
+func listField(raw map[string]any, key string, dst *[]string, warnings *[]string) {
+	v, ok := raw[key]
+	if !ok {
+		return
+	}
+	items, ok := v.([]any)
+	if !ok {
+		*warnings = append(*warnings, key+" must be a list of strings, so the server uses its default")
+		return
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			*warnings = append(*warnings, key+" must be a list of strings, so the server uses its default")
+			return
+		}
+		out = append(out, s)
+	}
+	*dst = out
 }
 
 // saveField changes one value of server.toml and writes the file again.
@@ -129,9 +186,10 @@ func readFile(dataDir string) (Config, error) {
 // The configuration that runs also holds the environment, the --listen flag and the
 // repairs. Those must never go into the file: a PORTAPIXEL_TRUSTED_PROXIES that a
 // person removes later would stay in the file, and the server would still believe
-// that proxy. A hand edit of another value also stays.
+// that proxy. A hand edit of another value also stays. A value of the wrong type
+// comes back as its default, the same as at start.
 func saveField(dataDir string, change func(*Config)) error {
-	cfg, err := readFile(dataDir)
+	cfg, _, err := readFile(dataDir)
 	if err != nil {
 		return err
 	}

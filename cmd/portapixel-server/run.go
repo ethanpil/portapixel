@@ -54,12 +54,27 @@ func runCommand(args []string) int {
 	defer srv.Close()
 
 	// A signal stops the server. The context ends on the first one, and a second
-	// signal ends the process the hard way, because signal.NotifyContext stops
-	// listening after the first.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// signal ends the process at once.
+	ctx, stop := signalContext(os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	return srv.Serve(ctx)
+}
+
+// signalContext gives a context that ends on the first of the signals. After
+// that, the next one of them ends the process, because the default action of the
+// signal is back.
+//
+// signal.NotifyContext alone does not do this. It keeps its handler until the
+// stop function runs, so a second signal went nowhere while a slow shutdown
+// waited for a transfer.
+func signalContext(sigs ...os.Signal) (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
 }
 
 // server holds everything that the process owns.
@@ -100,8 +115,19 @@ type server struct {
 	fleet api.Fleet
 }
 
-// newServer opens the data directory and builds the routes.
+// newServer opens the data directory for a server that is about to run. It also
+// clears what a stopped process left behind.
 func newServer(dataDir, listenFlag string) (*server, error) {
+	return openServer(dataDir, listenFlag, true)
+}
+
+// openServer opens the data directory and builds the routes.
+//
+// With tidy false, it does not touch the mirror state and the release
+// directory. A server that runs may own both, and a mirror that it runs would
+// break. The selftest uses tidy false: it is a check, and a check changes
+// nothing that it checks.
+func openServer(dataDir, listenFlag string, tidy bool) (*server, error) {
 	cfg, warnings, err := LoadConfig(dataDir)
 	if err != nil {
 		return nil, err
@@ -157,6 +183,14 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A process that stopped in the middle of a mirror left a row that says
+	// "working", and nothing else would ever clear it.
+	if tidy {
+		if err := database.ResetWorkingMirrors(); err != nil {
+			database.Close()
+			return nil, err
+		}
+	}
 	store, err := media.New(dataDir)
 	if err != nil {
 		database.Close()
@@ -181,7 +215,9 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 
 	mirror := releases.NewMirror(dataDir, cfg.GitHubRepo)
 	// A stopped process can leave a staging directory and a part file behind.
-	mirror.CleanStaging()
+	if tidy {
+		mirror.CleanStaging()
+	}
 
 	bg, cancelBG := context.WithCancel(context.Background())
 	s := &server{

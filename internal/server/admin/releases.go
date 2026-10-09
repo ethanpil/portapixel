@@ -63,6 +63,7 @@ func (d Deps) listReleases(w http.ResponseWriter, r *http.Request, force bool) {
 			if releases.ValidVersion(rel.Version) {
 				notes = append(notes, db.ReleaseNote{
 					Version: rel.Version, Notes: rel.Notes, PublishedAt: rel.PublishedAt,
+					Prerelease: rel.Prerelease,
 				})
 			}
 		}
