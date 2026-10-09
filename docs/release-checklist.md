@@ -2,8 +2,8 @@
 
 This is the manual hardware checklist for a PortaPixel release. Check off
 each line by hand, on real hardware, before a release ships. Nothing in
-`docs/` or in CI can replace this list: CI proves that the daemon and mpv
-come up; this list proves that a person can watch the screen play.
+`docs/` or in CI can replace this list. CI proves that the daemon and mpv
+come up. This list proves that a person can watch the screen play.
 
 The checklist comes from the project plan, corrected for what the project
 actually built: the player is mpv, directly on DRM/KMS. See
@@ -81,8 +81,8 @@ hardware video decoder.
 - [ ] LuaJIT works in the mpv of the aarch64 image. A `fade` shows, and the ops
       log holds no `player.transition.fault`.
 - [ ] All 22 transitions look right on a vc4 and a v3d GPU with the `gpu` video
-      output: no black frame, no wrong colours, no early frame of the next
-      item. Note the number of steps of a 1080p transition on a Pi Zero 2 W.
+      output. There is no black frame, no wrong colour and no early frame of the
+      next item. Note the number of steps of a 1080p transition on a Pi Zero 2 W.
       The lab numbers come from software rendering and do not apply.
 - [ ] The copy of the screen (`screenshot-raw window`) and the texture upload of
       a transition step are fast enough on vc4. If a step takes more than

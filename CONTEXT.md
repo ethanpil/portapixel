@@ -50,7 +50,7 @@ The plan (D3 to D5) had a browser as the player. The first build used Chromium
 inside a `cage` session. On 2026-10-08 the owner chose mpv on DRM/KMS.
 `portapixeld` controls it over JSON IPC. There is no compositor and no browser.
 
-Why. A lab spike measured mpv on pp-zero, a virtual machine with the limits of
+Why. A lab spike measured mpv on pp-zero. This virtual machine has the limits of
 a Raspberry Pi Zero 2 W: 512 MB, the speed of an SD card, and a CPU duty cycle.
 It played the seven demo videos. The Chromium values come from earlier logs of
 the same machine. The spike did not run them again.
@@ -472,7 +472,7 @@ or with the ops log.
   of Alpine aarch64 does not have it. So HEVC is software on every Pi.
 - `vd-lavc-o=num_capture_buffers=8` goes in the per-file options of a video.
   Never put it on the command line. mpv gives the option to each decoder that it
-  opens, and a decoder that does not know it writes `AVOption ... not found`.
+  opens. A decoder that does not know it writes `AVOption ... not found`.
   On the command line that line came for each image and each redraw of the
   fallback screen. By default, the Pi H.264 decoder takes 20 buffers of about
   3.1 MB at 1080p from the CMA area. A 512 MB Pi has 128 MB of it.
@@ -495,8 +495,8 @@ or with the ops log.
   `libdvdread.so.8`, and `libdvdread` 6.1.3-r2 needs `libdvdcss.so.2` (checked with
   `readelf -d` on the packages on 2026-10-09). The library is not loaded with
   `dlopen`. The musl loader refuses `libdvdread` when the file is missing, so
-  mpv does not start. The device never reads a DVD:
-  the daemon gives mpv the path of a file in the media root, and the extension
+  mpv does not start. The device never reads a DVD.
+  The daemon gives mpv the path of a file in the media root, and the extension
   list has no disc format. `LICENSES-THIRD-PARTY.md` names the library.
 - Git Bash rewrites an argument that starts with a slash into a Windows path.
   It does this when the program is not a Git Bash program. `gh api /repos/...`

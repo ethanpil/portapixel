@@ -166,8 +166,8 @@ ssh -L 5902:127.0.0.1:5902 root@HOST
 the router gives it a fixed address.
 
 The pp-zero image runs the real x86_64 build with mpv. It was the machine for
-the lab spike of the change to mpv and for the checks of the transitions, Ken
-Burns and the screen power. Its `gpu` video output runs on llvmpipe (software),
+the lab spike of the change to mpv. It also ran the checks of the transitions,
+Ken Burns and the screen power. Its `gpu` video output runs on llvmpipe (software),
 so its CPU numbers for `gpu` say little about a Raspberry Pi.
 
 ## Limits

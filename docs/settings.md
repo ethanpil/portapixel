@@ -72,7 +72,7 @@ shows `gpu` drops frames or has a high CPU load, set `drm`.
 `power_method: auto` tries CEC first. CEC needs a `/dev/cec*` device and a
 display that answers the CEC probe. A television on HDMI then goes to
 standby, which is what a person calls "off." When CEC does not answer, the
-device falls back to DPMS, the power-saving mode of the display.
+device falls back to DPMS, the low-power mode of the display.
 
 DPMS needs no program. The daemon sets the DPMS property of each connected
 display through the DRM device of the kernel, and keeps the device open. The

@@ -18,19 +18,18 @@ server. See "How it is built" below.
 **PortaPixel is pre-release software.**
 
 - The project is proven in QEMU only. Nobody has run it on real hardware yet.
-- The lab has a virtual machine with the limits of a Raspberry Pi Zero 2 W:
-  512 MB of memory, the speed of an SD card and a slow CPU. It is a proxy.
+- The lab has a virtual machine with the limits of a Raspberry Pi Zero 2 W. It
+  has 512 MB of memory, the speed of an SD card and a slow CPU. It is a proxy.
   It has no VideoCore GPU and no hardware video decoder.
 - The Raspberry Pi image builds in CI. It has never started on a real
   Raspberry Pi.
 - The fleet server container builds and answers in CI. No fleet has run on it.
 - Treat every hardware claim below as untested until the release checklist
   says otherwise. See `docs/release-checklist.md`.
-- The memory numbers of the earlier Chromium builds no longer apply. The player
-  is mpv now, and the project has no new minimum yet.
-- A 512 MB device needs a fresh measurement on real hardware. In the lab proxy,
-  mpv used 87 to 136 MB of RAM with the `drm` video output. It used 108 to
-  215 MB with the `gpu` output. A PC with no GPU made these numbers, not a Pi.
+- The project has no minimum memory size yet. A 512 MB device needs a fresh
+  measurement on real hardware. In the lab proxy, mpv used 87 to 136 MB of RAM
+  with the `drm` video output. It used 108 to 215 MB with the `gpu` output. A PC
+  with no GPU made these numbers, not a Pi.
 - The first boot of a machine with less than 1 GB makes a zram swap device as
   large as the memory.
 
