@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/manifest"
+	"github.com/ethanpil/portapixel/internal/rnd"
 )
 
 // ErrBadToken says that the token of an enroll request is not one that this
@@ -81,17 +82,9 @@ func equalHash(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// newToken makes a secret of 32 random bytes as hex. Device tokens, enrollment
-// tokens and claim secrets all use it.
-func newToken() string {
-	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand does not fail on any system that we run on. A token of
-		// zeros would be a token that anybody can guess, so stop instead.
-		panic("db: the system gave no random bytes: " + err.Error())
-	}
-	return hex.EncodeToString(b[:])
-}
+// tokenBytes is the size of a secret. Device tokens, enrollment tokens and claim
+// secrets are tokenBytes random bytes as hex, from rnd.Hex.
+const tokenBytes = 32
 
 // newPairingCode makes a 6-character pairing code.
 func newPairingCode() string {
@@ -306,7 +299,7 @@ func (d *DB) answerClaim(tx *tx, req manifest.EnrollRequest, ip string, now time
 	// The token is made at this moment and not at the moment of approval, so the
 	// server never holds a device token in plain form, not even for the minute
 	// between an approval and the next poll of the device.
-	token := newToken()
+	token := rnd.Hex(tokenBytes)
 	if err := d.pairRow(tx, req, ip, now, hashSecret(token)); err != nil {
 		return EnrollResult{}, false, err
 	}
@@ -356,7 +349,7 @@ func (d *DB) enrollWithEnrollmentToken(tx *tx, req manifest.EnrollRequest, ip st
 		equalHash(row.hardwareID, req.HardwareID):
 		// R2: the reflashed card of a box that we know. The hardware ID matches,
 		// so this is the same machine and it gets a new token.
-		token := newToken()
+		token := rnd.Hex(tokenBytes)
 		if err := d.pairRow(tx, req, ip, now, hashSecret(token)); err != nil {
 			return EnrollResult{}, err
 		}
@@ -373,7 +366,7 @@ func (d *DB) enrollWithEnrollmentToken(tx *tx, req manifest.EnrollRequest, ip st
 		if err := d.upsertDevice(tx, req, ip, now, intFromNull(groupID), true); err != nil {
 			return EnrollResult{}, err
 		}
-		token := newToken()
+		token := rnd.Hex(tokenBytes)
 		if err := d.pairRow(tx, req, ip, now, hashSecret(token)); err != nil {
 			return EnrollResult{}, err
 		}
@@ -445,7 +438,7 @@ func (d *DB) makePending(tx *tx, req manifest.EnrollRequest, ip string, now time
 		ORDER BY id LIMIT 1`, req.DeviceID, req.HardwareID).Scan(&rowID, &code)
 	switch {
 	case err == nil:
-		secret := newToken()
+		secret := rnd.Hex(tokenBytes)
 		if _, err := tx.Exec(`UPDATE pending_enrollments
 			SET claim_hash = ?, hardware_id = ?, name = ?, version = ?, ip = ?,
 			    token_id = ?, collides_with = ?, last_poll_at = ?
@@ -478,7 +471,7 @@ func (d *DB) makePending(tx *tx, req manifest.EnrollRequest, ip string, now time
 	if err != nil {
 		return EnrollResult{}, err
 	}
-	secret := newToken()
+	secret := rnd.Hex(tokenBytes)
 	if _, err := tx.Exec(`INSERT INTO pending_enrollments
 		(claim_hash, pairing_code, device_id, hardware_id, name, version, ip,
 		 token_id, collides_with, created_at, last_poll_at)
