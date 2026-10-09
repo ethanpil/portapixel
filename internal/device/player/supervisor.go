@@ -49,7 +49,8 @@ const (
 	// the picture on the screen. The clock changes each minute, so a new minute
 	// shows inside this time.
 	fallbackCheck = 5 * time.Second
-	// shiftEvery moves the fallback screen a little, against burn-in.
+	// shiftEvery moves the fallback screen a little, against burn-in. It is a
+	// whole number of minutes, so the step changes with the clock on the screen.
 	shiftEvery = 3 * time.Minute
 	// failedRetry is the wait before the player tries a playlist again when no
 	// item of it could play. The fallback screen shows in that time.
@@ -246,7 +247,6 @@ type loaded struct {
 
 // fallbackScreen is the state of the fallback screen.
 type fallbackScreen struct {
-	since   time.Time
 	checked time.Time
 	info    fallback.Info
 	// failed says that the last draw did not work. mpv then has no fallback
@@ -1298,7 +1298,7 @@ func (s *Supervisor) clearList() {
 
 // showFallback shows the fallback screen (D18).
 func (s *Supervisor) showFallback(now time.Time, why string) {
-	s.fb = fallbackScreen{since: now}
+	s.fb = fallbackScreen{}
 	if s.drawFallback(now, s.fallbackInfo(now)) {
 		s.logRepeat("player.fallback", why, "the fallback screen shows: "+why)
 	}
@@ -1344,7 +1344,10 @@ func (s *Supervisor) drawFallback(now time.Time, info fallback.Info) bool {
 func (s *Supervisor) fallbackInfo(now time.Time) fallback.Info {
 	info := s.opt.Fallback()
 	info.Now = s.local(now).Truncate(time.Minute)
-	info.Shift = int(now.Sub(s.fb.since) / shiftEvery)
+	// The step comes from the minute on the screen. It counted from the time
+	// that the fallback screen came, so it changed between two minutes and cost
+	// 20 more renders in each hour.
+	info.Shift = int(info.Now.Unix() / int64(shiftEvery/time.Second))
 	return info
 }
 

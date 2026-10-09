@@ -337,16 +337,45 @@ func TestFallbackScreen(t *testing.T) {
 
 	// The layout moves a little every few minutes, against burn-in.
 	h.settle()
+	h.mu.Lock()
+	shift := h.renders[len(h.renders)-1].Shift
+	h.mu.Unlock()
 	h.advance(shiftEvery)
 	waitFor(t, "a shifted render", func() bool {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		return h.renders[len(h.renders)-1].Shift > 0
+		return h.renders[len(h.renders)-1].Shift != shift
 	})
 
 	// Content comes back.
 	h.setManifest(threeItems())
 	h.waitPlaying(0)
+}
+
+// The burn-in step changes with the minute on the screen, so it needs no render
+// of its own. It counted from the time that the fallback screen came, and a
+// screen that came at 12:00:37 drew again at 12:03:37 with the same clock.
+func TestTheBurnInStepChangesWithTheClock(t *testing.T) {
+	h := newHarness(t, library.PlayerManifest{}, func(o *Options, h *harness) {
+		h.clock.Set(time.Date(2026, 10, 8, 12, 0, 37, 0, time.UTC))
+	})
+	waitFor(t, "a render", func() bool { return h.renderCount() > 0 })
+	h.settle()
+	for range 48 { // four minutes in steps of 5 s
+		h.advance(fallbackCheck)
+	}
+	h.mu.Lock()
+	renders := slices.Clone(h.renders)
+	h.mu.Unlock()
+	for i := 1; i < len(renders); i++ {
+		if renders[i].Now.Equal(renders[i-1].Now) {
+			t.Errorf("render %d has the clock %s of the render before it; shift %d -> %d",
+				i, renders[i].Now.Format("15:04"), renders[i-1].Shift, renders[i].Shift)
+		}
+	}
+	if first, last := renders[0].Shift, renders[len(renders)-1].Shift; first == last {
+		t.Errorf("the step stayed at %d for four minutes", first)
+	}
 }
 
 // The check of the fallback screen reads the data of the daemon, and a redraw
