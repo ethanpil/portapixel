@@ -423,6 +423,69 @@ func TestRestartAfterExit(t *testing.T) {
 	}
 }
 
+// A file that ends mpv while it opens has shown nothing, so the item on the
+// screen is the item before it. The new mpv must start after the file that mpv
+// opened, and leave that file out: mpv loops the list, and each pass would end
+// mpv again and count a step on the ladder. A playlist change gives the file a
+// new try.
+func TestAFileThatEndsMPVIsLeftOut(t *testing.T) {
+	m := playlist("lobby", "fade", 400,
+		library.ManifestItem{Name: "a.jpg"},
+		library.ManifestItem{Name: "b.jpg"},
+		library.ManifestItem{Name: "crash.mp4"},
+		library.ManifestItem{Name: "d.jpg"},
+	)
+	h := newHarness(t, m, nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+	h.settle()
+	h.ctl("fake-next")
+	h.waitPlaying(1)
+	h.settle()
+	h.call("fake-next") // crash.mp4 opens, and the fake ends
+
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	h.waitPlaying(3)
+	d := h.dump()
+	var names []string
+	for _, e := range d.List {
+		names = append(names, filepath.Base(e.Path))
+	}
+	if !slices.Equal(names, []string{"d.jpg", "a.jpg", "b.jpg"}) {
+		t.Fatalf("the new list is %v, want d.jpg, a.jpg, b.jpg", names)
+	}
+	// The transition of b.jpg goes into d.jpg, the item that now comes after it.
+	if got := d.List[2].Opts["script-opts"]; got != "pptr-kind=fade,pptr-ms=400" {
+		t.Errorf("b.jpg has the script options %q", got)
+	}
+	if !h.eventWith("player.item.crash", "crash.mp4") {
+		t.Errorf("no player.item.crash line:\n%s", h.events())
+	}
+
+	// Two passes of the list: no more exits.
+	for range 6 {
+		h.settle()
+		h.ctl("fake-next")
+	}
+	h.settle()
+	if n := h.countEvent("player.exit"); n != 1 || h.sup.State().Restarts != 1 || h.rebootCount() != 0 {
+		t.Fatalf("exits = %d, restarts = %d, reboots = %d:\n%s", n, h.sup.State().Restarts, h.rebootCount(), h.events())
+	}
+
+	// A new version of the playlist tries the file again.
+	m2 := playlist("lobby", "cut", 0,
+		library.ManifestItem{Name: "a.jpg"},
+		library.ManifestItem{Name: "b.jpg"},
+		library.ManifestItem{Name: "crash.mp4"},
+		library.ManifestItem{Name: "d.jpg"},
+	)
+	h.setManifest(m2)
+	waitFor(t, "the new list with the file", func() bool {
+		d, ok := h.tryDump()
+		return ok && len(d.List) == 4
+	})
+}
+
 // The resume point is for the first load after a restart. If a fallback screen
 // takes that load, the point is gone: the same playlist, much later, starts at its
 // first item and not in the middle.

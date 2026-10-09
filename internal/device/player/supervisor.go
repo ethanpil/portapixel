@@ -230,15 +230,20 @@ type request struct {
 type loaded struct {
 	fallback bool
 	playlist *library.ManifestPlaylist
-	// offset is the manifest index of the first entry of mpv. A restart starts
-	// the list at the item that comes next, so mpv index 0 is not always item 0.
-	offset int
+	// order holds the manifest index of each entry of mpv, in the order of mpv.
+	// A restart starts the list at the item that comes next, so mpv index 0 is
+	// not always item 0, and an item that ended mpv is not in the list.
+	order  []int
 	single bool
 	// tried says that mpv started a file of this list. Before that, an idle mpv
 	// is an mpv that did not start yet, not a list that failed.
 	tried bool
 	// entries maps the playlist_entry_id of mpv to the manifest index.
 	entries map[int64]int
+	// opened is the manifest index of the file that mpv started last, or -1.
+	// openShown says that this file showed its first frame.
+	opened    int
+	openShown bool
 }
 
 // fallbackScreen is the state of the fallback screen.
@@ -278,6 +283,10 @@ type Supervisor struct {
 	failedAt   time.Time
 	resumeFrom *resumePoint
 	fb         fallbackScreen
+	// crashed holds the paths of the files that ended mpv while it opened
+	// them. The list of mpv leaves them out until the playlist changes, because
+	// mpv loops the list and would open such a file again at each pass.
+	crashed map[string]bool
 
 	expectExit bool
 	everUp     bool
@@ -370,6 +379,7 @@ func New(opt Options) *Supervisor {
 		waitDelay:   opt.DisplayProbe,
 		launchDelay: launchRetryMin,
 		notes:       make(map[string]time.Time),
+		crashed:     make(map[string]bool),
 	}
 	if s.opt.Reboot == nil {
 		// The ladder must always end somewhere. Without a reboot function the end
@@ -661,6 +671,8 @@ func (s *Supervisor) handleExit(now time.Time) {
 		s.expectExit = true
 		reason := s.proc.exitReason()
 		s.log("player.exit", reason)
+		s.drainOpens()
+		s.markCrashed()
 		s.resumeFrom = s.resumePoint(resumeNext)
 		s.dropIPC()
 		s.clearList()
@@ -677,6 +689,51 @@ func (s *Supervisor) handleExit(now time.Time) {
 		return
 	}
 	s.launch(now)
+}
+
+// drainOpens reads the events that mpv wrote before it ended and that the loop
+// did not take yet. It keeps only the start and the first frame of a file:
+// the exit rule needs to know which file mpv opened last. The rest is about an
+// mpv that has ended.
+func (s *Supervisor) drainOpens() {
+	if s.ipc == nil {
+		return
+	}
+	// mpv has ended, so the socket gives its last lines and then its end.
+	limit := time.After(100 * time.Millisecond)
+	for {
+		select {
+		case m, ok := <-s.ipc.msgs:
+			if !ok {
+				return
+			}
+			switch m.Event {
+			case "start-file":
+				s.onStartFile(m)
+			case "playback-restart":
+				if s.list != nil {
+					s.list.openShown = true
+				}
+			}
+		case <-limit:
+			return
+		}
+	}
+}
+
+// markCrashed records the file that ended mpv while it opened it: mpv started
+// the file and ended before its first frame. mpv loops the list, so it would
+// open the file again at each pass, and each exit is a step on the ladder. The
+// next lists leave the file out until the playlist changes.
+func (s *Supervisor) markCrashed() {
+	l := s.list
+	if l == nil || l.fallback || l.opened < 0 || l.openShown {
+		return
+	}
+	it := l.playlist.Items[l.opened]
+	s.crashed[it.Path] = true
+	s.log("player.item.crash", fmt.Sprintf("the item %d (%s) of %s ended mpv while it opened; the player leaves it out "+
+		"until the playlist changes", l.opened, it.Name, l.playlist.Name))
 }
 
 // launch starts mpv. The IPC connect and the playlist come in the next passes of
@@ -822,13 +879,23 @@ func (s *Supervisor) onMessage(m message, now time.Time) {
 	case "property-change":
 		s.onProperty(m, now)
 	case "start-file":
-		if s.list != nil {
-			s.list.tried = true
-		}
+		s.onStartFile(m)
 	case "playback-restart":
 		s.onPlaybackRestart(now)
 	case "end-file":
 		s.onEndFile(m, now)
+	}
+}
+
+// onStartFile takes the start of a file. The file has no frame on the screen
+// yet: it can fail, or end mpv, while mpv opens it.
+func (s *Supervisor) onStartFile(m message) {
+	if s.list == nil {
+		return
+	}
+	s.list.tried = true
+	if idx, ok := s.list.entries[m.EntryID]; ok && !s.list.fallback {
+		s.list.opened, s.list.openShown = idx, false
 	}
 }
 
@@ -944,6 +1011,9 @@ func (s *Supervisor) onIdle(now time.Time) {
 func (s *Supervisor) onPlaybackRestart(now time.Time) {
 	s.shownSinceLaunch = true
 	s.launchDelay = launchRetryMin
+	if s.list != nil {
+		s.list.openShown = true
+	}
 	s.mu.Lock()
 	s.shown = true
 	s.mu.Unlock()
@@ -977,11 +1047,11 @@ func (s *Supervisor) onEndFile(m message, now time.Time) {
 // showed its first frame, so the timers of the item start again even when the
 // item is the same (one image alone, or a video in a loop).
 func (s *Supervisor) setIndex(pos int, now time.Time, restart bool) {
-	if s.list == nil || s.list.fallback || pos < 0 || pos >= len(s.list.playlist.Items) {
+	if s.list == nil || s.list.fallback || pos < 0 || pos >= len(s.list.order) {
 		return
 	}
 	items := s.list.playlist.Items
-	idx := (pos + s.list.offset) % len(items)
+	idx := s.list.order[pos]
 	if idx != s.cur {
 		s.cur = idx
 		it := items[idx]
@@ -1053,9 +1123,25 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	start := 0
 	if resume != nil && resume.name == p.Name && resume.count == n {
 		start = resume.index
+	} else {
+		// Another playlist, or a change of this one: each file gets a new try.
+		clear(s.crashed)
 	}
+	// The list starts at the resume item, and mpv loops it, so the order of the
+	// loop stays the order of the playlist. A file that ended mpv is left out.
+	var order []int
+	for j := range n {
+		if idx := (start + j) % n; !s.crashed[p.Items[idx].Path] {
+			order = append(order, idx)
+		}
+	}
+	if len(order) == 0 {
+		s.showFallback(now, "each item of the playlist ended mpv")
+		return
+	}
+	single := len(order) == 1
 	s.fb.failed = false // the content takes the place of the fallback screen
-	s.newList(&loaded{playlist: p, offset: start, single: n == 1})
+	s.newList(&loaded{playlist: p, order: order, single: single})
 	// Ken Burns runs on vo=gpu only. On vo=drm, mpv scales the picture in
 	// software at each step of the zoom. That took a quarter of a fast core at 10
 	// steps in a second in the lab, and a Pi Zero 2 W has far less. The copy of the
@@ -1065,24 +1151,21 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 		s.logRepeat("player.kenburns.off", p.Name, p.Name+": Ken Burns is off, because the video output is "+
 			s.output+" and not "+OutputGPU)
 	}
-	// mpv loads the first file of a replace at once and the others behind it. The
-	// list starts at the resume item, and mpv loops it, so the order of the loop
-	// stays the order of the playlist.
-	for j := range n {
-		idx := (start + j) % n
+	// mpv loads the first file of a replace at once and the others behind it.
+	for j, idx := range order {
 		mode := "append"
 		if j == 0 {
 			mode = "replace"
 		}
-		next := p.Items[(idx+1)%n]
-		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p.Items[idx], next, kenBurns, n == 1, s.model)) {
+		next := p.Items[order[(j+1)%len(order)]]
+		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p.Items[idx], next, kenBurns, single, s.model)) {
 			// A write that fails waited for its time limit. The next ones would wait
 			// as long each. The silence rule restarts mpv.
 			break
 		}
 	}
 	s.logRepeat("player.playlist", p.Name, fmt.Sprintf("%s: %d items, transition %s %d ms",
-		p.Name, n, p.Transition, p.TransitionMS))
+		p.Name, len(order), p.Transition, p.TransitionMS))
 }
 
 // fileOptions gives the per-file options of one item (ARCHITECTURE 7a). mpv sets
@@ -1144,6 +1227,7 @@ func scriptOpts(kind string, ms, kb int) string {
 func (s *Supervisor) newList(l *loaded) {
 	s.gen++
 	l.entries = make(map[int64]int)
+	l.opened = -1
 	s.list = l
 	s.cur = -1
 	s.posKnown = false
@@ -1270,12 +1354,28 @@ func (s *Supervisor) restart(reason string, counted bool, at resumeAt) {
 }
 
 // resumePoint gives the item that the next mpv starts at.
+//
+// With no list, mpv ended before it had one (it did not connect), so the point
+// of the restart before it still waits for its load.
+//
+// resumeNext starts after the file that mpv opened last, and not after the item
+// on the screen: a file that ends mpv while it opens has shown nothing. With no
+// item seen at all, the first entry of the list is the file that mpv opened.
 func (s *Supervisor) resumePoint(at resumeAt) *resumePoint {
-	if at == resumeStart || s.list == nil || s.list.fallback || s.cur < 0 {
+	if s.list == nil {
+		return s.resumeFrom
+	}
+	if at == resumeStart || s.list.fallback {
 		return nil
 	}
 	n := len(s.list.playlist.Items)
 	index := s.cur
+	switch {
+	case at == resumeNext && s.list.opened >= 0:
+		index = s.list.opened
+	case index < 0:
+		index = s.list.order[0]
+	}
 	if at == resumeNext {
 		index = (index + 1) % n
 	}
