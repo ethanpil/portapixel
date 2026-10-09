@@ -208,6 +208,7 @@ const (
 	reqPos
 	reqRestartPos
 	reqTimePos
+	reqCacheTime
 	reqDropVO
 	reqDropDec
 	reqBaseVO
@@ -278,6 +279,10 @@ type Supervisor struct {
 	lastPos   float64
 	posKnown  bool
 	lastMove  time.Time
+	// readTo is demuxer-cache-time of the video: the time up to which the
+	// demuxer has read the file. readKnown is false when mpv did not give it.
+	readTo    float64
+	readKnown bool
 	// failedAt is when no item of the playlist could play. The fallback screen
 	// shows from then until the retry.
 	failedAt   time.Time
@@ -900,6 +905,11 @@ func (s *Supervisor) poll(now time.Time) {
 	if !ok {
 		return
 	}
+	if it.Kind == kindVideo {
+		// Before time-pos, so that the stall rule has it when the answer about
+		// the position comes (see onTimePos).
+		s.request(now, reqCacheTime, 0, "get_property", "demuxer-cache-time")
+	}
 	// Also for an image: an animated GIF, PNG or WebP plays as a video in mpv,
 	// and its position moves (see checkWatchdog).
 	s.request(now, reqTimePos, 0, "get_property", "time-pos")
@@ -979,6 +989,8 @@ func (s *Supervisor) onReply(m message, now time.Time) {
 		var v float64
 		known := success && json.Unmarshal(m.Data, &v) == nil
 		s.onTimePos(v, known, now)
+	case reqCacheTime:
+		s.readKnown = success && json.Unmarshal(m.Data, &s.readTo) == nil
 	case reqDropVO, reqDropDec, reqBaseVO, reqBaseDec:
 		var n int
 		if success && json.Unmarshal(m.Data, &n) == nil {
@@ -1114,6 +1126,7 @@ func (s *Supervisor) setIndex(pos int, now time.Time, restart bool) {
 		s.itemStart = now
 		s.lastMove = now
 		s.posKnown = false
+		s.readKnown = false
 	}
 }
 

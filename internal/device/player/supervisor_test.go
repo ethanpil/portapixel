@@ -712,6 +712,32 @@ func TestRestartWhenVideoStalls(t *testing.T) {
 	}
 }
 
+// A video whose next frame is far ahead stands still on the screen, and its
+// time-pos does not move: a slideshow video with one frame in 30 s, or a still
+// part of a video with a variable frame rate. The demuxer has read the next
+// frame, so mpv waits for its time and is not stuck. Such a video was a stall,
+// and each pass of the playlist counted a restart.
+func TestAVideoThatWaitsForItsNextFrameIsNotAStall(t *testing.T) {
+	h := newHarness(t, videos(), nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+	h.ctl("fake-gap", 60) // the next frame is 60 s ahead
+	h.ctl("fake-stall")
+	for range 20 { // 40 s: more than heartbeatTimeout
+		h.advance(2 * time.Second)
+	}
+	if h.sup.proc.pid() != first || h.eventWith("player.restart", "did not move") {
+		t.Fatalf("a video that waits for its next frame was restarted:\n%s", h.events())
+	}
+
+	// Past the time of the next frame and the timeout, it is a stall.
+	h.advance(60 * time.Second)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "did not move") {
+		t.Fatalf("no stall line:\n%s", h.events())
+	}
+}
+
 // An image that stays longer than its duration and the grace is restarted.
 func TestRestartWhenImageOverruns(t *testing.T) {
 	h := newHarness(t, threeItems(), nil)

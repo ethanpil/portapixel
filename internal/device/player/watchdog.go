@@ -155,7 +155,28 @@ func (s *Supervisor) onTimePos(value float64, pos bool, now time.Time) {
 	if !set.Enabled {
 		return
 	}
-	if still := now.Sub(s.lastMove); still >= set.HeartbeatTimeout {
+	if still := now.Sub(s.lastMove); still >= set.HeartbeatTimeout+s.nextFrameWait() {
 		s.restart(fmt.Sprintf("the video %s did not move for %s", it.Name, still.Round(time.Second)), true, resumeNext)
 	}
+}
+
+// maxFrameWait is the longest time that the stall rule waits for a next frame
+// that the demuxer has read. It also keeps the sum in the range of a Duration.
+const maxFrameWait = time.Hour
+
+// nextFrameWait gives the time from the position on the screen to the end of
+// what the demuxer has read. The next frame of the video can be far ahead: a
+// slideshow video with one frame in 30 s, or a still part of a video with a
+// variable frame rate. mpv shows the frame until the time of the next one, and
+// time-pos stands still until then. The demuxer has read that next frame, so
+// mpv waits for its time and is not stuck. Such a video was a stall, and each
+// pass of the playlist counted a restart.
+//
+// A decoder that hangs asks for no more data. The demuxer then reads about one
+// second ahead, and the rule waits about one second more.
+func (s *Supervisor) nextFrameWait() time.Duration {
+	if !s.readKnown || s.readTo <= s.lastPos {
+		return 0
+	}
+	return min(time.Duration((s.readTo-s.lastPos)*float64(time.Second)), maxFrameWait)
 }

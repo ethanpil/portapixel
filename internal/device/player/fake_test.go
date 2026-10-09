@@ -26,6 +26,8 @@ import (
 //	fake-next           the item on the screen ends; the next one shows
 //	fake-hang           answer nothing more, as an mpv after SIGSTOP
 //	fake-stall          time-pos stops
+//	fake-gap <seconds>  the next frame of a video is this far ahead of time-pos:
+//	                    demuxer-cache-time gives time-pos and the gap
 //	fake-exit <code>    end the process
 //	fake-drops <vo> <decoder>  set the two dropped frame counters
 //	fake-fault <text>   set user-data/pptr/fault, as transitions.lua does: a
@@ -74,6 +76,7 @@ type fakeMPV struct {
 	scheduled int
 	timePos   float64
 	stall     bool
+	gap       float64
 	hang      bool
 	vo, dec   int
 	faults    int
@@ -211,6 +214,9 @@ func (f *fakeMPV) handle(c *fakeClient, name string, a []any, id int64, args []s
 	case "fake-stall":
 		f.stall = true
 		reply(nil, "success")
+	case "fake-gap":
+		f.gap, _ = a[0].(float64)
+		reply(nil, "success")
 	case "fake-exit":
 		code, _ := a[0].(float64)
 		os.Exit(int(code))
@@ -287,6 +293,11 @@ func (f *fakeMPV) value(prop string) any {
 			return 0.0
 		}
 		return f.timePos
+	case "demuxer-cache-time":
+		if f.pos < 0 || isImagePath(f.list[f.pos].Path) {
+			return nil
+		}
+		return f.timePos + f.gap
 	case "frame-drop-count":
 		return f.vo
 	case "decoder-frame-drop-count":
