@@ -10,8 +10,19 @@ virtual machines on the LAN of the owner:
 | `pp-zero` | A Raspberry Pi Zero 2 W proxy from the real x86_64 image | 16 GB, SD card speed | 512 MB | 4, with a duty cycle |
 
 Each VM has a tap device in the bridge `br0`. The LAN router gives each VM its
-own address with DHCP. So a person tests the two machines from a desktop, in the
-same way as two real machines.
+own address with DHCP. So a person tests the machines from a desktop, in the
+same way as real machines.
+
+Which script covers which VM:
+
+| VM | Start | Stop | Status | Screenshot |
+|---|---|---|---|---|
+| `pp-server` | `start-server.sh` | `stop.sh server` | `status.sh` | none |
+| `pp-client` | `start-client.sh` | `stop.sh client` | `status.sh` | `shot.sh`, or VNC on port 5901 |
+| `pp-zero` | `start-zero.sh` | `stop-zero.sh` | none (see "pp-zero" below) | VNC on port 5902 |
+
+`pp-zero` has its own scripts. `pp-lab.start`, `status.sh`, `stop.sh` and
+`shot.sh` do not cover it.
 
 The scripts run on an Alpine host that has KVM, a tap device and QEMU. The host
 of this lab is an LXC container on Proxmox, which has no loop devices. So the
@@ -91,7 +102,7 @@ goes away at the next start.
 sh install-server.sh                      # needs seed/authorized_keys
 sh make-client-disk.sh /path/to/portapixel-VERSION-x86_64.img.gz
 
-# 2. Start the two machines.
+# 2. Start the two machines. pp-zero has its own steps, see "pp-zero" below.
 sh start-server.sh
 sh start-client.sh
 sh status.sh
@@ -121,7 +132,8 @@ sh shot.sh /tmp/screen.png
 
 Copy `pp-lab.start` to `/etc/local.d/pp-lab.start`, make it executable and run
 `rc-update add local default`. The script makes the bridge when it is missing
-and starts the two VMs.
+and starts pp-server and pp-client. It does not start pp-zero. Start that VM by
+hand with `start-zero.sh`.
 
 ## pp-zero, the Pi Zero 2 W proxy
 
@@ -141,6 +153,22 @@ sh stop-zero.sh
 
 `make-zero-disk.sh` with no image keeps the base and makes a new overlay, which
 is a new first boot.
+
+To see the screen of pp-zero, make an SSH tunnel and point a VNC client at
+`127.0.0.1:5902`:
+
+```sh
+ssh -L 5902:127.0.0.1:5902 root@HOST
+```
+
+`status.sh` does not report pp-zero. Its files are in `$LAB/zero`: `qemu.pid`,
+`serial.log` and `monitor.sock`. The MAC of pp-zero is in the table above, so
+the router gives it a fixed address.
+
+The pp-zero image runs the real x86_64 build with mpv. It was the machine for
+the lab spike of the change to mpv and for the checks of the transitions, Ken
+Burns and the screen power. Its `gpu` video output runs on llvmpipe (software),
+so its CPU numbers for `gpu` say little about a Raspberry Pi.
 
 ## Limits
 
