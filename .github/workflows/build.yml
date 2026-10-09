@@ -715,8 +715,10 @@ jobs:
           sha256sum -c SHA256SUMS
           if [ "$SIGNED" = yes ]; then
             sudo apt-get update -qq && sudo apt-get install -y -qq minisign
-            for f in portapixeld-* portapixel-server-*; do
-              case "$f" in *.minisig) continue ;; esac
+            # The same four binaries that tests/ci/sign-release.sh signs. A
+            # pattern such as portapixel-server-* also takes the deploy bundle,
+            # which has no signature.
+            for f in portapixeld-amd64 portapixeld-arm64 portapixel-server-amd64 portapixel-server-arm64; do
               minisign -V -P "$PP_PUBLIC_KEY" -m "$f" -x "$f.minisig"
             done
           else
