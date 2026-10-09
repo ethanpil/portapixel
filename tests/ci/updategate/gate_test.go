@@ -579,7 +579,7 @@ func TestRefusals(t *testing.T) {
 // /etc/conf.d/portapixeld, which the init script passes to --run.
 func runDir(root string) string { return filepath.Join(root, "run") }
 
-// startDaemon starts the real daemon of a release with the browser off. It stops
+// startDaemon starts the real daemon of a release with the player off. It stops
 // the daemon and prints its log through t.Cleanup, so a round that fails leaves no
 // live process behind and still shows the log that explains the failure.
 //

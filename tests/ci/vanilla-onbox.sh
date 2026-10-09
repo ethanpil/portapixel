@@ -18,8 +18,11 @@ sh /root/pp/os/install.sh \
 	--binary /root/portapixeld \
 	--version "$VERSION"
 
-# The daemon needs a browser to show a picture, and this virtual machine has no
-# display. The gate after the reboot is the API, not the browser.
+# The player package must install on-box too. This virtual machine has no
+# display, so mpv cannot show a picture here, and the gate after the reboot is
+# the API, not the player.
+command -v mpv
+mpv --version | head -n 1
 rc-update 2>/dev/null | grep -E 'portapixeld|portapixel-net' || true
 sync
 echo ONBOX-INSTALL-DONE
