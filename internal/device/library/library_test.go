@@ -636,6 +636,76 @@ file = "notes.txt"
 	}
 }
 
+// An item can name its own transition and its own length. Each one falls back by
+// itself: the item, then the playlist, then the device. The player gets the
+// result and has no rule of its own.
+func TestBuildManifestItemTransitions(t *testing.T) {
+	type tr struct {
+		word string
+		ms   int
+	}
+	tests := []struct {
+		name     string
+		playlist string
+		want     []tr
+	}{
+		{
+			name: "the playlist sets a word",
+			playlist: `
+[playlist]
+transition = "wipe-left"
+[[item]]
+file = "a.jpg"
+[[item]]
+file = "b.jpg"
+transition = "split"
+transition_ms = 900
+[[item]]
+file = "c.jpg"
+transition_ms = 250
+[[item]]
+file = "d.jpg"
+transition = "cut"
+`,
+			want: []tr{{"wipe-left", 500}, {"split", 900}, {"wipe-left", 250}, {"cut", 500}},
+		},
+		{
+			name: "the playlist sets nothing and the device decides",
+			playlist: `
+[[item]]
+file = "a.jpg"
+[[item]]
+file = "b.jpg"
+transition = "zoom-out"
+[[item]]
+file = "c.jpg"
+transition_ms = 250
+`,
+			want: []tr{{"fade", 500}, {"zoom-out", 500}, {"fade", 250}},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.dir(t, "default", tt.playlist, "a.jpg", "b.jpg", "c.jpg", "d.jpg")
+			p, ok := f.lib.Rescan().Find("default")
+			if !ok {
+				t.Fatal("the playlist is not in the snapshot")
+			}
+			m := BuildManifest(&p, config.Default(), 1)
+			if m.Playlist == nil || len(m.Playlist.Items) != len(tt.want) {
+				t.Fatalf("manifest = %+v", m)
+			}
+			for i, w := range tt.want {
+				it := m.Playlist.Items[i]
+				if it.Transition != w.word || it.TransitionMS != w.ms {
+					t.Errorf("item %d (%s) has %q %d ms, want %q %d ms", i, it.Name, it.Transition, it.TransitionMS, w.word, w.ms)
+				}
+			}
+		})
+	}
+}
+
 func TestBuildManifestFallback(t *testing.T) {
 	cfg := config.Default()
 	if m := BuildManifest(nil, cfg, 1); !m.Fallback || m.Playlist != nil {

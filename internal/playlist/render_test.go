@@ -55,6 +55,18 @@ func TestRenderRoundTrip(t *testing.T) {
 			p:    Playlist{Meta: Meta{Name: "東京 café"}, Items: []Item{{File: "a.jpg"}}},
 		},
 		{
+			name: "items with their own transitions",
+			p: Playlist{
+				Meta: Meta{Transition: "fade"},
+				Items: []Item{
+					{File: "a.jpg", Transition: "slide-in-left", TransitionMS: 700},
+					{File: "b.mp4", Mute: true, Transition: "cut"},
+					{File: "c.jpg", TransitionMS: 250},
+					{File: "d.jpg"},
+				},
+			},
+		},
+		{
 			name: "an image with a mute flag",
 			p:    Playlist{Items: []Item{{File: "a.jpg", Mute: true}}},
 		},
@@ -119,5 +131,24 @@ func TestRenderUsesUnixLineEnds(t *testing.T) {
 	}
 	if !bytes.HasSuffix(out, []byte("\n")) {
 		t.Error("the file must end with a line end")
+	}
+}
+
+// The two keys of an item come back only when they have a value, and they
+// stay with their item.
+func TestRenderWritesTheItemTransitionOnlyWhenSet(t *testing.T) {
+	out := string(Render(Playlist{Items: []Item{
+		{File: "a.jpg"},
+		{File: "b.jpg", Transition: "zoom-out", TransitionMS: 900},
+	}}))
+	if n := strings.Count(out, "transition = \"zoom-out\""); n != 1 {
+		t.Errorf("the item transition is written %d times, want 1:\n%s", n, out)
+	}
+	first := out[:strings.Index(out, "b.jpg")]
+	if strings.Contains(first[strings.Index(first, "[[item]]"):], "transition") {
+		t.Errorf("the first item has no transition, and the file gives it one:\n%s", out)
+	}
+	if !strings.Contains(out, "transition_ms = 900") {
+		t.Errorf("the length of the item transition is not in the file:\n%s", out)
 	}
 }

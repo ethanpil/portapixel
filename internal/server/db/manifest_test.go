@@ -364,6 +364,17 @@ func TestPlaylistValidation(t *testing.T) {
 			in:    Playlist{Title: "trans", Transition: "explode", Items: []PlaylistItem{{SHA256: testSHA, Name: "a.jpg"}}},
 			field: "transition",
 		},
+		{
+			name: "an item with a transition that we do not know",
+			in: Playlist{Title: "item trans", Items: []PlaylistItem{
+				{SHA256: testSHA, Name: "a.jpg"}, {SHA256: testSHA, Name: "b.jpg", Transition: "explode"}}},
+			field: "items[1].transition",
+		},
+		{
+			name:  "an item with a negative transition length",
+			in:    Playlist{Title: "item ms", Items: []PlaylistItem{{SHA256: testSHA, Name: "a.jpg", TransitionMS: -5}}},
+			field: "items[0].transition_ms",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -396,6 +407,61 @@ func TestPlaylistTakesEveryTransition(t *testing.T) {
 			t.Errorf("%s: the saved playlist has %q (%v)", word, p.Transition, err)
 		}
 	}
+}
+
+// The transition of an item goes from the editor to the table, and on to the
+// manifest of a device. Each item keeps its own word and its own length.
+func TestItemTransitionsReachTheManifest(t *testing.T) {
+	f := newFixture(t)
+	id, err := f.d.SavePlaylist(Playlist{Title: "mixed", Transition: "fade", Items: []PlaylistItem{
+		{SHA256: testSHA, Name: "a.jpg"},
+		{SHA256: testSHA, Name: "b.jpg", Transition: "slide-out-left", TransitionMS: 700},
+		{SHA256: testSHA, Name: "c.jpg", TransitionMS: 250},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.d.Playlist(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		word string
+		ms   int
+	}{{"", 0}, {"slide-out-left", 700}, {"", 250}}
+	for i, w := range want {
+		if p.Items[i].Transition != w.word || p.Items[i].TransitionMS != w.ms {
+			t.Errorf("item %d reads back as %q %d, want %q %d", i, p.Items[i].Transition, p.Items[i].TransitionMS, w.word, w.ms)
+		}
+	}
+
+	dev := f.device(t, "px-itemtr01", f.lobby)
+	if err := f.d.SetDeviceOverrides(dev.ID, id, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if dev, err = f.d.Device(dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	m, err := f.d.Manifest(dev, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []manifestItem
+	for _, pl := range m.Playlists {
+		if pl.Name == "mixed" {
+			for _, it := range pl.Items {
+				got = append(got, manifestItem{it.Transition, it.TransitionMS})
+			}
+		}
+	}
+	if len(got) != 3 || got[0] != (manifestItem{}) || got[1] != (manifestItem{"slide-out-left", 700}) || got[2] != (manifestItem{"", 250}) {
+		t.Errorf("the manifest holds the items %+v", got)
+	}
+}
+
+type manifestItem struct {
+	word string
+	ms   int
 }
 
 func TestPlaylistNamesAreUniqueSlugs(t *testing.T) {

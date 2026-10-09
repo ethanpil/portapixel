@@ -99,6 +99,46 @@ func TestApplyWritesTheFleetPlaylistAndTheObject(t *testing.T) {
 	}
 }
 
+// TestItemTransitionsReachTheLibrary follows the transition of one item from the
+// manifest to the playlist file that the device writes and then to the items that
+// the library serves. The word and the length stay with their item.
+func TestItemTransitionsReachTheLibrary(t *testing.T) {
+	f := newFakeServer(t)
+	a := f.addObject("a.jpg", "the first picture")
+	b := f.addObject("b.jpg", "the second picture")
+	m := lobbyManifest(a)
+	m.Media = append(m.Media, b)
+	m.Playlists[0].Items = []manifest.Item{
+		{SHA256: a.SHA256, Duration: 15},
+		{SHA256: b.SHA256, Duration: 15, Transition: "slide-in-left", TransitionMS: 700},
+	}
+	f.setManifest(m)
+
+	d := pairedDev(t, f)
+	d.s.Once(context.Background())
+
+	text := d.readFleetPlaylist("lobby")
+	for _, want := range []string{`transition = "slide-in-left"`, "transition_ms = 700"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("the fleet playlist does not hold %q:\n%s", want, text)
+		}
+	}
+	snap := d.lib.Snapshot()
+	p, ok := snap.Find("lobby")
+	if !ok || len(p.Items) != 2 {
+		t.Fatalf("the library serves %+v (%v)", p, ok)
+	}
+	if p.Items[0].Transition != "" || p.Items[0].TransitionMS != 0 {
+		t.Errorf("the first item has %q %d, want nothing", p.Items[0].Transition, p.Items[0].TransitionMS)
+	}
+	if p.Items[1].Transition != "slide-in-left" || p.Items[1].TransitionMS != 700 {
+		t.Errorf("the second item has %q %d", p.Items[1].Transition, p.Items[1].TransitionMS)
+	}
+	if len(snap.Problems) != 0 {
+		t.Errorf("the library reports %+v", snap.Problems)
+	}
+}
+
 // TestAnOldTransitionWordFromTheServerIsGood covers a server that a stage 1
 // build ran: it can still send crossfade and push-*. Those words are
 // transitions again, so the playlist must render and load with no fault.

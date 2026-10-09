@@ -187,6 +187,8 @@ export function mount(main, ctx) {
       duration: Number(raw.duration) || null,
       sha256: raw.sha256,
       max_duration: Number(raw.max_duration) || null,
+      transition: raw.transition || null,
+      transition_ms: Number(raw.transition_ms) || null,
     };
     if (out.kind === 'video') out.mute = !!raw.mute;
     if (m) {
@@ -253,6 +255,8 @@ export function mount(main, ctx) {
       duration: Number(it.duration) || 0,
       mute: !!it.mute,
       max_duration: Number(it.max_duration) || 0,
+      transition: it.transition || '',
+      transition_ms: Number(it.transition_ms) || 0,
     };
   }
 

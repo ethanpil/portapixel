@@ -343,6 +343,14 @@ func playlist(name, transition string, ms int, items ...library.ManifestItem) li
 		if items[i].Path == "" {
 			items[i].Path = "/media/" + name + "/" + items[i].Name
 		}
+		// library.BuildManifest has applied the defaults. An item that names its
+		// own transition or its own length keeps it.
+		if items[i].Transition == "" {
+			items[i].Transition = transition
+		}
+		if items[i].TransitionMS == 0 {
+			items[i].TransitionMS = ms
+		}
 		if items[i].Kind == kindImage && items[i].Duration == 0 {
 			items[i].Duration = 10
 		}

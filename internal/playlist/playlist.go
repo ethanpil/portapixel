@@ -35,6 +35,13 @@ type Item struct {
 	Duration    int    `toml:"duration,omitempty" json:"duration,omitempty"`
 	Mute        bool   `toml:"mute,omitempty" json:"mute,omitempty"`
 	MaxDuration int    `toml:"max_duration,omitempty" json:"max_duration,omitempty"`
+	// Transition is the transition INTO this item, from the item before it. For
+	// the first item, that is the item at the end of the list. TransitionMS is
+	// its length. An empty Transition and a zero TransitionMS mean "use the
+	// value of the playlist, and then of the device". The two values are
+	// independent: a length with no word changes the length only.
+	Transition   string `toml:"transition,omitempty" json:"transition,omitempty"`
+	TransitionMS int    `toml:"transition_ms,omitempty" json:"transition_ms,omitempty"`
 }
 
 // Options changes what Parse and Validate permit.
@@ -105,6 +112,12 @@ func (p Playlist) Validate(opt Options) Errors {
 		}
 		if it.MaxDuration < 0 {
 			add(field+".max_duration", "must not be less than zero")
+		}
+		if it.Transition != "" && !config.IsTransition(it.Transition) {
+			add(field+".transition", "must be one of "+strings.Join(config.Transitions, ", "))
+		}
+		if it.TransitionMS < 0 {
+			add(field+".transition_ms", "must not be less than zero")
 		}
 	}
 	return errs

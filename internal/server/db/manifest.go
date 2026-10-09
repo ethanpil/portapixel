@@ -141,10 +141,12 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 				continue
 			}
 			out.Items = append(out.Items, manifest.Item{
-				SHA256:      it.SHA256,
-				Duration:    it.Duration,
-				Mute:        it.Mute,
-				MaxDuration: it.MaxDuration,
+				SHA256:       it.SHA256,
+				Duration:     it.Duration,
+				Mute:         it.Mute,
+				MaxDuration:  it.MaxDuration,
+				Transition:   it.Transition,
+				TransitionMS: it.TransitionMS,
 			})
 			if mediaSeen[it.SHA256] {
 				continue

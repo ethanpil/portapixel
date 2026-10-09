@@ -169,7 +169,8 @@ type item map[string]any
 
 func makePlaylists(c *client, media map[string]string) (map[string]int64, error) {
 	// Each playlist has a different transition, so the editor shows a few of
-	// the words of config.Transitions.
+	// the words of config.Transitions. A few items name their own transition
+	// and their own length.
 	wanted := []struct {
 		title      string
 		transition string
@@ -178,7 +179,8 @@ func makePlaylists(c *client, media map[string]string) (map[string]int64, error)
 		{"Lobby loop", "crossfade", []item{
 			{"sha256": media["welcome-autumn.jpg"], "name": "welcome-autumn.jpg", "duration": 15},
 			{"sha256": media["lobby-hours.jpg"], "name": "lobby-hours.jpg", "duration": 12},
-			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false},
+			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false,
+				"transition": "slide-in-left", "transition_ms": 700},
 		}},
 		{"Safety loop", "fade", []item{
 			{"sha256": media["safety-notice-1.png"], "name": "safety-notice-1.png", "duration": 20},
@@ -190,7 +192,8 @@ func makePlaylists(c *client, media map[string]string) (map[string]int64, error)
 		}},
 		{"Retail promo", "push-left", []item{
 			{"sha256": media["retail-promo.jpg"], "name": "retail-promo.jpg", "duration": 10},
-			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false, "max_duration": 24},
+			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false, "max_duration": 24,
+				"transition": "fade-white"},
 		}},
 		{"Room signs", "wipe-up", []item{
 			{"sha256": media["room-signs.jpg"], "name": "room-signs.jpg", "duration": 20},

@@ -241,6 +241,13 @@ func TestPlaylistValidationOverTheAPI(t *testing.T) {
 			}},
 			field: "items[0].sha256",
 		},
+		{
+			name: "an item with a transition that we do not know",
+			body: map[string]any{"title": "item word", "items": []any{
+				map[string]any{"sha256": sha, "name": "a.png", "transition": "explode"},
+			}},
+			field: "items[0].transition",
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -268,7 +275,7 @@ func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 	clip := f.uploadMedia("promo.mp4", []byte("the bytes of a video"))
 	id := f.makePlaylist("Safety loop",
 		map[string]any{"sha256": sha, "name": "welcome.png", "duration": 12},
-		map[string]any{"sha256": clip, "name": "promo.mp4", "mute": true},
+		map[string]any{"sha256": clip, "name": "promo.mp4", "mute": true, "transition": "slide-in-up", "transition_ms": 800},
 	)
 
 	res := f.mustOK(f.adminCall(http.MethodGet,
@@ -283,6 +290,9 @@ func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 			Duration int    `json:"duration"`
 			Mute     bool   `json:"mute"`
 			Thumb    string `json:"thumb"`
+
+			Transition   string `json:"transition"`
+			TransitionMS int    `json:"transition_ms"`
 		} `json:"items"`
 		Devices int `json:"devices"`
 	}
@@ -299,6 +309,9 @@ func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 	}
 	if p.Items[1].Kind != "video" || p.Items[1].SHA256 != clip || !p.Items[1].Mute {
 		t.Fatalf("the second item is %+v", p.Items[1])
+	}
+	if p.Items[0].Transition != "" || p.Items[1].Transition != "slide-in-up" || p.Items[1].TransitionMS != 800 {
+		t.Fatalf("the item transitions are %q and %q %d", p.Items[0].Transition, p.Items[1].Transition, p.Items[1].TransitionMS)
 	}
 
 	// Nobody plays it yet.

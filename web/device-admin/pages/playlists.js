@@ -227,6 +227,8 @@ export function mount(main, ctx) {
       file: it.file, name: it.name, kind: it.kind, src: it.src, size: it.size,
       duration: Number(it.duration) || null,
       max_duration: Number(it.max_duration) || null,
+      transition: it.transition || null,
+      transition_ms: Number(it.transition_ms) || null,
     };
     if (it.kind === 'video') out.mute = !!it.mute;
     return out;
@@ -239,6 +241,8 @@ export function mount(main, ctx) {
       duration: Number(it.duration) || 0,
       mute: !!it.mute,
       max_duration: Number(it.max_duration) || 0,
+      transition: it.transition || '',
+      transition_ms: Number(it.transition_ms) || 0,
     };
   }
 

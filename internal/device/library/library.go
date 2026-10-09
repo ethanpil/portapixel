@@ -40,6 +40,10 @@ type Item struct {
 	Duration    int  `json:"duration"`
 	Mute        bool `json:"mute"`
 	MaxDuration int  `json:"max_duration"`
+	// Transition and TransitionMS are the transition into this item, as the
+	// playlist file says. Empty and 0 mean the setting of the playlist.
+	Transition   string `json:"transition,omitempty"`
+	TransitionMS int    `json:"transition_ms,omitempty"`
 
 	Size    int64  `json:"size"`
 	SHA256  string `json:"sha256,omitempty"` // empty until the background hash finishes
@@ -464,6 +468,9 @@ func (l *Library) readItem(index int, it playlist.Item, dir string) Item {
 		Duration:    it.Duration,
 		Mute:        it.Mute,
 		MaxDuration: it.MaxDuration,
+
+		Transition:   it.Transition,
+		TransitionMS: it.TransitionMS,
 	}
 	out.Name = path.Base(it.File)
 	out.path = filepath.Join(dir, filepath.FromSlash(it.File))

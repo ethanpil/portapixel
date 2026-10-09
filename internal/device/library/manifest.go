@@ -37,6 +37,14 @@ type ManifestItem struct {
 	Duration    int
 	Mute        bool
 	MaxDuration int
+
+	// Transition and TransitionMS are the transition INTO this item, from the item
+	// before it in this list. The first item gets the transition from the last
+	// item, because the list loops. BuildManifest has applied the defaults: the
+	// word and the length of the item, else those of the playlist, else those of
+	// the device.
+	Transition   string
+	TransitionMS int
 }
 
 // BuildManifest makes the manifest for one playlist.
@@ -54,6 +62,11 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 		return out
 	}
 
+	transition := cfg.Playback.Transition
+	if p.Transition != "" {
+		transition = p.Transition
+	}
+
 	items := make([]ManifestItem, 0, len(p.Items))
 	for _, it := range p.Items {
 		if it.Missing || it.Kind == playlist.KindUnknown {
@@ -63,13 +76,25 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 		if it.Kind == playlist.KindImage && duration <= 0 {
 			duration = cfg.Playback.ImageDuration
 		}
+		// An item can name its own transition and its own length. Each one falls
+		// back by itself: an item with a length and no word changes the length of
+		// the transition of the playlist.
+		itemTransition, itemMS := transition, cfg.Playback.TransitionMS
+		if it.Transition != "" {
+			itemTransition = it.Transition
+		}
+		if it.TransitionMS > 0 {
+			itemMS = it.TransitionMS
+		}
 		items = append(items, ManifestItem{
-			Kind:        it.Kind,
-			Name:        it.Name,
-			Path:        it.path,
-			Duration:    duration,
-			Mute:        it.Mute,
-			MaxDuration: it.MaxDuration,
+			Kind:         it.Kind,
+			Name:         it.Name,
+			Path:         it.path,
+			Duration:     duration,
+			Mute:         it.Mute,
+			MaxDuration:  it.MaxDuration,
+			Transition:   itemTransition,
+			TransitionMS: itemMS,
 		})
 	}
 	if len(items) == 0 {
@@ -88,10 +113,6 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 		items[i].Index = i
 	}
 
-	transition := cfg.Playback.Transition
-	if p.Transition != "" {
-		transition = p.Transition
-	}
 	return PlayerManifest{
 		Fallback: false,
 		Playlist: &ManifestPlaylist{

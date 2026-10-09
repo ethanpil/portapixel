@@ -101,6 +101,39 @@ func TestTheBoardModelChoosesTheDecoder(t *testing.T) {
 	}
 }
 
+// The script works when an item ends, so the transition INTO an item goes to the
+// entry before it. An item can name its own transition and its own length. The
+// last entry gets the transition into the first one, because the list loops.
+func TestItemTransitionsGoToTheEntryBefore(t *testing.T) {
+	h := newHarness(t, playlist("lobby", "fade", 400,
+		library.ManifestItem{Name: "a.jpg"},
+		library.ManifestItem{Name: "b.jpg", Transition: "split", TransitionMS: 900},
+		library.ManifestItem{Name: "c.mp4", TransitionMS: 250},
+	), nil)
+	h.waitPlaying(0)
+	check := func(want ...string) {
+		t.Helper()
+		d := h.dump()
+		if len(d.List) != len(want) {
+			t.Fatalf("mpv has %d entries, want %d: %+v", len(d.List), len(want), d.List)
+		}
+		for i, w := range want {
+			if got := d.List[i].Opts["script-opts"]; got != w {
+				t.Errorf("entry %d (%s) script-opts = %q, want %q", i, d.List[i].Path, got, w)
+			}
+		}
+	}
+	check("pptr-kind=split,pptr-ms=900", "pptr-kind=fade,pptr-ms=250", "pptr-kind=fade,pptr-ms=400")
+
+	// A restart starts the list at the next item. The words stay with their
+	// items, and the list is b, c, a now.
+	first := h.sup.proc.pid()
+	h.ctl("fake-exit", 9)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	h.waitPlaying(1)
+	check("pptr-kind=fade,pptr-ms=250", "pptr-kind=fade,pptr-ms=400", "pptr-kind=split,pptr-ms=900")
+}
+
 // One image alone stays on the screen and one video alone loops in its file:
 // neither gets a transition into itself.
 func TestSingleItemsStay(t *testing.T) {

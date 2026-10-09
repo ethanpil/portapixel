@@ -246,6 +246,24 @@ func TestValidate(t *testing.T) {
 			playlist: Playlist{Meta: Meta{Transition: "push-left"}, Items: []Item{{File: "a.jpg"}}},
 		},
 		{
+			name:     "an item with its own transition",
+			playlist: Playlist{Items: []Item{{File: "a.jpg", Transition: "split", TransitionMS: 800}}},
+		},
+		{
+			name:     "an item with a length and no word",
+			playlist: Playlist{Items: []Item{{File: "a.jpg", TransitionMS: 800}}},
+		},
+		{
+			name:      "an item with a bad transition",
+			playlist:  Playlist{Items: []Item{{File: "a.jpg"}, {File: "b.jpg", Transition: "explode"}}},
+			wantField: "item[1].transition",
+		},
+		{
+			name:      "an item with a negative transition length",
+			playlist:  Playlist{Items: []Item{{File: "a.jpg", TransitionMS: -1}}},
+			wantField: "item[0].transition_ms",
+		},
+		{
 			name: "the second item is bad",
 			playlist: Playlist{Items: []Item{
 				{File: "a.jpg", Duration: 10},

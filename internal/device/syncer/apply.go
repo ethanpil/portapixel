@@ -565,10 +565,12 @@ func (s *Syncer) buildPlaylist(objects map[string]object, p manifest.Playlist) (
 			continue
 		}
 		out.Items = append(out.Items, playlist.Item{
-			File:        playlist.FleetRef(o.name),
-			Duration:    it.Duration,
-			Mute:        it.Mute,
-			MaxDuration: it.MaxDuration,
+			File:         playlist.FleetRef(o.name),
+			Duration:     it.Duration,
+			Mute:         it.Mute,
+			MaxDuration:  it.MaxDuration,
+			Transition:   it.Transition,
+			TransitionMS: it.TransitionMS,
 		})
 	}
 	if errs := out.Validate(playlist.Options{AllowFleetRefs: true}); len(errs) > 0 {

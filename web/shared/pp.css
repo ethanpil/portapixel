@@ -827,6 +827,7 @@ button.pp-tile { display: block; width: 100%; padding: 0; text-align: left; colo
   font-size: var(--pp-fs-sm); color: var(--pp-muted);
 }
 .pp-pe__extra-f .pp-input { width: 96px; }
+.pp-pe__extra-f .pp-select { width: auto; }
 .pp-pe__foot {
   display: flex; justify-content: space-between; align-items: flex-end;
   gap: var(--pp-space-5); flex-wrap: wrap; padding: 13px var(--pp-space-7);

@@ -1065,7 +1065,8 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 		if j == 0 {
 			mode = "replace"
 		}
-		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p, p.Items[idx], n == 1, s.model)) {
+		next := p.Items[(idx+1)%n]
+		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p.Items[idx], next, n == 1, s.model)) {
 			// A write that fails waited for its time limit. The next ones would wait
 			// as long each. The silence rule restarts mpv.
 			break
@@ -1077,8 +1078,12 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 
 // fileOptions gives the per-file options of one item (ARCHITECTURE 7a). mpv sets
 // them when the file starts and puts the global values back when it ends.
-func fileOptions(p *library.ManifestPlaylist, it library.ManifestItem, single bool, model string) map[string]string {
-	opts := map[string]string{"script-opts": scriptOpts(p.Transition, p.TransitionMS)}
+//
+// next is the item after this one in the list. The script works when this item
+// ends, so it takes the transition INTO the next item from the options of this
+// item. The list loops, so the last item gets the transition into the first.
+func fileOptions(it, next library.ManifestItem, single bool, model string) map[string]string {
+	opts := map[string]string{"script-opts": scriptOpts(next.Transition, next.TransitionMS)}
 	switch it.Kind {
 	case kindImage:
 		// One image alone stays on the screen. Nothing needs to change, and a

@@ -3,12 +3,13 @@
 -- portapixeld writes this file into its run directory and gives it to mpv with
 -- --script. Each playlist entry carries these script options:
 --
---   pptr-kind  the words of config.Transitions: cut | fade | fade-white |
---              crossfade | wipe-* | push-* | slide-in-* | slide-out-* | zoom-out |
---              split. The * is left, right, up or down.
---   pptr-ms    the length of the transition in milliseconds
+--   pptr-kind  the transition into the NEXT item (the words of config.Transitions):
+--              cut | fade | fade-white | crossfade | wipe-* | push-* | slide-in-* |
+--              slide-out-* | zoom-out | split. The * is left, right, up or down.
+--   pptr-ms    the length of that transition in milliseconds
 --
--- The script uses the options of the item that ends.
+-- The script uses pptr-kind and pptr-ms of the item that ends. The daemon puts
+-- the transition of the next item there, so an item can name its own transition.
 --
 -- How it works. When item A ends, mpv runs the hook on_unload and waits for it.
 -- The hook takes a copy of the screen (screenshot-raw window) and shows it as

@@ -136,6 +136,10 @@ type PlaylistItem struct {
 	Duration    int    `json:"duration,omitempty"`
 	Mute        bool   `json:"mute,omitempty"`
 	MaxDuration int    `json:"max_duration,omitempty"`
+	// Transition and TransitionMS are the transition INTO this item. Empty and 0
+	// mean the setting of the playlist, and then of the device.
+	Transition   string `json:"transition,omitempty"`
+	TransitionMS int    `json:"transition_ms,omitempty"`
 	// Thumb is the URL of the thumbnail, or an empty value when there is none.
 	Thumb string `json:"thumb,omitempty"`
 	// Size is the length of the media object in bytes. The manifest needs it,

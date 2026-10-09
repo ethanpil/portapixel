@@ -53,13 +53,22 @@ func renderItem(b *strings.Builder, it Item) {
 		} else {
 			b.WriteString("# max_duration = 60        # Stop the video after N seconds.\n")
 		}
-		return
+	} else {
+		if it.Mute {
+			writeLine(b, "mute", "true", "")
+		}
+		if it.MaxDuration > 0 {
+			writeLine(b, "max_duration", strconv.Itoa(it.MaxDuration), "Stop the item after N seconds.")
+		}
 	}
-	if it.Mute {
-		writeLine(b, "mute", "true", "")
+	// The two transition keys come only when they have a value. A comment for
+	// them on each item would make a long file for a feature that most items
+	// do not use.
+	if it.Transition != "" {
+		writeLine(b, "transition", quote(it.Transition), "The transition into this item.")
 	}
-	if it.MaxDuration > 0 {
-		writeLine(b, "max_duration", strconv.Itoa(it.MaxDuration), "Stop the item after N seconds.")
+	if it.TransitionMS > 0 {
+		writeLine(b, "transition_ms", strconv.Itoa(it.TransitionMS), "The length of that transition.")
 	}
 }
 

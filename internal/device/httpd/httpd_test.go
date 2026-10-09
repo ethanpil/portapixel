@@ -499,7 +499,7 @@ func TestPlaylistCRUDOverTheAPI(t *testing.T) {
 	// Save the playlist that names the file.
 	w = f.do(http.MethodPut, "/api/playlists/"+name, map[string]any{
 		"title": "Lobby Loop",
-		"items": []map[string]any{{"file": file, "duration": 12}},
+		"items": []map[string]any{{"file": file, "duration": 12, "transition": "split", "transition_ms": 700}},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("save gave %d: %s", w.Code, w.Body)
@@ -523,6 +523,10 @@ func TestPlaylistCRUDOverTheAPI(t *testing.T) {
 	if item["kind"] != "image" || item["src"] != "/media/lobby-loop/Front-Desk.jpg" || item["missing"] != false {
 		t.Errorf("item = %v", item)
 	}
+	// The transition into the item goes to the file and comes back in the list.
+	if item["transition"] != "split" || item["transition_ms"] != float64(700) {
+		t.Errorf("the item transition is %v %v, want split 700", item["transition"], item["transition_ms"])
+	}
 	if list["active"] != "default" {
 		t.Errorf("active = %v", list["active"])
 	}
@@ -536,6 +540,14 @@ func TestPlaylistCRUDOverTheAPI(t *testing.T) {
 	}
 	if fields := body(t, w)["fields"].([]any); len(fields) == 0 {
 		t.Errorf("no field errors: %s", w.Body)
+	}
+
+	// A word that is not a transition is refused for an item, with its field.
+	w = f.do(http.MethodPut, "/api/playlists/"+name, map[string]any{
+		"items": []map[string]any{{"file": file, "transition": "explode"}},
+	})
+	if w.Code != http.StatusUnprocessableEntity || !strings.Contains(w.Body.String(), "item[0].transition") {
+		t.Fatalf("an item with a bad transition gave %d: %s", w.Code, w.Body)
 	}
 
 	// Rename.

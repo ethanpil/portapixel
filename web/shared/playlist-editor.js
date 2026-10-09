@@ -6,7 +6,10 @@
 
    The playlist it edits:
      {name, title, transition, shuffle,
-      items: [{file|sha256, name, kind, duration, mute, max_duration, thumb}]}
+      items: [{file|sha256, name, kind, duration, mute, max_duration,
+               transition, transition_ms, thumb}]}
+   An item's transition and transition_ms are the transition INTO that item.
+   null means "the playlist decides", and then the device.
 */
 
 import { h, fill, icon, toast, modal, confirmDialog, fmtDuration, fmtBytes, banner, progress } from './ui.js';
@@ -45,7 +48,7 @@ const KIND_LABEL = { image: 'Image', video: 'Video' };
 /* The item keys that the editor itself reads and writes. snapshot() puts them
    first, in this order, and keeps every other key that the host page added. */
 const ITEM_KEYS = ['file', 'sha256', 'name', 'kind', 'duration', 'mute',
-  'max_duration', 'thumb'];
+  'max_duration', 'transition', 'transition_ms', 'thumb'];
 
 /** Mount the editor into `el`.
     playlist:     the playlist object. It is copied, never edited in place.
@@ -261,13 +264,31 @@ export function mountPlaylistEditor(el, opts = {}) {
       h('div', { class: 'pp-pe__warn' },
         h('span', null, h('b', { text: `${w.prefix} ` }), w.text))));
 
+    // The fields of one item that most items leave alone. A video also has a
+    // cap on its length.
+    const extras = [];
     if (!ro && item.kind === 'video') {
-      parts.push(h('div', { class: 'pp-pe__sub pp-pe__extra' },
-        h('label', { class: 'pp-pe__extra-f' }, 'Stop after',
-          numberInput(item, 'max_duration', 'no limit', `Cap in seconds for ${label(item)}`), 's')));
+      extras.push(h('label', { class: 'pp-pe__extra-f' }, 'Stop after',
+        numberInput(item, 'max_duration', 'no limit', `Cap in seconds for ${label(item)}`), 's'));
     }
+    // A read-only editor shows the transition of an item only when it has one.
+    if (!ro || item.transition || item.transition_ms) extras.push(transitionField(item));
+    if (extras.length) parts.push(h('div', { class: 'pp-pe__sub pp-pe__extra' }, extras));
 
     fill(sub, parts);
+  }
+
+  /* The transition INTO this item, from the item before it. The first choice
+     is the third state: the item says nothing and the playlist decides. */
+  function transitionField(item) {
+    const select = h('select', {
+      class: 'pp-select pp-input--sm', 'aria-label': `Transition into ${label(item)}`, disabled: ro,
+      onChange: () => { item.transition = select.value || null; touch(); },
+    }, [h('option', { value: '', text: 'Playlist default' }),
+      TRANSITIONS.map(([v, text]) => h('option', { value: v, text }))]);
+    select.value = item.transition || '';
+    return h('span', { class: 'pp-pe__extra-f' }, 'Transition in', select,
+      numberInput(item, 'transition_ms', 'default', `Length in milliseconds of the transition into ${label(item)}`), 'ms');
   }
 
   function numberInput(item, key, placeholder, aria) {
@@ -581,6 +602,10 @@ function adopt(p) {
 
 function normalizeItem(raw) {
   const it = { ...raw };
+  // The same value for "not set" everywhere, or the dirty check would see a
+  // change between an item from the server and an item from a person.
+  it.transition = it.transition || null;
+  it.transition_ms = Number(it.transition_ms) > 0 ? Number(it.transition_ms) : null;
   if (!it.kind) it.kind = guessKind(it.file || it.name || '');
   if (!it.name) it.name = it.file || it.sha256 || '';
   if (it.kind !== 'video') delete it.mute;

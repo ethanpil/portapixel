@@ -160,3 +160,99 @@ test('waitingName waits until the screen reports the new name', () => {
   assert.equal(util.waitingName(device, []), '');
   assert.equal(util.waitingName(device, undefined), '');
 });
+
+/* ---- the shared playlist editor ----
+   The two admin UIs mount one editor, so one test file reads it. The stub DOM
+   above is enough to mount it: the test finds a control by its aria-label and
+   calls the listener that the editor put on it. */
+
+const editorModule = await import('../../web/shared/playlist-editor.js');
+
+function findAll(node, pred, out = []) {
+  if (node && node.attrs && pred(node)) out.push(node);
+  for (const child of (node && node.children) || []) findAll(child, pred, out);
+  return out;
+}
+
+function mount(playlist, extra = {}) {
+  const el = document.createElement('div');
+  const editor = editorModule.mountPlaylistEditor(el, { playlist, capabilities: {}, mediaSource: {}, ...extra });
+  const label = (text) => findAll(el, (n) => String(n.attrs['aria-label'] || '').startsWith(text));
+  return { el, editor, label };
+}
+
+const twoItems = () => ({
+  name: 'Lobby', transition: 'fade',
+  items: [{ sha256: teal.sha256, name: 'a.png' }, { sha256: clip.sha256, name: 'b.mp4' }],
+});
+
+test('the editor offers every transition of config.Transitions for an item, and the playlist default first', () => {
+  const { label } = mount(twoItems());
+  const [first] = label('Transition into a.png');
+  const options = first.children.flatMap((c) => (c.tag === 'option' ? [c] : c.children));
+  assert.equal(options[0].value, '');
+  assert.equal(options[0].textContent, 'Playlist default');
+  assert.deepEqual(options.slice(1).map((o) => o.value), editorModule.TRANSITIONS.map(([v]) => v));
+});
+
+test('an item with no transition of its own saves with null and stays clean', () => {
+  const { editor } = mount(twoItems());
+  const items = editor.getPlaylist().items;
+  assert.equal(items[0].transition, null);
+  assert.equal(items[0].transition_ms, null);
+  assert.equal(editor.isDirty(), false);
+});
+
+test('a transition that a person picks for one item goes to the saved playlist and marks it changed', () => {
+  const { editor, label } = mount(twoItems());
+  const [select] = label('Transition into b.mp4');
+  select.value = 'split';
+  select.listeners.change();
+  assert.equal(editor.isDirty(), true);
+  const items = editor.getPlaylist().items;
+  assert.equal(items[0].transition, null, 'the other item stays on the playlist default');
+  assert.equal(items[1].transition, 'split');
+
+  // The first choice puts the item back on the playlist default, and the playlist is clean again.
+  select.value = '';
+  select.listeners.change();
+  assert.equal(editor.getPlaylist().items[1].transition, null);
+  assert.equal(editor.isDirty(), false);
+});
+
+test('the length of the transition of an item is a number, or null when the box is empty', () => {
+  const { editor, label } = mount(twoItems());
+  const [box] = label('Length in milliseconds of the transition into a.png');
+  box.value = '700';
+  box.listeners.input();
+  assert.equal(editor.getPlaylist().items[0].transition_ms, 700);
+  box.value = '';
+  box.listeners.input();
+  assert.equal(editor.getPlaylist().items[0].transition_ms, null);
+  assert.equal(editor.isDirty(), false);
+});
+
+test('an item from the server shows its own transition and its own length', () => {
+  const { editor, label } = mount({
+    name: 'Lobby', transition: '',
+    items: [{ sha256: teal.sha256, name: 'a.png', transition: 'zoom-out', transition_ms: 900 }],
+  });
+  const [select] = label('Transition into a.png');
+  const [box] = label('Length in milliseconds of the transition into a.png');
+  assert.equal(select.value, 'zoom-out');
+  assert.equal(box.value, 900);
+  assert.deepEqual(
+    [editor.getPlaylist().items[0].transition, editor.getPlaylist().items[0].transition_ms], ['zoom-out', 900]);
+  assert.equal(editor.isDirty(), false);
+});
+
+test('a read-only editor shows the transition of an item only when the item has one', () => {
+  const { label } = mount({
+    name: 'Lobby', transition: '',
+    items: [{ sha256: teal.sha256, name: 'a.png' }, { sha256: clip.sha256, name: 'b.mp4', transition: 'cut' }],
+  }, { readOnly: true });
+  assert.equal(label('Transition into a.png').length, 0);
+  const [select] = label('Transition into b.mp4');
+  assert.equal(select.disabled, true);
+  assert.equal(select.value, 'cut');
+});

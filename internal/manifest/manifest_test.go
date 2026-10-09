@@ -90,7 +90,7 @@ func TestRoundTrip(t *testing.T) {
 					Shuffle:    &shuffle,
 					Items: []Item{
 						{SHA256: "aa", Duration: 15},
-						{SHA256: "bb", Mute: true, MaxDuration: 60},
+						{SHA256: "bb", Mute: true, MaxDuration: 60, Transition: "split", TransitionMS: 900},
 					},
 				}},
 				Schedule: []Rule{{Playlist: "lobby", Days: []string{"mon"}, Start: "08:00", End: "18:00"}},

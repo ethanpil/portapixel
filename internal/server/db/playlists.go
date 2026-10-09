@@ -112,7 +112,8 @@ func scanPlaylist(s interface{ Scan(...any) error }) (Playlist, error) {
 // playlistItems gives the items of one playlist in their order.
 func (d *DB) playlistItems(id int64) ([]PlaylistItem, error) {
 	rows, err := d.r.Query(`SELECT COALESCE(i.media_sha, ''), i.name, i.duration, i.mute,
-			i.max_duration, COALESCE(m.has_thumb, 0), COALESCE(m.orig_name, ''),
+			i.max_duration, i.transition, i.transition_ms,
+			COALESCE(m.has_thumb, 0), COALESCE(m.orig_name, ''),
 			COALESCE(m.size, 0), m.sha256 IS NOT NULL
 		FROM playlist_items i LEFT JOIN media m ON m.sha256 = i.media_sha
 		WHERE i.playlist_id = ? ORDER BY i.position`, id)
@@ -131,7 +132,7 @@ func (d *DB) playlistItems(id int64) ([]PlaylistItem, error) {
 			haveMedia int
 		)
 		if err := rows.Scan(&it.SHA256, &it.Name, &it.Duration, &mute,
-			&it.MaxDuration, &hasThumb, &origName,
+			&it.MaxDuration, &it.Transition, &it.TransitionMS, &hasThumb, &origName,
 			&it.Size, &haveMedia); err != nil {
 			return nil, err
 		}
@@ -251,9 +252,11 @@ func (d *DB) SavePlaylist(p Playlist) (int64, error) {
 			mute = 1
 		}
 		if _, err := tx.Exec(`INSERT INTO playlist_items
-			(playlist_id, position, media_sha, name, duration, mute, max_duration)
-			VALUES (?, ?, ?, ?, ?, ?, ?)`,
-			id, i, it.SHA256, it.Name, it.Duration, mute, it.MaxDuration); err != nil {
+			(playlist_id, position, media_sha, name, duration, mute, max_duration,
+			 transition, transition_ms)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			id, i, it.SHA256, it.Name, it.Duration, mute, it.MaxDuration,
+			it.Transition, it.TransitionMS); err != nil {
 			return 0, err
 		}
 	}
@@ -296,7 +299,8 @@ func (d *DB) validatePlaylist(p Playlist) Errors {
 		}
 		// The name carries the extension, which is what says image or video.
 		local.Items[i] = playlist.Item{File: it.Name, Duration: it.Duration,
-			Mute: it.Mute, MaxDuration: it.MaxDuration}
+			Mute: it.Mute, MaxDuration: it.MaxDuration,
+			Transition: it.Transition, TransitionMS: it.TransitionMS}
 	}
 	if len(errs) > 0 {
 		return errs

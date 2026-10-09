@@ -56,6 +56,10 @@ type Item struct {
 	Duration    int    `json:"duration,omitempty"`
 	Mute        bool   `json:"mute,omitempty"`
 	MaxDuration int    `json:"max_duration,omitempty"`
+	// Transition and TransitionMS are the transition INTO this item. Empty and 0
+	// mean the setting of the playlist, and then of the device.
+	Transition   string `json:"transition,omitempty"`
+	TransitionMS int    `json:"transition_ms,omitempty"`
 }
 
 // Rule is one schedule rule. The first rule that matches wins.

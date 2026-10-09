@@ -3,6 +3,7 @@ package db
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -106,8 +107,8 @@ func TestMigrationTwoRemovesURLItems(t *testing.T) {
 	defer d.Close()
 
 	var version int
-	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 2 {
-		t.Fatalf("the schema version is %d (%v), want 2", version, err)
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != len(migrations) {
+		t.Fatalf("the schema version is %d (%v), want %d: the open runs each later migration too", version, err, len(migrations))
 	}
 	columns, err := d.columnsOf("playlist_items")
 	if err != nil {
@@ -162,6 +163,87 @@ func TestMigrationTwoRemovesURLItems(t *testing.T) {
 	}
 	if len(p.Items) != 0 {
 		t.Errorf("the playlist seven has items %+v, want none", p.Items)
+	}
+}
+
+// fileAtVersion makes a database file at an old schema version: the first n
+// migrations, with the rows that statements put in. A later test opens it with
+// Open, as a server that is updated from that version would.
+func fileAtVersion(t *testing.T, n int, statements ...string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "test.db")
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	for i := 0; i < n; i++ {
+		sqlTx, err := raw.Begin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := migrations[i](&tx{tx: sqlTx, queries: &atomic.Int64{}}); err != nil {
+			t.Fatalf("migration %d: %v", i+1, err)
+		}
+		if err := sqlTx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := raw.Exec(fmt.Sprintf("PRAGMA user_version = %d", n)); err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range statements {
+		if _, err := raw.Exec(stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	return path
+}
+
+// TestMigrationThreeAddsTheItemTransition opens a file at schema version 2. The
+// items that it holds keep their behaviour: no word and no length, so the
+// playlist decides. An item saved after the open keeps its own values.
+func TestMigrationThreeAddsTheItemTransition(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	path := fileAtVersion(t, 2,
+		`INSERT INTO media (sha256, orig_name, size, uploaded_at) VALUES ('`+sha+`', 'a.jpg', 3, '2026-10-01T00:00:00Z')`,
+		`INSERT INTO playlists (id, name, transition, updated_at) VALUES (1, 'one', 'fade', '')`,
+		`INSERT INTO playlist_items (playlist_id, position, media_sha, name, duration) VALUES (1, 0, '`+sha+`', 'a.jpg', 9)`)
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("the migration failed: %v", err)
+	}
+	defer d.Close()
+
+	var version int
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version < 3 {
+		t.Fatalf("the schema version is %d (%v), want 3 or more", version, err)
+	}
+	columns, err := d.columnsOf("playlist_items")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"transition", "transition_ms"} {
+		if !columns[want] {
+			t.Errorf("playlist_items has no column %s", want)
+		}
+	}
+	p, err := d.PlaylistNoCount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(p.Items) != 1 || p.Items[0].Duration != 9 || p.Items[0].Transition != "" || p.Items[0].TransitionMS != 0 {
+		t.Fatalf("the old item is %+v, want the same item with no transition", p.Items)
+	}
+
+	// A save after the migration writes the new columns, and a read gives them back.
+	p.Items[0].Transition, p.Items[0].TransitionMS = "split", 800
+	if _, err := d.SavePlaylist(p); err != nil {
+		t.Fatal(err)
+	}
+	if p, err = d.PlaylistNoCount(1); err != nil || p.Items[0].Transition != "split" || p.Items[0].TransitionMS != 800 {
+		t.Fatalf("the saved item is %+v (%v)", p.Items, err)
 	}
 }
 

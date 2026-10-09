@@ -43,6 +43,15 @@ ALTER TABLE playlist_items DROP COLUMN refresh_seconds;
 UPDATE playlists SET transition = 'fade' WHERE transition NOT IN ('', 'cut', 'fade');`)
 		return err
 	},
+	// Schema version 3: an item can name its own transition and its own length.
+	// It is the transition INTO that item. An empty word and a length of 0 mean
+	// that the playlist decides, so each old row keeps its behaviour.
+	func(tx *tx) error {
+		_, err := tx.Exec(`
+ALTER TABLE playlist_items ADD COLUMN transition TEXT NOT NULL DEFAULT '';
+ALTER TABLE playlist_items ADD COLUMN transition_ms INTEGER NOT NULL DEFAULT 0;`)
+		return err
+	},
 }
 
 // DB is the database of the fleet server.
