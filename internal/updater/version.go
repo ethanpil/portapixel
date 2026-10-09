@@ -102,7 +102,7 @@ func shortText(data []byte) string {
 // upgrade and a real release never goes back to "dev".
 //
 // A suffix such as "-rc.1" makes a version older than the same version with no
-// suffix. The release check already leaves prereleases out; this rule is here so
+// suffix. The release check already leaves prereleases out. This rule is here so
 // that a fleet server which names one cannot cause a silent downgrade. Two suffixes
 // follow the order of semver: see comparePrerelease.
 func CompareVersions(a, b string) int {

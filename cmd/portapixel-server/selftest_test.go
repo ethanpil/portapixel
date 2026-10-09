@@ -8,8 +8,9 @@ import (
 	"github.com/ethanpil/portapixel/internal/server/db"
 )
 
-// busyDataDir makes a data directory as a server leaves it while a mirror runs: a
-// row that says "working" and a staging directory with a part of a download.
+// busyDataDir makes a data directory as a server leaves it while a mirror runs.
+// It holds a row that says "working" and a staging directory with a part of a
+// download.
 func busyDataDir(t *testing.T) (dir, staging string) {
 	t.Helper()
 	dir = t.TempDir()
