@@ -92,12 +92,13 @@ fi
 LOOP=""
 MNT=""
 BOOTMNT=""
+MEDIAMNT=""
 cleanup() {
 	set +e
 	# A busy mount point makes umount fail, and then "losetup -d" fails as well
 	# and the loop device leaks with no word about it. Try a lazy umount second,
 	# and say so when even that leaves something behind.
-	for m in "$BOOTMNT" "$MNT"; do
+	for m in "$BOOTMNT" "$MNT" "$MEDIAMNT"; do
 		[ -n "$m" ] || continue
 		umount "$m" 2>/dev/null || umount -l "$m" 2>/dev/null
 		mountpoint -q "$m" && printf 'build-image.sh: WARNING: %s is still mounted\n' "$m" >&2
@@ -180,9 +181,33 @@ say "make the file systems"
 mkfs.vfat -F32 -n PPBOOT "$P1" >/dev/null
 mkfs.ext4 -q -F -L PPROOT "$P2"
 mkfs.exfat -L PPMEDIA "$P3" >/dev/null
-# PPMEDIA stays empty. The first boot and "portapixeld provision" fill it
+# PPMEDIA holds one file: portapixel.toml, with every setting commented out. A
+# person can open it on any computer before the first boot and remove the "#"
+# from the lines that they want. The first boot reads it as the file of the user
+# and writes it again with all the values. "portapixeld provision" fills the rest
 # (plan section 14). An image that shipped content would fight the user's own
-# files on the card.
+# files on the card, so this is the only file.
+#
+# os/portapixel.toml is generated: go run ./internal/config/cmd/gentemplate
+say "put portapixel.toml on PPMEDIA"
+[ -f "$SRC/portapixel.toml" ] ||
+	die "no $SRC/portapixel.toml. Write it with: go run ./internal/config/cmd/gentemplate"
+MEDIAMNT="$(mktemp -d)"
+# The host kernel needs the exfat driver. A CI container uses the kernel of its
+# host, so it cannot load the module itself, and "|| :" lets the mount decide.
+modprobe exfat 2>/dev/null || :
+mount -t exfat "$P3" "$MEDIAMNT" ||
+	die "cannot mount $P3 as exFAT. Does the kernel of the build host have the exfat driver?"
+# A plain "cp", not "cp -a" and not "install -m". exFAT keeps no owner and no
+# mode: the mount options of the device give them, and a call to chmod fails.
+cp "$SRC/portapixel.toml" "$MEDIAMNT/portapixel.toml"
+umount "$MEDIAMNT"
+# Mount it again and compare. A check before the umount would read the cache of
+# the first mount, not the file system that the image keeps.
+mount -t exfat -o ro "$P3" "$MEDIAMNT" || die "cannot mount $P3 again"
+cmp -s "$SRC/portapixel.toml" "$MEDIAMNT/portapixel.toml" ||
+	die "PPMEDIA does not hold portapixel.toml as written"
+umount "$MEDIAMNT"; rmdir "$MEDIAMNT"; MEDIAMNT=""
 
 # ------------------------------------------------------------------ 5. install.sh
 MNT="$(mktemp -d)"

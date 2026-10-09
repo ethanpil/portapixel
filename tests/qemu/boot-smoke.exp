@@ -182,6 +182,19 @@ if {$ok == 1 && $item eq ""} {
 	send_user "\n==> now_playing never named an item:\n    $out\n"
 }
 
+# -------------------------------------------------- 4b. the settings template
+# The image puts portapixel.toml on PPMEDIA. The first boot then finds the file
+# and writes no default one. The ops line "provision.config" is the line of a
+# first boot that found no file. The first boot has ended here, because
+# portapixeld starts after it and the status above answered.
+set template_there ""
+send "test -s /var/lib/portapixel/ops.log && { cut -f2 /var/lib/portapixel/ops.log | grep -qx provision.config && echo TPL\"-NO\" || echo TPL\"-YES\"; }\r"
+expect {
+	"TPL-YES" { set template_there 1; send_user "\n==> the first boot found portapixel.toml on PPMEDIA\n" }
+	"TPL-NO"  { set template_there 0; send_user "\n==> the first boot found no portapixel.toml and wrote one\n" }
+	timeout   { die "cannot read /var/lib/portapixel/ops.log" }
+}
+
 # ----------------------------------------------------------- 5. the player check
 # The daemon must have a DRM device and must have started mpv as the kiosk user
 # (plan section 17 item 4, D43). Report the DRM device separately, so "QEMU gave
@@ -219,6 +232,11 @@ catch {exec kill -TERM [exp_pid -i $qemu_id]}
 
 if {$ok == 0} {
 	die "/api/status did not answer in ${t_api}s on port $port"
+}
+if {$template_there ne "1"} {
+	die "the image has no portapixel.toml on PPMEDIA: the first boot wrote the
+ default file (the ops line provision.config). os/build-image.sh must copy
+ os/portapixel.toml to PPMEDIA."
 }
 if {$mpv_user eq ""} {
 	die "the daemon did not start mpv. Read /run/portapixel/player.log and the

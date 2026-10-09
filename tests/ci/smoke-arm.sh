@@ -14,7 +14,9 @@
 #      has the video decoder of the Pi with the alias that udev loads it by;
 #   4. the overlay files and the release layout are in place;
 #   5. PPBOOT holds every file that the Pi firmware needs, and the kernel
-#      command line hides the text console.
+#      command line hides the text console;
+#   6. PPMEDIA holds portapixel.toml, the settings template, as it is in the
+#      repository.
 #
 # Run it as root. It needs losetup, mount and qemu-user binfmt for aarch64.
 #
@@ -23,6 +25,7 @@ set -eu
 
 IMAGE="${1:?the aarch64 image}"
 VERSION="${2:?the release version}"
+REPO="$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)"
 
 say() { printf '==> %s\n' "$*"; }
 die() { printf 'smoke-arm: FAIL: %s\n' "$*" >&2; exit 1; }
@@ -37,6 +40,7 @@ cleanup() {
 	umount "$WORK/root/proc" 2>/dev/null
 	umount "$WORK/root" 2>/dev/null || umount -l "$WORK/root" 2>/dev/null
 	umount "$WORK/boot" 2>/dev/null || umount -l "$WORK/boot" 2>/dev/null
+	umount "$WORK/media" 2>/dev/null || umount -l "$WORK/media" 2>/dev/null
 	[ -n "$LOOP" ] && losetup -d "$LOOP" 2>/dev/null
 	rm -rf "$WORK"
 	return 0
@@ -52,14 +56,16 @@ esac
 say "attach the image"
 LOOP="$(losetup -P -f --show "$RAW")" || die "cannot attach $RAW"
 for i in 1 2 3 4 5 6 7 8 9 10; do
-	[ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && break
+	[ -b "${LOOP}p1" ] && [ -b "${LOOP}p2" ] && [ -b "${LOOP}p3" ] && break
 	sleep 1
 done
-[ -b "${LOOP}p2" ] || die "no partition nodes for $LOOP"
+[ -b "${LOOP}p3" ] || die "no partition nodes for $LOOP"
 
-mkdir -p "$WORK/root" "$WORK/boot"
+mkdir -p "$WORK/root" "$WORK/boot" "$WORK/media"
 mount "${LOOP}p2" "$WORK/root" || die "cannot mount PPROOT"
 mount "${LOOP}p1" "$WORK/boot" || die "cannot mount PPBOOT"
+mount -t exfat -o ro "${LOOP}p3" "$WORK/media" ||
+	die "cannot mount PPMEDIA. Does the kernel of this runner have the exfat driver?"
 R="$WORK/root"
 
 # ------------------------------------------------------- 1. the release identity
@@ -152,7 +158,18 @@ for w in quiet vt.global_cursor_default=0 consoleblank=0 logo.nologo; do
 done
 say "device trees: $(count 'bcm2*.dtb'), overlays: $(find "$B/overlays" -type f | grep -c . || true)"
 
-# -------------------------------------------------- 6. the binary under qemu-user
+# ------------------------------------------------------------ 6. the settings file
+# A person opens this file on another computer before the first boot. The image
+# build copies os/portapixel.toml to the root of PPMEDIA. Compare the bytes, so a
+# build that put the wrong file there fails.
+say "the settings template on PPMEDIA"
+ls -l "$WORK/media"
+[ -f "$WORK/media/portapixel.toml" ] || die "PPMEDIA has no portapixel.toml"
+cmp -s "$REPO/os/portapixel.toml" "$WORK/media/portapixel.toml" ||
+	die "portapixel.toml on PPMEDIA differs from os/portapixel.toml"
+say "portapixel.toml on PPMEDIA is os/portapixel.toml"
+
+# -------------------------------------------------- 7. the binary under qemu-user
 # A chroot, so the binary runs with the libraries of the image. binfmt with the
 # "fix binary" flag finds the interpreter from outside the chroot, so no copy of
 # qemu goes into the image.
