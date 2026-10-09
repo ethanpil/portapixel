@@ -128,8 +128,8 @@ The three names:
 | `PORTAPIXEL_MINISIGN_PASSWORD` | repository secret, optional | the password of the secret key. The key of the owner has no password, so this secret is not set. |
 
 ```sh
-# 1. Make the key pair. minisign asks for a password; a key with no password
-#    needs no third secret.
+# 1. Make the key pair. minisign asks for a password. Add -W for a key with no
+#    password: that key needs no third secret.
 minisign -G -p minisign.pub -s minisign.key
 
 # 2. The secret key goes in a repository SECRET.
