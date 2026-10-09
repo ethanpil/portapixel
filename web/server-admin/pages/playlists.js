@@ -121,9 +121,11 @@ export function mount(main, ctx) {
     fill(panel,
       h('div', { class: 'pp-row', style: { 'justify-content': 'space-between', 'margin-bottom': '12px' } },
         h('div', { class: 'pp-small pp-muted' }, 'The screens make a folder called ', h('span', { class: 'pp-mono', text: p.name })),
+        // picked(), not p: a save loads the list again but does not draw this
+        // panel again, so p can be older than the saved playlist.
         h('div', { class: 'pp-btns' },
-          h('button', { type: 'button', class: 'pp-btn pp-btn--sm', text: 'Rename', onClick: () => renamePlaylist(p) }),
-          h('button', { type: 'button', class: 'pp-btn pp-btn--sm pp-btn--danger-outline', text: 'Delete', onClick: () => deletePlaylist(p) }))),
+          h('button', { type: 'button', class: 'pp-btn pp-btn--sm', text: 'Rename', onClick: () => renamePlaylist(picked() || p) }),
+          h('button', { type: 'button', class: 'pp-btn pp-btn--sm pp-btn--danger-outline', text: 'Delete', onClick: () => deletePlaylist(picked() || p) }))),
       slot);
 
     const bytes = p.items.reduce((sum, it) => sum + itemBytes(it), 0);
@@ -217,7 +219,9 @@ export function mount(main, ctx) {
       name: p.name,          // keep the slug; Rename is the way to change it
       title,
       transition: edited.transition || '',
-      shuffle: edited.shuffle === null ? null : !!edited.shuffle,
+      // The editor leaves shuffle out when the playlist does not set it: the
+      // device setting applies. That is null here, never false.
+      shuffle: typeof edited.shuffle === 'boolean' ? edited.shuffle : null,
       ken_burns: !!edited.ken_burns,
       items: edited.items.map(forServer).filter(Boolean),
     };
@@ -305,6 +309,13 @@ export function mount(main, ctx) {
   }
 
   async function renamePlaylist(p) {
+    // A rename sends the saved playlist and then draws the editor again, so an
+    // edit that is not saved goes away. Ask first, the same as pick().
+    if (editor && editor.isDirty() && !(await confirmDialog({
+      title: 'Rename without saving?',
+      body: 'This playlist holds changes that are not saved yet. A rename drops them. Save first to keep them.',
+      confirm: 'Rename anyway', cancel: 'Stay here', kind: 'danger',
+    }))) return;
     const titleIn = h('input', { class: 'pp-input', type: 'text', value: p.title, autofocus: true, maxlength: '60' });
     const slugIn = h('input', { class: 'pp-input pp-input--mono', type: 'text', value: p.name, maxlength: '60' });
     const ok = await modal({
@@ -326,6 +337,7 @@ export function mount(main, ctx) {
         items: p.items.map(forEditor).map(forServer).filter(Boolean),
       });
       toast('Renamed.');
+      ctx.clearGuard();
       await load(true);
     } catch (err) {
       toast(err.status === 409
