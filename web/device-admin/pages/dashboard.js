@@ -391,7 +391,7 @@ export function mount(main, ctx) {
       return;
     }
 
-    const list = findPlaylist(np.playlist);
+    const list = findPlaylist(np.playlist, status.paired);
     setText(nowPlaylist, list ? list.title : np.playlist || '');
 
     // The report names the file. Its index is a place in the shuffled list that
@@ -681,10 +681,11 @@ export function mount(main, ctx) {
 
   /* The same rule as library.Snapshot.Find: while the device is paired, only a
      fleet playlist plays, and a local playlist with the same name must not
-     take its place. */
-  function findPlaylist(name) {
+     take its place. The pairing comes from the status report: the playlist
+     list does not carry it. */
+  function findPlaylist(name, paired) {
     if (!snap || !snap.playlists) return null;
-    return snap.playlists.find((p) => p.name === name && (!snap.paired || p.fleet)) || null;
+    return snap.playlists.find((p) => p.name === name && (!paired || p.fleet)) || null;
   }
 
   function dotFor(status) {
