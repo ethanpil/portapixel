@@ -97,6 +97,17 @@ start_pre() {
 	# of the gate. Both must survive a restart of the machine.
 	checkpath -d -m 0755 "${PP_RELEASES}/health"
 	checkpath -d -m 0755 "${PP_STATE}"
+
+	# Clear tty1. The kernel shows tty1 each time mpv stops, for example at a
+	# restart, until the next mpv takes the display. tty1 still holds the text of
+	# the BIOS and of the boot loader: the kernel copies the VGA text screen into
+	# tty1 when it takes the console. Measured in QEMU (SeaBIOS): that text was
+	# on the screen for 1 s after each kill of mpv. ESC [3J also clears the
+	# scrollback. The kernel command line hides the cursor. The -c test comes
+	# first: a redirect to a missing device node makes a plain file in /dev.
+	if [ -c /dev/tty1 ]; then
+		printf '\033[H\033[2J\033[3J' >/dev/tty1 2>/dev/null || :
+	fi
 }
 
 stop_pre() {
