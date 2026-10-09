@@ -83,9 +83,12 @@ type Controller struct {
 	// seconds, and /api/status must answer in that time.
 	applyMu sync.Mutex
 
-	// dpmsHeld is true after a DPMS off call, until a call puts the displays on
-	// again. The Blanker then holds the DRM device. applyMu guards it.
-	dpmsHeld bool
+	// offBy is the method that switched the display off, or "" while the display
+	// is on. The on step undoes that method first, also when
+	// display.power_method changed in the meantime: after DPMS the Blanker holds
+	// the DRM device, and after CEC the television stays in standby. applyMu
+	// guards it.
+	offBy string
 
 	mu sync.Mutex
 	// on is the state that the controller last applied.
@@ -262,8 +265,17 @@ func (c *Controller) apply(on bool, reason string) error {
 	}
 	// A player that refuses to stop keeps the state at on, so the next tick tries
 	// again. The display has not changed yet.
+	//
+	// A player that did not stop in time can still stop later: its message
+	// waits in its queue. A Resume after it keeps the player in the state that
+	// the controller records. Without it the player stopped later while the
+	// state said on, and a screen-on then did nothing, because the state was on
+	// already. The screen stayed black until the schedule went off and on again.
 	if err := c.suspend(); err != nil {
 		c.log("power.off.fail", reason+": "+err.Error()+"; the loop tries again")
+		if rerr := c.resume(); rerr != nil {
+			c.log("power.off.fail", "the player did not take the message to go on again: "+rerr.Error())
+		}
 		return err
 	}
 	// A display that stays on is a fault to report. It is not a reason to start the
@@ -297,15 +309,22 @@ func (c *Controller) resume() error {
 // player running through the night.
 func (c *Controller) screen(on bool) {
 	method := c.pick()
-	// display.power_method can change while the screen is off. The Blanker holds
-	// the DRM device since the DPMS off call. If the new method is not DPMS, nothing
-	// else lets go of it, and the player cannot take the device.
-	if on && c.dpmsHeld && method != MethodDPMS {
-		c.dpmsHeld = false
-		if err := c.opt.Blank.On(); err != nil {
-			c.log("power.dpms.fail", "the display did not go on: "+err.Error())
-		}
+	// display.power_method can change while the screen is off. The method that
+	// switched the display off must undo its own step. After DPMS the Blanker
+	// holds the DRM device, and the player cannot take it. After CEC the
+	// television stays in standby, and DPMS cannot wake it.
+	if on && c.offBy != "" && c.offBy != method {
+		c.switchDisplay(c.offBy, true)
 	}
+	c.offBy = ""
+	if !on && method != MethodNone {
+		c.offBy = method
+	}
+	c.switchDisplay(method, on)
+}
+
+// switchDisplay switches the display with one method.
+func (c *Controller) switchDisplay(method string, on bool) {
 	if method == MethodNone {
 		return
 	}
@@ -321,10 +340,8 @@ func (c *Controller) screen(on bool) {
 		err = c.cec(ctx, device, address, on)
 	case MethodDPMS:
 		if on {
-			c.dpmsHeld = false
 			err = c.opt.Blank.On()
 		} else {
-			c.dpmsHeld = true
 			err = c.opt.Blank.Off()
 		}
 	}
@@ -340,12 +357,21 @@ func (c *Controller) screen(on bool) {
 // pick gives the method to use now. "auto" probes CEC one time and keeps the
 // answer: the probe costs a subprocess and the hardware does not change while the
 // daemon runs.
+//
+// The CEC method needs the device node and the address that the probe finds.
+// "auto" finds them as a part of its choice. "cec" probes until a display
+// answers: before this, only "auto" probed, so with "cec" each cec-ctl call
+// failed with no device, and the television stayed on all night.
 func (c *Controller) pick() string {
 	switch method := strings.TrimSpace(c.opt.Method()); method {
 	case MethodCEC, MethodDPMS, MethodNone:
 		c.mu.Lock()
 		c.chosen = method
+		probe := method == MethodCEC && c.cecDevice == ""
 		c.mu.Unlock()
+		if probe {
+			c.findCEC()
+		}
 		return method
 	}
 
@@ -356,21 +382,30 @@ func (c *Controller) pick() string {
 		return chosen
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
-	defer cancel()
-	device, address, ok := c.probeCEC(ctx)
-
-	c.mu.Lock()
-	if ok {
-		c.chosen, c.cecDevice, c.cecAddress = MethodCEC, device, address
-	} else {
-		c.chosen = MethodDPMS
+	chosen = MethodDPMS
+	if c.findCEC() {
+		chosen = MethodCEC
 	}
-	chosen = c.chosen
+	c.mu.Lock()
+	c.chosen = chosen
 	c.mu.Unlock()
 
 	c.log("power.method", chosen+" (display.power_method is auto)")
 	return chosen
+}
+
+// findCEC probes for a CEC adapter with a display on it and keeps what it
+// found. It reports if it found one.
+func (c *Controller) findCEC() bool {
+	ctx, cancel := context.WithTimeout(context.Background(), commandTimeout)
+	defer cancel()
+	device, address, ok := c.probeCEC(ctx)
+	if ok {
+		c.mu.Lock()
+		c.cecDevice, c.cecAddress = device, address
+		c.mu.Unlock()
+	}
+	return ok
 }
 
 func (c *Controller) log(event, details string) {

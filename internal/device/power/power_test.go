@@ -105,9 +105,9 @@ func TestTransitionOrder(t *testing.T) {
 				Player:     r,
 				CECDevices: func() []string { return []string{"/dev/cec0"} },
 			})
-			// The CEC path needs the device that the probe found. A fixed method
-			// skips the probe, so the test sets the node the same way the daemon
-			// does when display.power_method is "cec".
+			// The CEC path needs the device that the probe finds. The test sets the
+			// node, so the steps hold no probe. TestAnExplicitCECMethodProbes covers
+			// the probe.
 			c.cecDevice = "/dev/cec0"
 
 			if err := c.Set(false, "a test"); err != nil {
@@ -192,6 +192,76 @@ func TestAMethodChangeWhileOffStillReleasesTheDisplay(t *testing.T) {
 				t.Errorf("steps = %q, want no display call", r.joined())
 			}
 		})
+	}
+}
+
+// The other direction: the screen went off with a CEC standby and the method
+// changed before the screen came on. DPMS cannot wake a television in standby,
+// so the on step must send the CEC wake first. Before this the television
+// stayed dark each day.
+func TestAMethodChangeWhileOffUndoesACECStandby(t *testing.T) {
+	for _, next := range []string{MethodDPMS, MethodNone} {
+		t.Run(next, func(t *testing.T) {
+			r := newRecorder()
+			method := MethodCEC
+			c := New(Options{
+				Method:     func() string { return method },
+				Run:        r,
+				Blank:      r,
+				Player:     r,
+				CECDevices: func() []string { return []string{"/dev/cec0"} },
+			})
+			c.cecDevice = "/dev/cec0"
+
+			if err := c.Set(false, "a test"); err != nil {
+				t.Fatalf("off: %v", err)
+			}
+			method = next
+			r.steps = nil
+			if err := c.Set(true, "a test"); err != nil {
+				t.Fatalf("on: %v", err)
+			}
+			want := []string{"cec-ctl -d /dev/cec0 --playback --to 0 --image-view-on", "player resume"}
+			if next == MethodDPMS {
+				want = []string{"cec-ctl -d /dev/cec0 --playback --to 0 --image-view-on", "dpms on", "player resume"}
+			}
+			checkSequence(t, "on", r.joined(), want)
+		})
+	}
+}
+
+// display.power_method = "cec" must find its device. Only "auto" probed, so
+// with "cec" each cec-ctl call failed with no device, and the television
+// stayed on all night with a black picture.
+func TestAnExplicitCECMethodProbes(t *testing.T) {
+	r := newRecorder()
+	r.answers[cecTool] = "\tPhysical Address  : 1.0.0.0\n"
+	c := New(Options{
+		Method:     func() string { return MethodCEC },
+		Run:        r,
+		Blank:      r,
+		Player:     r,
+		CECDevices: func() []string { return []string{"/dev/cec0"} },
+	})
+	if err := c.Set(false, "a test"); err != nil {
+		t.Fatal(err)
+	}
+	checkSequence(t, "off", r.joined(), []string{
+		"player suspend",
+		"cec-ctl -d /dev/cec0 --playback -S",
+		"cec-ctl -d /dev/cec0 --playback --to 0 --standby",
+	})
+	r.steps = nil
+	if err := c.Set(true, "a test"); err != nil {
+		t.Fatal(err)
+	}
+	checkSequence(t, "on", r.joined(), []string{
+		"cec-ctl -d /dev/cec0 --playback --to 0 --image-view-on",
+		"cec-ctl -d /dev/cec0 --playback --active-source phys-addr=1.0.0.0",
+		"player resume",
+	})
+	if strings.Contains(r.joined(), " -S") {
+		t.Errorf("the device was found, and the on step probed again: %q", r.joined())
 	}
 }
 
@@ -529,9 +599,14 @@ func TestAPlayerThatRefusesKeepsTheOldState(t *testing.T) {
 
 // A player that refuses to stop must leave the display alone. The display call
 // would fail or fight the player, and the state stays "on" for the next tick.
+//
+// A player that did not stop in time can stop later: its message waits in its
+// queue. So a Resume follows, and the player ends in the state that the
+// controller records. Without it a later screen-on did nothing, because the
+// state was on already, and the screen stayed black.
 func TestAPlayerThatRefusesToStopLeavesTheDisplayOn(t *testing.T) {
 	r := newRecorder()
-	r.playerErr = errors.New("the player is busy; ask again in a moment")
+	r.playerErr = errors.New("the player did not stop in 15s")
 	c := New(Options{Method: func() string { return MethodDPMS }, Run: r, Blank: r, Player: r})
 
 	if err := c.Set(false, "a test"); err == nil {
@@ -539,6 +614,9 @@ func TestAPlayerThatRefusesToStopLeavesTheDisplayOn(t *testing.T) {
 	}
 	if strings.Contains(r.joined(), "dpms") {
 		t.Errorf("steps = %q, want no display call", r.joined())
+	}
+	if got := r.joined(); got != "player suspend | player resume" {
+		t.Errorf("steps = %q, want a suspend and then a resume", got)
 	}
 	if !c.ScreenOn() {
 		t.Error("the controller recorded the screen as off after a player that refused")
