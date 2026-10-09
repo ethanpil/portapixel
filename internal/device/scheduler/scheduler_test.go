@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -474,5 +475,50 @@ func TestScheduleTimesUseTheOneClockFormat(t *testing.T) {
 				t.Errorf("inWindow(%q, %q) = %v, want %v", tt.start, tt.end, got, tt.want)
 			}
 		})
+	}
+}
+
+// One evaluation runs at a time. An evaluation that read the old configuration
+// or the old fleet rules could land after the evaluation of the new ones, and
+// the device then played the old playlist until the next tick.
+func TestAnOlderEvaluationDoesNotLandLast(t *testing.T) {
+	var mu sync.Mutex
+	cfg := config.Default()
+	cfg.Playback.DefaultPlaylist = "old"
+	calls := 0
+	inNow, release := make(chan struct{}), make(chan struct{})
+	s := New(Options{
+		Config: func() config.Config { mu.Lock(); defer mu.Unlock(); return cfg },
+		Now: func() time.Time {
+			mu.Lock()
+			calls++
+			first := calls == 1
+			mu.Unlock()
+			if first {
+				close(inNow)
+				<-release // the first evaluation waits here with the old configuration
+			}
+			return time.Date(2026, 9, 18, 9, 0, 0, 0, time.UTC)
+		},
+	})
+	first := make(chan struct{})
+	go func() { s.Evaluate(); close(first) }()
+	<-inNow
+
+	// A save of the configuration evaluates again.
+	mu.Lock()
+	cfg.Playback.DefaultPlaylist = "new"
+	mu.Unlock()
+	second := make(chan struct{})
+	go func() { s.Evaluate(); close(second) }()
+	select {
+	case <-second:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	<-first
+	<-second
+	if got := s.Active(); got != "new" {
+		t.Fatalf("the active playlist is %q, want the one of the new configuration", got)
 	}
 }

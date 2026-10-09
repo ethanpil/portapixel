@@ -36,6 +36,11 @@ type Options struct {
 type Scheduler struct {
 	opt Options
 
+	// evalMu holds one evaluation at a time, from the read of the rules to the
+	// new name. It is not mu: an evaluation reads the configuration of the
+	// daemon, and Active() must answer in that time.
+	evalMu sync.Mutex
+
 	mu     sync.Mutex
 	active string
 	// gated is true while the clock is not synchronised. It stops the ops log
@@ -134,14 +139,17 @@ func (s *Scheduler) Run(done <-chan struct{}) {
 // Evaluate finds the playlist for this minute and gives its name. It tells the
 // subscribers when the name is different from the name before.
 //
-// The new name and the message go out under the same lock. The ticker, the fleet
-// client and an HTTP handler all call this. A send outside the lock let an older
-// evaluation land last. The device then played the playlist that /api/status did
-// not name, until the next change.
+// One evaluation runs at a time, from the read of the rules to the new name and
+// the message. The ticker, the fleet client and an HTTP handler all call this.
+// An evaluation that read the old rules could land after the evaluation of the
+// new rules. The device then played the old playlist until the next tick.
 //
-// The ops log lines go out after the lock. A write to the log goes to a file, and
-// Active() is on the loop of the player supervisor.
+// The ops log lines go out after mu is free. A write to the log goes to a file,
+// and Active() is on the loop of the player supervisor.
 func (s *Scheduler) Evaluate() string {
+	s.evalMu.Lock()
+	defer s.evalMu.Unlock()
+
 	cfg := s.config()
 	now := s.opt.Now().In(Location(cfg.Device.Timezone))
 	synced := s.opt.Synced()
