@@ -185,14 +185,18 @@ if {$ok == 1 && $item eq ""} {
 # -------------------------------------------------- 4b. the settings template
 # The image puts portapixel.toml on PPMEDIA. The first boot then finds the file
 # and writes no default one. The ops line "provision.config" is the line of a
-# first boot that found no file. The first boot has ended here, because
-# portapixeld starts after it and the status above answered.
+# first boot that found no file. The line "provision.done" ends the provision
+# step. Without it, a missing "provision.config" line proves nothing. The first
+# boot has ended here, because portapixeld starts after it and the status above
+# answered. The marks are TPL-YES, TPL-WROTE and TPL-NOLOG. None of them is the
+# start of another one, because expect matches a part of the output.
 set template_there ""
-send "test -s /var/lib/portapixel/ops.log && { cut -f2 /var/lib/portapixel/ops.log | grep -qx provision.config && echo TPL\"-NO\" || echo TPL\"-YES\"; }\r"
+send "cut -f2 /var/lib/portapixel/ops.log 2>/dev/null | grep -qx provision.done && { cut -f2 /var/lib/portapixel/ops.log | grep -qx provision.config && echo TPL\"-WROTE\" || echo TPL\"-YES\"; } || echo TPL\"-NOLOG\"\r"
 expect {
-	"TPL-YES" { set template_there 1; send_user "\n==> the first boot found portapixel.toml on PPMEDIA\n" }
-	"TPL-NO"  { set template_there 0; send_user "\n==> the first boot found no portapixel.toml and wrote one\n" }
-	timeout   { die "cannot read /var/lib/portapixel/ops.log" }
+	"TPL-YES"   { set template_there 1; send_user "\n==> the first boot found portapixel.toml on PPMEDIA\n" }
+	"TPL-WROTE" { set template_there 0; send_user "\n==> the first boot found no portapixel.toml and wrote one\n" }
+	"TPL-NOLOG" { set template_there 2; send_user "\n==> the ops log has no provision.done line\n" }
+	timeout     { die "cannot read /var/lib/portapixel/ops.log" }
 }
 
 # ----------------------------------------------------------- 5. the player check
@@ -232,6 +236,10 @@ catch {exec kill -TERM [exp_pid -i $qemu_id]}
 
 if {$ok == 0} {
 	die "/api/status did not answer in ${t_api}s on port $port"
+}
+if {$template_there eq "2"} {
+	die "the ops log has no provision.done line, so the test cannot say if the
+ first boot found portapixel.toml. Read /var/lib/portapixel/ops.log on the guest."
 }
 if {$template_there ne "1"} {
 	die "the image has no portapixel.toml on PPMEDIA: the first boot wrote the
