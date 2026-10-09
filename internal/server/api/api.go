@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 
@@ -73,13 +74,21 @@ func (d Deps) device(w http.ResponseWriter, r *http.Request) (db.Device, bool) {
 		return db.Device{}, false
 	}
 	dev, err := d.DB.DeviceByToken(token)
-	if err != nil {
+	switch {
+	case errors.Is(err, db.ErrNotFound):
 		// One answer for "no such token" and for "the token was revoked". A
 		// device that guesses tokens must learn nothing from the difference.
 		// The code says that the token itself is gone, so the device drops its
 		// pairing. A 401 with no code is a fault of something in between, and the
 		// device then keeps the pairing and waits (httpjson.TokenRevokedCode).
 		httpjson.Revoked(w, "this device token is not valid")
+		return db.Device{}, false
+	case err != nil:
+		// A busy or damaged database is a fault of the server and not a revoked
+		// token. The revoked answer would make each screen that polls now drop
+		// its pairing. A 500 tells the device to keep the pairing and try again.
+		d.Log.Log("device-auth-error", err.Error())
+		httpjson.Error(w, http.StatusInternalServerError, "the server could not read its device list")
 		return db.Device{}, false
 	}
 	return dev, true
