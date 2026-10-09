@@ -1,9 +1,10 @@
 # PortaPixel settings. This file has every setting, and each one is off.
 # To turn on a setting, remove the "#" at the start of its line.
 # Also remove the "#" from the [table] line above it, for example [server].
-# A key under the wrong [table] line does not do what you want.
+# A key under the wrong [table] line does not work. The device shows a warning.
 # At the first boot, the device writes this file again with all the values.
-# Your values stay. See docs/settings.md for every key.
+# Your values stay. If the file has a fault, the device keeps it as it is.
+# See docs/settings.md for every key.
 
 # PortaPixel device configuration.
 # You can edit this file by hand. Every computer can read this partition.
