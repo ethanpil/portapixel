@@ -34,9 +34,10 @@
 -- in the last pptr-ms of A. Before the mix, overlay passes the frames of A
 -- through with no work. A stops at the end of the mix. B then starts at the
 -- time that the mix reached, under the copy of the screen, and the copy goes
--- away at its first frame. The audio is the audio of A only. The script does
--- this only when A and B have the same shape, A is long enough, and no fault
--- happened before; else the crossfade uses the copy.
+-- away at its first frame. If B has less than 0.1 s left after that time, B
+-- starts at 0, so it does not end at once. The audio is the audio of A only.
+-- The script does this only when A and B have the same shape, A is long
+-- enough, and no fault happened before; else the crossfade uses the copy.
 --
 -- A fault of the filter graph stops the moving crossfade in this mpv: the
 -- script reports it and uses the copy. mpv refuses an item whose graph fails
@@ -64,6 +65,7 @@ local STEP = 0.02    -- the time between two steps, in seconds
 local DEADMAN = 5    -- the time that B may take to show, in seconds
 local LEAD = 1       -- the part of A that plays before a moving crossfade, in seconds
 local LATE = 0.25    -- a moving crossfade that stops this much early did not end
+local LEFT = 0.1     -- an item that continues a mix needs this much of itself after it
 
 local KINDS = {
     ["fade"] = true, ["crossfade"] = true,
@@ -258,6 +260,28 @@ local function shape(t)
     return w, h
 end
 
+-- span gives the end of the item in seconds: its duration, or its end option
+-- when that is earlier. It gives nil when mpv knows no duration.
+local function span()
+    local length = mp.get_property_number("duration")
+    local stop = tonumber(mp.get_property("end") or "")
+    if stop and (not length or stop < length) then length = stop end
+    return length
+end
+
+-- fit starts an item that continues a moving crossfade at 0 when it is too
+-- short for that. The mix showed the first part of the item, and the item
+-- starts after it. If the item is not longer than the mix, it would end at
+-- once, and nothing of it would show after the mix.
+local function fit()
+    local begin = tonumber(mp.get_property("start") or "") or 0
+    if begin <= 0 then return end
+    local length = span()
+    if length and length - begin < LEFT then
+        mp.set_property("file-local-options/start", "0")
+    end
+end
+
 -- prepare sets up a moving crossfade from this item into the next one. It runs
 -- before mpv selects the tracks of the item. Each condition that it does not
 -- find leaves the crossfade with the copy of the screen.
@@ -275,9 +299,7 @@ local function prepare()
     local w, h = shape(a)
     local fps = a["demux-fps"]
     if not w or not fps or fps <= 0 then return end
-    local length = mp.get_property_number("duration")
-    local stop = tonumber(mp.get_property("end") or "")
-    if stop and (not length or stop < length) then length = stop end
+    local length = span()
     -- An item that goes on from a moving crossfade starts later than 0.
     local begin = tonumber(mp.get_property("start") or "") or 0
     if not length or length - begin < d + LEAD then return end
@@ -432,7 +454,7 @@ mp.add_hook("on_load", 50, function()
 end)
 
 mp.add_hook("on_preloaded", 50, function()
-    local ok, err = pcall(prepare)
+    local ok, err = pcall(function() fit() prepare() end)
     if not ok then
         P = nil
         fault("moving crossfade: error: " .. tostring(err))

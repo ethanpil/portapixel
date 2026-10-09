@@ -618,7 +618,8 @@ motion on both sides:
 2. A gets a file-local `end` at the end of the mix, and `hwdec` becomes `auto-copy` when it
    was `auto-safe`: the graph needs the frames in memory.
 3. B starts at `start=<d>` (set in its `on_load` hook) under the copy, and the copy goes
-   away at its first frame (the kind `join`). No part of B plays two times.
+   away at its first frame (the kind `join`). No part of B plays two times. A B with less
+   than 0.1 s left after `<d>` (a clip as short as the mix) starts at 0 and plays in full.
 4. The audio is the audio of A. mpv marks the other tracks of B `no_auto_select`.
 
 The script makes a moving crossfade only when A is a video of the same shape as B, with no
