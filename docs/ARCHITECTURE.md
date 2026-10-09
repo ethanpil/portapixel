@@ -172,6 +172,11 @@ that this server does not hold, which carries `{"error":"...","code":"token-revo
 portal, a web application firewall — and is a network fault: the device backs off, says
 so in `sync_error` and keeps the pairing.
 
+The server gives the `token-revoked` answer only when the lookup of the token ends in
+`db.ErrNotFound`. A request with no `Authorization` header gets a 401 with no code. Any other
+error of the lookup, such as a busy or damaged database, gets a 500. A fault of the server
+must never make a screen drop its pairing.
+
 Every address that the manifest names (`media[].url`, `release.base_url`) is resolved
 by `fleet.ResolveURL` against the address of the pairing. The result must be on that
 scheme, host and port, and under its path, or the device leaves the object or the
@@ -188,6 +193,11 @@ so it can never change a screen that works:
 3. Every other request that names a paired row waits for the admin, with
    `collides_with` set. A request with no row and an auto token pairs at once.
 4. A request that waits longer than 24 hours goes away. At most 200 wait at a time.
+5. Each request that makes a new pending row counts against its address: five new rows
+   in one hour (`httpguard.NewPendingLimiter`). The sixth gets 429 and writes nothing.
+   The route takes a place in the count first, and `db.Enroll` refuses a new row with
+   `db.ErrQueueLimited` when `mayQueue` is false. A request that makes no row gives its
+   place back. A poll with a good claim secret makes no row, so it does not count.
 
 `POST /api/v1/enroll` and every other JSON route of `/api/v1` and `/api/admin` need
 `Content-Type: application/json`. A form on another site cannot send that type
@@ -259,6 +269,15 @@ type Heartbeat struct {
 }
 ```
 
+`ReleaseRef.Version` and the `releases.version` column hold a version without the letter
+"v". `version.Normalize` turns the tag `v1.5.0` into `1.5.0`, and the release list of the
+server applies it to each tag. A device reports the same form, so the manifest gate and the
+Versions page compare equal names. `releases.prerelease` (migration 5) holds the flag that
+GitHub sets on a release. `GET /api/admin/releases` gives it as `prerelease`, and the Versions
+page shows a badge and a warning at the approval. The server has no "latest" choice: only
+the approved version goes out. `updater.CompareVersions` orders two pre-release suffixes by
+semver: `rc.9` is older than `rc.10`, and both are older than the final release.
+
 `Status` is the same struct that the device serves at `/api/status` (plan section 8,
 `health`). It lives in `internal/manifest` so the two ends share it.
 
@@ -266,7 +285,10 @@ The content model. An item is an image or a video, and nothing else: there are n
 web page items and no single-URL kiosk mode. `internal/playlist` holds the one
 extension table (`Kind`, `MediaType`): images `jpg jpeg png gif webp avif bmp`, videos
 `mp4 m4v mov webm mkv ogv`. The device library, `/media/` and the server media types
-all use it. A transition is a word of `config.Transitions`: `cut`, `fade`, `fade-white`,
+all use it. The server library takes the same files and no others. The upload route
+answers 422 on the `name` field for any other extension. A playlist save refuses an item
+whose media row has such a name. The manifest names the object by that name, and the
+device reads the kind from its extension. A transition is a word of `config.Transitions`: `cut`, `fade`, `fade-white`,
 `crossfade`, `wipe-*`, `push-*`, `slide-in-*`, `slide-out-*`, `zoom-out` and `split`, where `*`
 is `left`, `right`, `up` or `down` (owner decisions of 2026-10-08). A fade goes through black
 and a fade-white through white. A wipe, a push, a slide-in and a slide-out move in the
