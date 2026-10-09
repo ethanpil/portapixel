@@ -11,7 +11,7 @@
 //
 //   - Nothing here may hold up the start of the daemon or the picture on the
 //     screen. Run is a goroutine that starts after the HTTP server and the
-//     browser. Every fault is an ops log line and a sentence in /api/status.
+//     player. Every fault is an ops log line and a sentence in /api/status.
 //     The device plays what it has; a sync improves it later (plan 3.3).
 //
 //   - The per-device token lives in state.json on ext4 and never in

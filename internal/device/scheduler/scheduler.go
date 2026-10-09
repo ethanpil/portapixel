@@ -60,7 +60,7 @@ var locations sync.Map // string -> *time.Location
 // than no schedule.
 //
 // It is here and it is exported. The daemon needs the same cache for the local
-// time that it gives to the scheduler and to the browser supervisor.
+// time that it gives to the scheduler and to the player supervisor.
 func Location(name string) *time.Location {
 	if name == "" {
 		return time.UTC
@@ -140,7 +140,7 @@ func (s *Scheduler) Run(done <-chan struct{}) {
 // not name, until the next change.
 //
 // The ops log lines go out after the lock. A write to the log goes to a file, and
-// Active() is on the loop of the browser supervisor.
+// Active() is on the loop of the player supervisor.
 func (s *Scheduler) Evaluate() string {
 	cfg := s.config()
 	now := s.opt.Now().In(Location(cfg.Device.Timezone))
@@ -229,8 +229,8 @@ func (s *Scheduler) ScreenShouldBeOn(t time.Time) bool {
 }
 
 // ScreenOffCovers reports if the screen schedule has the screen off at t. The
-// nightly browser restart uses it: a restart at 03:30 is pointless when the
-// screen is off then and the browser is not running (plan 3.3).
+// nightly player restart uses it: a restart at 03:30 is pointless when the
+// screen is off then and the player is not running (plan 3.3).
 func (s *Scheduler) ScreenOffCovers(t time.Time) bool {
 	if _, _, _, ok := s.screenRule(); !ok {
 		return false

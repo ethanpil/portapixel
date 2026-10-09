@@ -56,7 +56,7 @@ const (
 	// a file on the flash card, so a server that is down for a week must not write a
 	// line at every poll (D2).
 	faultRepeat = time.Hour
-	// settleWait is how long the loop waits before its first pass. The browser and
+	// settleWait is how long the loop waits before its first pass. The player and
 	// the HTTP server come up first.
 	settleWait = 3 * time.Second
 	// roundLimit is the longest that one pass may take. A large object download
