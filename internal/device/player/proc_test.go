@@ -1,6 +1,34 @@
 package player
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+// Output that holds only noise gives "mpv ended" with no output part, and output
+// with a real line gives that line.
+func TestExitReasonHasNoEmptyOutputPart(t *testing.T) {
+	tests := []struct {
+		name, out, want string
+	}{
+		{"no output", "", "mpv ended"},
+		{"only noise", "[vaapi] libva: init failed\n[ffmpeg] VDPAU: Cannot open the X11 display .\n", "mpv ended"},
+		{"a real line", "[vaapi] libva: init failed\nError opening input files.\n",
+			"mpv ended; output: Error opening input files."},
+	}
+	for _, tt := range tests {
+		sink := &outputSink{tail: &tailBuffer{max: tailBytes}}
+		sink.Write([]byte(tt.out))
+		l := &launcher{out: sink}
+		got := l.exitReason()
+		if got != tt.want {
+			t.Errorf("%s: exitReason = %q, want %q", tt.name, got, tt.want)
+		}
+		if strings.HasSuffix(got, "output: ") {
+			t.Errorf("%s: exitReason ends with an empty output part: %q", tt.name, got)
+		}
+	}
+}
 
 // The exit reason is the last line of mpv that says something. The lines of the
 // hardware decoder probe and of the VT switcher come at each video and at each

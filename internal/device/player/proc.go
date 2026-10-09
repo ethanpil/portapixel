@@ -177,8 +177,10 @@ func (l *launcher) exitReason() string {
 		reason = "mpv ended: " + l.err.Error()
 	}
 	if l.out != nil {
-		if text := l.out.String(); text != "" {
-			reason += "; output: " + lastLine(text)
+		// Output that holds only noise gives no part: "output: " with nothing
+		// after it says nothing.
+		if line := lastLine(l.out.String()); line != "" {
+			reason += "; output: " + line
 		}
 	}
 	return reason
