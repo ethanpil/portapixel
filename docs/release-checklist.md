@@ -28,7 +28,12 @@ actually built: the player is mpv, directly on DRM/KMS. See
 
 ## Audio and network
 
-- [ ] HDMI audio works on a Raspberry Pi and on an x86 machine.
+- [ ] HDMI audio works on a Raspberry Pi and on an x86 machine, with the
+      default `audio.output = "auto"`. `auto` writes no ALSA setting, so mpv
+      plays to card 0. On a Pi 3 and a Pi 4, `dtparam=audio=on` adds the jack
+      as a card next to the HDMI cards, and no rule sets their order. Read
+      `/proc/asound/cards` over three boots: when the jack is card 0, `auto`
+      sends the sound to the jack and the television is silent.
 - [ ] The 3.5 mm jack plays sound on a Raspberry Pi 3 and a Pi 4 with
       `audio.output = "analog"`. The line `dtparam=audio=on` in
       `os/rpi/config.txt` stands above the first `dtoverlay` line. Before the

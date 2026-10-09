@@ -26,6 +26,18 @@ so that the device never offers it again.
 **No update ever half-applies.** Either the new release comes up and proves
 itself healthy, or the device is back on the release it started from.
 
+## An update changes the daemon only
+
+An update replaces the `portapixeld` binary and nothing else. The packages,
+the init scripts and the boot files stay those of the image.
+
+So a device with an image from before the change to mpv (an image with
+Chromium) cannot take a release with mpv. That image has no mpv, and its
+init script gives the daemon the flag `--kiosk-cache`, which the new daemon
+does not know. The new daemon stops at once, the health gate rolls the update
+back after two minutes, and the device marks that release bad. Write a new
+image to such a device.
+
 ## Why a build might say it cannot install updates
 
 A release binary is signed with a private key that only the project's

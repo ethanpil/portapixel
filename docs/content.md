@@ -251,16 +251,19 @@ the "Look for new files" button on the Dashboard and the Playlists page, and
 the documented hook below.
 
 ```sh
-curl -c cookies.txt -X POST http://portapixel.local/api/login \
+curl -c cookies.txt -X POST http://<device>/api/login \
+  -H "X-PortaPixel: 1" -H "Content-Type: application/json" \
   -d '{"password":"portapixel"}'
 
-curl -b cookies.txt -X POST http://portapixel.local/api/rescan \
+curl -b cookies.txt -X POST http://<device>/api/rescan \
   -H "X-PortaPixel: 1"
 ```
 
-The first call signs in and keeps the session in `cookies.txt`. The second
-call runs the scan. Every state-changing call needs the `X-PortaPixel: 1`
-header; a script that leaves it out gets refused.
+Put the address of the device in place of `<device>`: its IP address, or its
+`.local` name (see `docs/install.md`). The first call signs in and keeps the
+session in `cookies.txt`. The second call runs the scan. Every call that is
+not a GET needs the `X-PortaPixel: 1` header, the login too. A script that
+leaves it out gets refused.
 
 ## File name rules
 
@@ -277,8 +280,15 @@ device refuses a file path that:
 An item can name a file that is not there, or a file kind that PortaPixel
 does not play. The device leaves that item out, and the web UI marks it with a
 warning. A file can also be damaged. Then mpv cannot play it, the device skips
-it, and the ops log names the file (`player.item.fail`). One bad item never
+it, and the ops log names the file (`player.item.fail`). Such an item never
 stops the rest of the playlist.
+
+A value in `playlist.toml` that breaks a rule is different: the device skips
+the WHOLE playlist. A path that breaks the file name rules above, a
+`transition` word that is not in the list, or a number less than zero breaks
+a rule. An item with no `file` breaks a rule too, for example a web page item
+(`url = ...`) of an old version. The ops log (`library.playlist.skipped`) and the status warning
+`playlist-problem` name the fault.
 
 When no item of the playlist can play, the screen shows the fallback screen
 with the address of the device. If mpv failed on every item, the device tries
