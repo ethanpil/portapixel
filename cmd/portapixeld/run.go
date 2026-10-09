@@ -1049,11 +1049,30 @@ func (d *daemon) watchSchedule(done <-chan struct{}) {
 		select {
 		case <-done:
 			return
-		case <-changes:
-			d.newSeed()
-			d.sup.PlaylistChanged()
+		case name := <-changes:
+			d.scheduleChanged(name)
 		}
 	}
+}
+
+// scheduleChanged gives the player the playlist that the schedule names now.
+//
+// A rename, a fleet manifest and an unpair change the rules first and scan the
+// media root after that. The last scan then does not hold the new playlist, and
+// the player showed the fallback screen until that scan (seen in the lab at the
+// first pairing). So a name that the last scan does not hold makes a scan first.
+// An empty name is a paired device with no content: that is the fallback screen.
+//
+// The seed comes before the scan. The scan tells the player too, and both
+// messages must give the same order of a shuffled playlist.
+func (d *daemon) scheduleChanged(name string) {
+	d.newSeed()
+	if name != "" {
+		if _, ok := d.lib.Snapshot().Find(name); !ok {
+			d.lib.Rescan()
+		}
+	}
+	d.sup.PlaylistChanged()
 }
 
 // ---------------------------------------------------------------- the configuration

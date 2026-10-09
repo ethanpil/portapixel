@@ -272,6 +272,39 @@ func TestPairedDeviceShowsOnlyFleetContent(t *testing.T) {
 	}
 }
 
+// The scheduler can name a playlist that the last scan does not hold yet. A
+// rename, a fleet manifest and an unpair change the rules before their own
+// scan. The player must then get the playlist, and not the fallback screen.
+func TestAScheduleChangeScansForANewPlaylist(t *testing.T) {
+	media, state := t.TempDir(), t.TempDir()
+	writePlaylistDir(t, media, "lobby", "Lobby", "a.jpg")
+	cfg := config.Default()
+	cfg.Playback.DefaultPlaylist = "lobby"
+	d := &daemon{
+		paths: paths{media: media, state: state},
+		log:   opslog.New(filepath.Join(state, opsLogName)),
+		cfg:   cfg,
+	}
+	d.lib = library.New(library.Options{MediaRoot: media, StateDir: state, Log: d.log, Paired: func() bool { return false }})
+	d.lib.Rescan()
+	d.sched = scheduler.New(scheduler.Options{Config: d.config, Log: d.log})
+	d.sched.Evaluate()
+	d.sup = player.New(player.Options{Command: player.CommandConfig{Override: player.DisableCommand}, Log: d.log})
+
+	// The directory moved on the disk, and the rules name it before a scan.
+	if err := os.Rename(filepath.Join(media, "lobby"), filepath.Join(media, "front-desk")); err != nil {
+		t.Fatal(err)
+	}
+	d.mu.Lock()
+	d.cfg.Playback.DefaultPlaylist = "front-desk"
+	d.mu.Unlock()
+	d.scheduleChanged(d.sched.Evaluate())
+
+	if m := d.playerManifest(); m.Playlist == nil {
+		t.Fatal("the player gets the fallback screen for a playlist that is on the disk")
+	}
+}
+
 // writePlaylistDir makes one playlist directory with one image in it.
 func writePlaylistDir(t *testing.T, media, dir, title, file string) {
 	t.Helper()
