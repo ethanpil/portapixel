@@ -452,6 +452,8 @@ fi
 
 # ---------------------------------------------------------------- 8. the console
 # The screen belongs to the player. No getty on tty1, ever (plan section 5).
+# The kernel command line (cmdline.base) keeps the console text and the cursor
+# off tty1, so nothing shows between two starts of mpv.
 # In --root mode the tree is ours and the whole file is ours to write. On-box the
 # inittab belongs to the owner of the system, and replacing it would take away
 # every getty and every respawn line they set. Use a marked block there, the same
