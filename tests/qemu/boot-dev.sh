@@ -10,7 +10,7 @@
 #   * port 80 and port 22 of the guest on the host loopback
 #   * the QEMU monitor on a socket
 #
-# The graphics device is virtio-vga, so the guest has a real DRM device and cage
+# The graphics device is virtio-vga, so the guest has a real DRM device and mpv
 # can take DRM master. Alpine keeps that device in the package
 # qemu-hw-display-virtio-vga.
 #
@@ -114,7 +114,7 @@ cmd_start() {
 	# filter-dump writes every frame of the guest network to a pcap file on the
 	# host. It is the proof that the device talks to nobody: the file holds the
 	# name in each DNS question and in each TLS hello, so a plain grep finds a
-	# host that the browser called. The guest needs no tool at all for this.
+	# host that the device called. The guest needs no tool at all for this.
 	DUMP=""
 	if [ -n "$NETDUMP" ]; then
 		case "$NETDUMP" in /*) ;; *) NETDUMP="$PWD/$NETDUMP" ;; esac
@@ -123,7 +123,7 @@ cmd_start() {
 	fi
 
 	# virtio-vga, not the default VGA card: the default has no KMS driver in
-	# Linux, so /dev/dri stays empty and cage cannot start.
+	# Linux, so /dev/dri stays empty and mpv cannot start.
 	qemu-system-x86_64 -device help 2>&1 | grep -q '"virtio-vga"' ||
 		die "this QEMU has no virtio-vga; apk add qemu-hw-display-virtio-vga"
 

@@ -9,7 +9,7 @@ if running "$CLI_DIR/qemu.pid"; then
 	exit 0
 fi
 
-# virtio-vga, not the default card: the guest needs a DRM device, or cage cannot
+# virtio-vga, not the default card: the guest needs a DRM device, or mpv cannot
 # start and the screen stays black.
 qemu-system-x86_64 -device help 2>&1 | grep -q '"virtio-vga"' ||
 	die "this QEMU has no virtio-vga; apk add qemu-hw-display-virtio-vga"

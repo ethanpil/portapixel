@@ -37,8 +37,8 @@ set t_boot  [expr {120 * $scale}]
 set t_shell [expr {30 * $scale}]
 set t_api   [expr {180 * $scale}]
 
-# $gpu gives the guest a real DRM device, so cage has a /dev/dri/card0 to take.
-# Without it there is no display at all and the browser check fails for a reason
+# $gpu gives the guest a real DRM device, so mpv has a /dev/dri/card* to take.
+# Without it there is no display at all and the player check fails for a reason
 # that has nothing to do with the image. boot-smoke.sh picks the device.
 set cmd "qemu-system-x86_64 $accel $bios -m $mem -nographic \
  $gpu \
@@ -147,45 +147,45 @@ if {$want_version ne "" && $got_version ne $want_version} {
 send_user "\n==> poll http://127.0.0.1:$port/api/status\n"
 set deadline [expr {[clock seconds] + $t_api}]
 set ok 0
-set playing 0
-set heartbeat 0
+set running 0
+set item ""
+set kind ""
 while {[clock seconds] < $deadline} {
 	if {[catch {exec curl -sS -m 5 "http://127.0.0.1:$port/api/status"} out] == 0} {
 		if {[string match {*device_id*} $out] || [string match "*\{*" $out]} {
 			if {$ok == 0} { send_user "==> /api/status answered: $out\n" }
 			set ok 1
-			# The browser needs longer than the API. Keep polling until the
-			# daemon says that the cage session runs, because "the API answers"
-			# alone passed on a device with a black screen.
+			# The player needs longer than the API. Keep polling until the
+			# daemon says that mpv runs, because "the API answers" alone passed
+			# on a device with a black screen.
 			if {[string match {*"player_state":"running"*} $out]} {
-				if {$playing == 0} { send_user "==> player_state is running\n" }
-				set playing 1
+				if {$running == 0} { send_user "==> player_state is running\n" }
+				set running 1
 			}
-			# The status has now_playing from the FIRST heartbeat of the
-			# player, so "now_playing" proves that a heartbeat arrived. A
-			# browser process that loads no player is a black screen with a
-			# green status (plan section 17 item 4).
-			if {[string match {*"now_playing":*} $out]} {
-				if {$heartbeat == 0} { send_user "==> one heartbeat is recorded\n" }
-				set heartbeat 1
+			# now_playing has an item only when mpv reported the start of a
+			# file. A player process that shows nothing is a black screen with
+			# a green status (plan section 17 item 4).
+			if {[regexp {"now_playing":\{[^\}]*"item":"([^"]+)"[^\}]*"kind":"([a-z]+)"} $out -> got_item got_kind]} {
+				if {$item eq ""} { send_user "==> now_playing: $got_kind $got_item\n" }
+				set item $got_item
+				set kind $got_kind
 			}
-			if {$playing == 1 && $heartbeat == 1} { break }
+			if {$running == 1 && $item ne ""} { break }
 		}
 	}
 	after 3000
 }
-if {$ok == 1 && $playing == 0} {
-	send_user "\n==> the browser never reached the running state:\n    $out\n"
+if {$ok == 1 && $running == 0} {
+	send_user "\n==> the player never reached the running state:\n    $out\n"
 }
-if {$ok == 1 && $heartbeat == 0} {
-	send_user "\n==> no heartbeat of the player reached the daemon:\n    $out\n"
+if {$ok == 1 && $item eq ""} {
+	send_user "\n==> now_playing never named an item:\n    $out\n"
 }
 
-# ---------------------------------------------------------- 5. the browser check
-# The daemon must have a DRM device and must have started the cage session with
-# Chromium in it (plan section 17 item 4). Report the DRM device separately, so
-# "QEMU gave us no graphics card" never reads as "the browser crashed".
-set browser 0
+# ----------------------------------------------------------- 5. the player check
+# The daemon must have a DRM device and must have started mpv as the kiosk user
+# (plan section 17 item 4, D43). Report the DRM device separately, so "QEMU gave
+# us no graphics card" never reads as "the player crashed".
 # ANY card, not card0. Under UEFI the firmware framebuffer driver takes card0 and
 # virtio_gpu becomes card1, so a test for card0 alone reports "no display" on a
 # machine that has one. The daemon must not assume card0 either.
@@ -195,11 +195,16 @@ expect {
 	"DRI-NO"  { send_user "\n==> NO DRM device: QEMU gave the guest no usable card\n" }
 	timeout   { die "cannot look at /dev/dri" }
 }
-send "pgrep -f chromium >/dev/null && echo BROWSER\"-UP\" || echo BROWSER\"-DOWN\"\r"
+# The owner of the mpv process, between "<" and ">" (see the version rule
+# above). An empty value means that no mpv runs.
+set mpv_user ""
+send "ps -o user,comm | awk '\$2 == \"mpv\" { u = \$1 } END { print \"MP\" \"V=<\" u \">\" }'\r"
 expect {
-	"BROWSER-UP"   { set browser 1; send_user "\n==> the browser runs\n" }
-	"BROWSER-DOWN" { send_user "\n==> the browser is NOT running\n" }
-	timeout        { die "pgrep gave no answer" }
+	-re {MPV=<([^>\r\n]*)>} {
+		set mpv_user [strip_ansi $expect_out(1,string)]
+		send_user "\n==> mpv runs as \"$mpv_user\"\n"
+	}
+	timeout { die "ps gave no answer" }
 }
 
 # --------------------------------------------------------------- 6. shut it down
@@ -215,19 +220,22 @@ catch {exec kill -TERM [exp_pid -i $qemu_id]}
 if {$ok == 0} {
 	die "/api/status did not answer in ${t_api}s on port $port"
 }
-if {$browser == 0} {
-	die "the daemon did not start the browser in the cage session"
+if {$mpv_user eq ""} {
+	die "the daemon did not start mpv. Read /run/portapixel/player.log and the
+ ops log on the guest."
 }
-if {$playing == 0} {
+if {$mpv_user ne "kiosk"} {
+	die "mpv runs as \"$mpv_user\" and it must run as kiosk (D43)"
+}
+if {$running == 0} {
 	die "/api/status never reported player_state running.
- A browser process alone is not a picture: cage can start and then stop, or
- Chromium can hold a black window. Read the ops log on the guest."
+ An mpv process alone is not a picture: it can wait for a display or stop
+ again and again. Read the ops log and /run/portapixel/player.log on the guest."
 }
-if {$heartbeat == 0} {
-	die "the player sent no heartbeat in ${t_api}s.
- The browser runs and the player does not report, so the page did not load or
- its JavaScript stopped. One syntax error in player.js gave a black screen with
- a green status before (CONTEXT.md section 4)."
+if {$item eq ""} {
+	die "/api/status named no now_playing item in ${t_api}s.
+ mpv runs and reported no file, so the playlist did not load or no file
+ opened. Read /run/portapixel/player.log on the guest."
 }
-send_user "\nPASS: the image boots, /api/status answers, the browser runs, the player reports\n"
+send_user "\nPASS: the image boots, /api/status answers, mpv runs as kiosk and plays $kind $item\n"
 exit 0
