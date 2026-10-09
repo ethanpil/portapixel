@@ -545,7 +545,7 @@ The watchdog ladder (plan 3.3). The thresholds come from `[watchdog]` (D30). T i
 |---|---|
 | mpv ends | Start again at once. An mpv that ends before its first picture waits 5 s, doubled up to 60 s. `player_state` is `stopped` in that wait. |
 | The IPC does not answer | No socket T after the start, or a request with no answer for T. |
-| A video does not move | The `time-pos` of the video does not change for T plus the time from `time-pos` to `demuxer-cache-time` (1 h at most). |
+| A video does not move | The `time-pos` of the video does not change for T, or for two frame intervals of the file when that is longer (2 h at most). |
 | An image does not go on | The same image for its duration plus T, and its `time-pos` did not move for T. One image alone is not checked. |
 
 Each fault above is a counted restart. `restarts_before_reboot` counted restarts inside
@@ -558,10 +558,18 @@ playlist changes (`player.item.crash`). mpv loops the list, and each pass would 
 again and count a step on the ladder. The supervisor reads the last `start-file` and
 `playback-restart` events of an mpv that ended before it decides.
 
-The video rule waits for a next frame that the demuxer has read. A slideshow video (one
-frame in 30 s) or a still part of a video with a variable frame rate keeps `time-pos` still
-while mpv waits for the time of the next frame. A decoder that hangs asks for no more data,
-and with no cache for a local file the demuxer reads only about 1 s ahead. An animated image
+The video rule waits for the next frame. `time-pos` is the time of the frame on the screen,
+so a slideshow video (one frame in 30 s or more) keeps it still until the next frame. The
+frame interval is `1 / estimated-vf-fps`, else `1 / container-fps`, else `duration` divided
+by `estimated-frame-count`, and 1 h at most. mpv gives `container-fps` only from 0.1 frames per
+second, but it counts the frames with the rate of the file also below that. For a file with
+frames 35 s apart, mpv 0.40 gave `estimated-vf-fps` 0.0286, no `container-fps`, and 3 frames
+in 105 s (lab7). `estimated-vf-fps` is a mean of the last frames, so a long still part of a
+video with a normal frame rate is still a stall after T. A decoder that hangs gives no new
+frames, so the interval stays that of the frames before it, and for a normal video the limit
+is T. An mpv that hangs does not answer, and the IPC rule applies. `demuxer-cache-time` is no help. mpv 0.40 gives it
+as unavailable while the demuxer has nothing in its queue. That is the normal state between
+two frames that are far apart. An animated image
 (GIF, PNG, WebP) plays as a video for its own length, and its `time-pos` moves, so the image
 rule does not restart it while it moves. A duration of some billion seconds gives the largest
 limit and not a negative sum.
@@ -696,11 +704,12 @@ now: the factory name when another device holds the name of the settings. With n
 announcement they carry the first address, and with no address there is no URL.
 
 Every 2 s the daemon asks for `playlist-pos` and `time-pos`. For a video it also asks for
-`demuxer-cache-time` (before `time-pos`, for the stall rule), `frame-drop-count` and
-`decoder-frame-drop-count`. At each `playback-restart` it asks for `playlist-pos` and the two
-counters again. `now_playing.index` is the index in the manifest, and `now_playing.since` is
-the time of the first frame. `now_playing.dropped_frames` is the sum of the two counters since
-that frame. mpv starts the counters again at each file.
+`estimated-vf-fps`, `container-fps`, `duration` and `estimated-frame-count` (before
+`time-pos`, for the stall rule), `frame-drop-count` and `decoder-frame-drop-count`. At each
+`playback-restart` it asks for `playlist-pos` and the two counters again.
+`now_playing.index` is the index in the manifest, and `now_playing.since` is the time of the
+first frame. `now_playing.dropped_frames` is the sum of the two counters since that frame. mpv
+starts the counters again at each file.
 
 The transition script `transitions.lua` is mpv Lua with the LuaJIT FFI. When an item ends,
 its `on_unload` hook covers the screen with a copy (`screenshot-raw window bgra`, OSD

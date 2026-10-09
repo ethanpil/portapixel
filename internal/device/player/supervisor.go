@@ -195,7 +195,10 @@ const (
 	reqPos
 	reqRestartPos
 	reqTimePos
-	reqCacheTime
+	reqEstimatedFPS
+	reqContainerFPS
+	reqDuration
+	reqFrameCount
 	reqDropVO
 	reqDropDec
 	reqBaseVO
@@ -266,10 +269,9 @@ type Supervisor struct {
 	lastPos   float64
 	posKnown  bool
 	lastMove  time.Time
-	// readTo is demuxer-cache-time of the video: the time up to which the
-	// demuxer has read the file. readKnown is false when mpv did not give it.
-	readTo    float64
-	readKnown bool
+	// rate is what mpv says about the frame rate of the video on the screen,
+	// for the stall rule (see stallLimit).
+	rate frameRate
 	// failedAt is when no item of the playlist could play. The fallback screen
 	// shows from then until the retry.
 	failedAt   time.Time
@@ -886,9 +888,12 @@ func (s *Supervisor) poll(now time.Time) {
 		return
 	}
 	if it.Kind == playlist.KindVideo {
-		// Before time-pos, so that the stall rule has it when the answer about
-		// the position comes (see onTimePos).
-		s.request(now, reqCacheTime, 0, "get_property", "demuxer-cache-time")
+		// Before time-pos, so that the stall rule has them when the answer about
+		// the position comes (see onTimePos and stallLimit).
+		s.request(now, reqEstimatedFPS, 0, "get_property", "estimated-vf-fps")
+		s.request(now, reqContainerFPS, 0, "get_property", "container-fps")
+		s.request(now, reqDuration, 0, "get_property", "duration")
+		s.request(now, reqFrameCount, 0, "get_property", "estimated-frame-count")
 	}
 	// Also for an image: an animated GIF, PNG or WebP plays as a video in mpv,
 	// and its position moves (see checkWatchdog).
@@ -969,8 +974,12 @@ func (s *Supervisor) onReply(m message, now time.Time) {
 		var v float64
 		known := success && json.Unmarshal(m.Data, &v) == nil
 		s.onTimePos(v, known, now)
-	case reqCacheTime:
-		s.readKnown = success && json.Unmarshal(m.Data, &s.readTo) == nil
+	case reqEstimatedFPS, reqContainerFPS, reqDuration, reqFrameCount:
+		var v float64 // 0 when mpv did not give the value
+		if !success || json.Unmarshal(m.Data, &v) != nil {
+			v = 0
+		}
+		s.rate.set(r.what, v)
 	case reqDropVO, reqDropDec, reqBaseVO, reqBaseDec:
 		var n int
 		if success && json.Unmarshal(m.Data, &n) == nil {
@@ -1106,7 +1115,7 @@ func (s *Supervisor) setIndex(pos int, now time.Time, restart bool) {
 		s.itemStart = now
 		s.lastMove = now
 		s.posKnown = false
-		s.readKnown = false
+		s.rate = frameRate{}
 	}
 }
 

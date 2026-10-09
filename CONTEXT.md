@@ -529,8 +529,12 @@ or with the ops log.
   move a stack. An address that goes to the kernel as a plain integer needs the
   heap: `power.kernelBuffer` is not inlined, so its result escapes.
 - `time-pos` is the time of the frame on the screen. It stands still while mpv
-  waits for a next frame that is far ahead (a slideshow video). The stall rule
-  adds the time to `demuxer-cache-time`. Not proven with real mpv yet.
+  waits for a next frame that is far ahead (a slideshow video). The first fix
+  used `demuxer-cache-time`. mpv 0.40 gives it as unavailable when the queue of
+  the demuxer is empty, and that is the normal state between two far frames. The
+  lab7 device restarted mpv at each pass of such a video. The stall rule now
+  waits two frame intervals: `estimated-vf-fps`, else `container-fps` (none
+  below 0.1 fps), else `duration` divided by `estimated-frame-count`.
 - A Go file that imports a package cannot share the package block with a
   function of that name. The test helper `playlist()` blocked the import of
   `internal/playlist`, so it is `manifestOf()`.

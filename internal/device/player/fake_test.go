@@ -26,8 +26,10 @@ import (
 //	fake-next           the item on the screen ends; the next one shows
 //	fake-hang           answer nothing more, as an mpv after SIGSTOP
 //	fake-stall          time-pos stops
-//	fake-gap <seconds>  the next frame of a video is this far ahead of time-pos:
-//	                    demuxer-cache-time gives time-pos and the gap
+//	fake-rate <vf-fps> <container-fps> <duration> <frames>  set what a video
+//	                    gives for estimated-vf-fps, container-fps, duration and
+//	                    estimated-frame-count. 0 makes the property unavailable.
+//	                    Each video starts with 25 fps, 60 s and 1500 frames.
 //	fake-exit <code>    end the process
 //	fake-drops <vo> <decoder>  set the two dropped frame counters
 //	fake-fault <text>   set user-data/pptr/fault, as transitions.lua does: a
@@ -76,7 +78,7 @@ type fakeMPV struct {
 	scheduled int
 	timePos   float64
 	stall     bool
-	gap       float64
+	rate      [4]float64 // the four values of fake-rate
 	hang      bool
 	vo, dec   int
 	faults    int
@@ -214,8 +216,10 @@ func (f *fakeMPV) handle(c *fakeClient, name string, a []any, id int64, args []s
 	case "fake-stall":
 		f.stall = true
 		reply(nil, "success")
-	case "fake-gap":
-		f.gap, _ = a[0].(float64)
+	case "fake-rate":
+		for i := range f.rate {
+			f.rate[i], _ = a[i].(float64)
+		}
 		reply(nil, "success")
 	case "fake-exit":
 		code, _ := a[0].(float64)
@@ -258,6 +262,7 @@ func (f *fakeMPV) play(pos int) {
 		}
 		if !strings.Contains(e.Path, "broken") {
 			f.timePos = 0
+			f.rate = [4]float64{25, 25, 60, 1500}
 			f.notify("hwdec-current")
 			f.broadcast(map[string]any{"event": "playback-restart"})
 			return
@@ -293,11 +298,12 @@ func (f *fakeMPV) value(prop string) any {
 			return 0.0
 		}
 		return f.timePos
-	case "demuxer-cache-time":
-		if f.pos < 0 || isImagePath(f.list[f.pos].Path) {
+	case "estimated-vf-fps", "container-fps", "duration", "estimated-frame-count":
+		i := slices.Index([]string{"estimated-vf-fps", "container-fps", "duration", "estimated-frame-count"}, prop)
+		if f.pos < 0 || isImagePath(f.list[f.pos].Path) || f.rate[i] == 0 {
 			return nil
 		}
-		return f.timePos + f.gap
+		return f.rate[i]
 	case "frame-drop-count":
 		return f.vo
 	case "decoder-frame-drop-count":

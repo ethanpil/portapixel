@@ -149,7 +149,7 @@ mean that a restart is not the answer, so the device reboots.
 | Key | Default | Values | What it does | Takes effect |
 |---|---|---|---|---|
 | `enabled` | `true` | `true`, `false` | `false` stops the whole ladder: a frozen player then stays on the screen until a person acts. A player that ends still starts again. | live |
-| `heartbeat_timeout` | `30` | `10` to `600` seconds | The silence, or the standstill of a video, that restarts the player. An image that stays longer than its duration plus this time also restarts it. | live |
+| `heartbeat_timeout` | `30` | `10` to `600` seconds | The silence, or the standstill of a video, that restarts the player. A video with frames far apart (a slideshow video) may stand still for two of its frame intervals when that is longer. An image that stays longer than its duration plus this time also restarts it. | live |
 | `restarts_before_reboot` | `4` | `0` to `20` | How many player restarts inside `restart_window` reboot the device. `0` means that the device never reboots on its own. | live |
 | `restart_window` | `60` | `1` to `1440` minutes | The length of that window. | live |
 

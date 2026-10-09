@@ -691,7 +691,8 @@ func TestRestartWhenIPCIsSilent(t *testing.T) {
 	}
 }
 
-// A video whose position does not move is restarted.
+// A video whose position does not move is restarted. The fake gives each video
+// 25 frames per second, so the limit is the timeout.
 func TestRestartWhenVideoStalls(t *testing.T) {
 	h := newHarness(t, videos(), nil)
 	h.waitPlaying(0)
@@ -714,29 +715,59 @@ func TestRestartWhenVideoStalls(t *testing.T) {
 	}
 }
 
-// A video whose next frame is far ahead stands still on the screen, and its
-// time-pos does not move: a slideshow video with one frame in 30 s, or a still
-// part of a video with a variable frame rate. The demuxer has read the next
-// frame, so mpv waits for its time and is not stuck. Such a video was a stall,
-// and each pass of the playlist counted a restart.
-func TestAVideoThatWaitsForItsNextFrameIsNotAStall(t *testing.T) {
-	h := newHarness(t, videos(), nil)
-	h.waitPlaying(0)
-	first := h.sup.proc.pid()
-	h.ctl("fake-gap", 60) // the next frame is 60 s ahead
-	h.ctl("fake-stall")
-	for range 20 { // 40 s: more than heartbeatTimeout
-		h.advance(2 * time.Second)
-	}
-	if h.sup.proc.pid() != first || h.eventWith("player.restart", "did not move") {
-		t.Fatalf("a video that waits for its next frame was restarted:\n%s", h.events())
-	}
+// A slideshow video shows one frame in 35 s, and its time-pos stands still
+// until the next frame. Such a video was a stall, and each pass of the playlist
+// counted a restart (lab7). The rule now waits two frame intervals. The values
+// are those that mpv 0.40 gave for the lab7 file: estimated-vf-fps 1/35, no
+// container-fps (mpv gives none below 0.1), and 3 frames in 105 s.
+func TestASlideshowVideoIsNotAStall(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rate []any
+	}{
+		{"estimated-vf-fps", []any{1.0 / 35, 0, 105, 3}},
+		{"duration and frame count", []any{0, 0, 105, 3}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, videos(), nil)
+			h.waitPlaying(0)
+			first := h.sup.proc.pid()
+			h.ctl(append([]any{"fake-rate"}, tc.rate...)...)
+			h.ctl("fake-stall")
+			for range 30 { // 60 s: more than heartbeatTimeout, less than two frames
+				h.advance(2 * time.Second)
+			}
+			if h.sup.proc.pid() != first || h.eventWith("player.restart", "did not move") {
+				t.Fatalf("a slideshow video was restarted:\n%s", h.events())
+			}
 
-	// Past the time of the next frame and the timeout, it is a stall.
-	h.advance(60 * time.Second)
-	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
-	if !h.eventWith("player.restart", "did not move") {
-		t.Fatalf("no stall line:\n%s", h.events())
+			// Past two frame intervals (70 s), it is a stall.
+			h.advance(12 * time.Second)
+			waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+			if !h.eventWith("player.restart", "did not move") {
+				t.Fatalf("no stall line:\n%s", h.events())
+			}
+		})
+	}
+}
+
+func TestFrameInterval(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rate frameRate
+		want time.Duration
+	}{
+		{"nothing", frameRate{}, 0},
+		{"estimated first", frameRate{estimated: 25, container: 0.5, duration: 60, frames: 1}, 40 * time.Millisecond},
+		{"container next", frameRate{container: 0.5, duration: 60, frames: 1}, 2 * time.Second},
+		{"duration by frames last", frameRate{duration: 105, frames: 3}, 35 * time.Second},
+		{"no frame count", frameRate{duration: 105}, 0},
+		{"the cap", frameRate{estimated: 1e-9}, maxFrameWait},
+		{"far past the cap", frameRate{duration: 1e300, frames: 1e-300}, maxFrameWait},
+	} {
+		if got := tc.rate.interval(); got != tc.want {
+			t.Errorf("%s: interval = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }
 

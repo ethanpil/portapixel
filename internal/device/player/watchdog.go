@@ -156,28 +156,75 @@ func (s *Supervisor) onTimePos(value float64, pos bool, now time.Time) {
 	if !set.Enabled {
 		return
 	}
-	if still := now.Sub(s.lastMove); still >= set.HeartbeatTimeout+s.nextFrameWait() {
+	if still := now.Sub(s.lastMove); still >= s.stallLimit(set.HeartbeatTimeout) {
 		s.restart(fmt.Sprintf("the video %s did not move for %s", it.Name, still.Round(time.Second)), true, resumeNext)
 	}
 }
 
-// maxFrameWait is the longest time that the stall rule waits for a next frame
-// that the demuxer has read. It also keeps the sum in the range of a Duration.
+// maxFrameWait is the longest time that the stall rule waits for the next frame
+// of a video. With this limit, two intervals are always in the range of a
+// Duration.
 const maxFrameWait = time.Hour
 
-// nextFrameWait gives the time from the position on the screen to the end of
-// what the demuxer has read. The next frame of the video can be far ahead: a
-// slideshow video with one frame in 30 s, or a still part of a video with a
-// variable frame rate. mpv shows the frame until the time of the next one, and
-// time-pos stands still until then. The demuxer has read that next frame, so
-// mpv waits for its time and is not stuck. Such a video was a stall, and each
-// pass of the playlist counted a restart.
+// stallLimit gives the time that the position of a video may stand still: the
+// timeout, or two frame intervals of the file when that is longer. time-pos is
+// the time of the frame on the screen, and it stands still until the next frame.
+// A slideshow video shows one frame in 30 s or more. Such a video was a stall,
+// and each pass of the playlist counted a restart (lab7).
 //
-// A decoder that hangs asks for no more data. The demuxer then reads about one
-// second ahead, and the rule waits about one second more.
-func (s *Supervisor) nextFrameWait() time.Duration {
-	if !s.readKnown || s.readTo <= s.lastPos {
-		return 0
+// A decoder that hangs gives no new frames. The interval stays that of the
+// frames before it, so for a normal video the timeout applies. An mpv that
+// hangs does not answer, and the silence rule of checkWatchdog applies.
+func (s *Supervisor) stallLimit(timeout time.Duration) time.Duration {
+	return max(timeout, 2*s.rate.interval())
+}
+
+// frameRate is what mpv says about the frame rate of the video on the screen.
+// A value is 0 when mpv did not give it.
+type frameRate struct {
+	estimated float64 // estimated-vf-fps
+	container float64 // container-fps
+	duration  float64 // duration, in seconds
+	frames    float64 // estimated-frame-count
+}
+
+// set records the answer to one of the four requests.
+func (r *frameRate) set(w what, v float64) {
+	switch w {
+	case reqEstimatedFPS:
+		r.estimated = v
+	case reqContainerFPS:
+		r.container = v
+	case reqDuration:
+		r.duration = v
+	case reqFrameCount:
+		r.frames = v
 	}
-	return min(time.Duration((s.readTo-s.lastPos)*float64(time.Second)), maxFrameWait)
+}
+
+// interval gives the time between two frames, or 0 when mpv gave nothing that
+// tells it. The result stops at maxFrameWait.
+//
+// estimated-vf-fps comes from the times of the frames that mpv showed last, so
+// it is right also when the file names a wrong rate. It is a mean, so a long
+// still part of a video with a variable frame rate does not change it much.
+// container-fps is the rate that the file names. mpv gives it only from 0.1
+// frames per second, but it counts the frames with the rate of the file also
+// below that. So the duration divided by the frame count covers a slower file.
+// For a file with frames 35 s apart (lab7), mpv 0.40 gave estimated-vf-fps
+// 0.0286, no container-fps, and 3 frames in 105 s.
+func (r frameRate) interval() time.Duration {
+	var sec float64
+	switch {
+	case r.estimated > 0:
+		sec = 1 / r.estimated
+	case r.container > 0:
+		sec = 1 / r.container
+	case r.duration > 0 && r.frames > 0:
+		sec = r.duration / r.frames
+	}
+	if sec >= maxFrameWait.Seconds() {
+		return maxFrameWait
+	}
+	return time.Duration(sec * float64(time.Second))
 }
