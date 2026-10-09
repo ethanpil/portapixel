@@ -121,15 +121,14 @@ func newHarness(t *testing.T, m library.PlayerManifest, opts func(*Options, *har
 	writeFile(t, filepath.Join(h.drm, "card0", "device", "uevent"), "DRIVER=virtio_gpu\n")
 	o := Options{
 		// Quotation marks, because a temporary path can hold a space.
-		Command:      CommandConfig{Override: fmt.Sprintf("%q %s", self, fakeFlag), RunDir: run},
-		Log:          h.log,
-		Now:          h.clock.Now,
-		Tick:         2 * time.Millisecond,
-		DisplayProbe: 5 * time.Second,
-		DRMRoot:      h.drm,
-		ModelPath:    filepath.Join(run, "no-model"),
-		Manifest:     func() library.PlayerManifest { h.mu.Lock(); defer h.mu.Unlock(); return h.manifest },
-		Fallback:     func() fallback.Info { h.mu.Lock(); defer h.mu.Unlock(); h.infoReads++; return h.info },
+		Command:   CommandConfig{Override: fmt.Sprintf("%q %s", self, fakeFlag), RunDir: run},
+		Log:       h.log,
+		Now:       h.clock.Now,
+		Tick:      2 * time.Millisecond,
+		DRMRoot:   h.drm,
+		ModelPath: filepath.Join(run, "no-model"),
+		Manifest:  func() library.PlayerManifest { h.mu.Lock(); defer h.mu.Unlock(); return h.manifest },
+		Fallback:  func() fallback.Info { h.mu.Lock(); defer h.mu.Unlock(); h.infoReads++; return h.info },
 		Render: func(info fallback.Info, w, h2 int) ([]byte, error) {
 			h.mu.Lock()
 			h.renders = append(h.renders, info)
@@ -183,6 +182,13 @@ func (h *harness) setManifest(m library.PlayerManifest) {
 	h.manifest = m
 	h.mu.Unlock()
 	h.sup.PlaylistChanged()
+}
+
+// restarts gives the counted restarts in the window of the ladder.
+func (h *harness) restarts() int {
+	h.sup.mu.Lock()
+	defer h.sup.mu.Unlock()
+	return len(h.sup.ladder.restarts)
 }
 
 func (h *harness) rebootCount() int {

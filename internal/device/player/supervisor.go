@@ -107,11 +107,7 @@ type State struct {
 	VideoOutput      string
 	Hwdec            string
 	DisplayConnected bool
-	Suspended        bool
-	Restarts         int
 	NowPlaying       *manifest.NowPlaying
-	// LastError is the reason that mpv is not running, when it is not.
-	LastError string
 }
 
 // Options are the parameters of a Supervisor. Each one that touches the world
@@ -157,9 +153,6 @@ type Options struct {
 	DRMRoot string
 	// ModelPath is the file that names the board. "" uses ModelPath.
 	ModelPath string
-	// DisplayProbe is the time between two reads of the connectors. 0 uses
-	// displayProbeEvery.
-	DisplayProbe time.Duration
 	// Tick is the period of the loop. 0 uses one second.
 	Tick time.Duration
 }
@@ -182,9 +175,8 @@ const (
 type resumeAt int
 
 const (
-	resumeStart resumeAt = iota // the first item
-	resumeSame                  // the item on the screen: a restart that a person asked for
-	resumeNext                  // the item after it: the item on the screen can be the fault
+	resumeSame resumeAt = iota // the item on the screen: a restart that a person asked for
+	resumeNext                 // the item after it: the item on the screen can be the fault
 )
 
 // resumePoint is the item that the next load of the same playlist starts at.
@@ -321,8 +313,6 @@ type Supervisor struct {
 	hwdec     string
 	displayOK bool
 	suspended bool
-	restarts  int
-	lastErr   string
 	playing   *manifest.NowPlaying
 	// The dropped frames: the counters of mpv and their values at the start of
 	// the item.
@@ -346,9 +336,6 @@ func New(opt Options) *Supervisor {
 	}
 	if opt.Tick <= 0 {
 		opt.Tick = defaultTick
-	}
-	if opt.DisplayProbe <= 0 {
-		opt.DisplayProbe = displayProbeEvery
 	}
 	if opt.Manifest == nil {
 		opt.Manifest = func() library.PlayerManifest { return library.PlayerManifest{} }
@@ -381,7 +368,7 @@ func New(opt Options) *Supervisor {
 		state:       StateStopped,
 		displayOK:   true,
 		lastDisplay: true,
-		waitDelay:   opt.DisplayProbe,
+		waitDelay:   displayProbeEvery,
 		launchDelay: launchRetryMin,
 		notes:       make(map[string]noteState),
 		crashed:     make(map[string]bool),
@@ -469,9 +456,6 @@ func (s *Supervisor) State() State {
 		Player:           s.state,
 		VideoOutput:      s.output,
 		DisplayConnected: s.displayOK,
-		Suspended:        s.suspended,
-		Restarts:         s.restarts,
-		LastError:        s.lastErr,
 	}
 	if s.playing != nil {
 		np := *s.playing
@@ -605,7 +589,7 @@ func (s *Supervisor) handle(c command) {
 		if !s.isSuspended() {
 			s.setSuspended(true)
 			s.stopPlayer()
-			s.setState(StateStopped, "")
+			s.setState(StateStopped)
 			s.log("player.suspend", "the screen is off")
 		}
 		c.reply <- nil
@@ -625,7 +609,7 @@ func (s *Supervisor) handle(c command) {
 // step is one pass of the loop.
 func (s *Supervisor) step() {
 	if s.opt.Command.Disabled() {
-		s.setState(StateDisabled, "")
+		s.setState(StateDisabled)
 		return
 	}
 	if s.isSuspended() {
@@ -674,12 +658,12 @@ func (s *Supervisor) displayReady(now time.Time) bool {
 	s.setDisplay(connected)
 
 	if connected {
-		s.probeNext = now.Add(s.opt.DisplayProbe)
+		s.probeNext = now.Add(displayProbeEvery)
 		if s.waitLogged {
 			s.log("player.display.found", "a display is connected; the player starts")
 			s.waitLogged = false
 		}
-		s.waitDelay = s.opt.DisplayProbe
+		s.waitDelay = displayProbeEvery
 		return true
 	}
 
@@ -691,7 +675,7 @@ func (s *Supervisor) displayReady(now time.Time) bool {
 		s.log("player.display.wait", "no display is connected; the device waits and does not count a restart")
 		s.waitLogged = true
 	}
-	s.setState(StateWaiting, "no display is connected")
+	s.setState(StateWaiting)
 	return false
 }
 
@@ -703,8 +687,9 @@ func (s *Supervisor) handleExit(now time.Time) {
 		reason := s.proc.exitReason()
 		s.log("player.exit", reason)
 		// No mpv runs until the next launch, which can wait for the backoff.
-		// The state said "running" for that time.
-		s.setState(StateStopped, reason)
+		// The state said "running" for that time. The reason is in the line
+		// above.
+		s.setState(StateStopped)
 		s.drainOpens()
 		s.markCrashed()
 		s.resumeFrom = s.resumePoint(resumeNext)
@@ -778,11 +763,11 @@ func (s *Supervisor) launch(now time.Time) {
 	s.mu.Lock()
 	s.output = output
 	s.mu.Unlock()
-	s.setState(StateStarting, "")
+	s.setState(StateStarting)
 
 	err := s.proc.start(Launch{Output: output, Rotation: set.Rotation, VideoMode: set.VideoMode, Model: s.model})
 	if err != nil {
-		s.setState(StateStopped, err.Error())
+		s.setState(StateStopped)
 		s.log("player.start.fail", fmt.Sprintf("%s; the next try is in %s", err, s.launchDelay))
 		s.delayLaunch(now)
 		return
@@ -816,7 +801,7 @@ func (s *Supervisor) connect(now time.Time) {
 	s.request(now, reqOther, 0, "observe_property", obsFault, "user-data/pptr/fault")
 	s.request(now, reqOther, 0, "observe_property", obsMoved, "user-data/pptr/moved")
 	s.sendMotion(now)
-	s.setState(StateRunning, "")
+	s.setState(StateRunning)
 	s.loadContent(now)
 }
 
@@ -1420,7 +1405,7 @@ func (s *Supervisor) restart(reason string, counted bool, at resumeAt) {
 	s.log("player.restart", reason)
 	s.resumeFrom = s.resumePoint(at)
 	s.stopPlayer()
-	s.setState(StateStarting, "")
+	s.setState(StateStarting)
 	// A restart is a fresh try, so the launch backoff starts again.
 	s.launchNext = time.Time{}
 	s.launchDelay = launchRetryMin
@@ -1441,7 +1426,7 @@ func (s *Supervisor) resumePoint(at resumeAt) *resumePoint {
 	if s.list == nil {
 		return s.resumeFrom
 	}
-	if at == resumeStart || s.list.fallback {
+	if s.list.fallback {
 		return nil
 	}
 	n := len(s.list.playlist.Items)
@@ -1465,12 +1450,10 @@ func (s *Supervisor) countRestart(now time.Time, reason string) bool {
 
 	s.mu.Lock()
 	count, reboot := s.ladder.restarted(now, set)
-	s.restarts = count
 	if reboot {
-		// The window starts again, so State never reports more restarts than the
-		// window holds.
+		// The window starts again, so a device whose reboot function does nothing
+		// does not ask again at each restart.
 		s.ladder.rebootDone()
-		s.restarts = 0
 	}
 	s.mu.Unlock()
 
@@ -1504,7 +1487,7 @@ func (s *Supervisor) dropIPC() {
 // shutdown ends mpv when the daemon stops.
 func (s *Supervisor) shutdown() {
 	s.stopPlayer()
-	s.setState(StateStopped, "")
+	s.setState(StateStopped)
 }
 
 // checkNightly runs the daily restart of mpv (plan 3.3).
@@ -1569,10 +1552,9 @@ func (s *Supervisor) local(t time.Time) time.Time {
 	return s.opt.Local(t)
 }
 
-func (s *Supervisor) setState(state, reason string) {
+func (s *Supervisor) setState(state string) {
 	s.mu.Lock()
 	s.state = state
-	s.lastErr = reason
 	s.mu.Unlock()
 }
 

@@ -63,8 +63,7 @@ type ladder struct {
 // reboot the device every hour.
 //
 // A ladder that is off, and a limit of 0, both mean "never reboot". The count
-// still runs: /api/status reports it, and a person who reads it learns that mpv
-// restarts again and again.
+// still runs: a ladder that comes on again counts the restarts of its window.
 func (l *ladder) restarted(now time.Time, set WatchdogSettings) (int, bool) {
 	cut := now.Add(-set.RestartWindow)
 	kept := l.restarts[:0]

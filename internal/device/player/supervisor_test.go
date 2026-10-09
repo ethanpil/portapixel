@@ -558,7 +558,7 @@ func TestRestartAfterExit(t *testing.T) {
 	h.ctl("fake-exit", 9)
 	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
 	h.waitPlaying(1)
-	if got := h.sup.State().Restarts; got != 1 {
+	if got := h.restarts(); got != 1 {
 		t.Errorf("restarts = %d, want 1", got)
 	}
 	if h.countEvent("player.exit") != 1 {
@@ -615,8 +615,8 @@ func TestAFileThatEndsMPVIsLeftOut(t *testing.T) {
 		h.ctl("fake-next")
 	}
 	h.settle()
-	if n := h.countEvent("player.exit"); n != 1 || h.sup.State().Restarts != 1 || h.rebootCount() != 0 {
-		t.Fatalf("exits = %d, restarts = %d, reboots = %d:\n%s", n, h.sup.State().Restarts, h.rebootCount(), h.events())
+	if n := h.countEvent("player.exit"); n != 1 || h.restarts() != 1 || h.rebootCount() != 0 {
+		t.Fatalf("exits = %d, restarts = %d, reboots = %d:\n%s", n, h.restarts(), h.rebootCount(), h.events())
 	}
 
 	// A new version of the playlist tries the file again.
@@ -686,8 +686,8 @@ func TestRestartWhenIPCIsSilent(t *testing.T) {
 		return false
 	})
 	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
-	if !h.eventWith("player.restart", "did not answer") || h.sup.State().Restarts != 1 {
-		t.Fatalf("restarts = %d:\n%s", h.sup.State().Restarts, h.events())
+	if !h.eventWith("player.restart", "did not answer") || h.restarts() != 1 {
+		t.Fatalf("restarts = %d:\n%s", h.restarts(), h.events())
 	}
 }
 
@@ -701,7 +701,7 @@ func TestRestartWhenVideoStalls(t *testing.T) {
 	for range 20 {
 		h.advance(2 * time.Second)
 	}
-	if h.sup.State().Restarts != 0 {
+	if h.restarts() != 0 {
 		t.Fatalf("a moving video was restarted:\n%s", h.events())
 	}
 
@@ -709,8 +709,8 @@ func TestRestartWhenVideoStalls(t *testing.T) {
 	h.advance(2 * time.Second)
 	h.advance(heartbeatTimeout)
 	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
-	if !h.eventWith("player.restart", "did not move") || h.sup.State().Restarts != 1 {
-		t.Fatalf("restarts = %d:\n%s", h.sup.State().Restarts, h.events())
+	if !h.eventWith("player.restart", "did not move") || h.restarts() != 1 {
+		t.Fatalf("restarts = %d:\n%s", h.restarts(), h.events())
 	}
 }
 
@@ -748,7 +748,7 @@ func TestRestartWhenImageOverruns(t *testing.T) {
 
 	h.settle()
 	h.advance(15*time.Second + heartbeatTimeout - 4*time.Second)
-	if h.sup.State().Restarts != 0 {
+	if h.restarts() != 0 {
 		t.Fatalf("restarted before the grace ended:\n%s", h.events())
 	}
 	h.clock.Advance(3 * time.Second)
@@ -775,7 +775,7 @@ func TestAnAnimatedImageIsNotStuckWhileItMoves(t *testing.T) {
 	for range 30 { // 60 s, and the limit is 10 s and the grace of 30 s
 		h.advance(2 * time.Second)
 	}
-	if h.sup.State().Restarts != 0 {
+	if h.restarts() != 0 {
 		t.Fatalf("an animation that moves was restarted:\n%s", h.events())
 	}
 
@@ -847,7 +847,7 @@ func TestDisplayWait(t *testing.T) {
 		t.Error("a device that waits for a display is not up for the health marker")
 	}
 	h.clock.Advance(10 * time.Minute)
-	if h.countEvent("player.display.wait") != 1 || h.sup.State().Restarts != 0 {
+	if h.countEvent("player.display.wait") != 1 || h.restarts() != 0 {
 		t.Fatalf("the wait wrote or counted too much:\n%s", h.events())
 	}
 
@@ -872,7 +872,7 @@ func TestExitWithNoDisplayIsNotAFault(t *testing.T) {
 	writeFile(t, status, "disconnected\n")
 	h.ctl("fake-exit", 1)
 	waitFor(t, "the wait state", func() bool { return h.sup.State().Player == StateWaiting })
-	if st := h.sup.State(); st.Restarts != 0 || h.countEvent("player.exit") != 0 || st.DisplayConnected {
+	if st := h.sup.State(); h.restarts() != 0 || h.countEvent("player.exit") != 0 || st.DisplayConnected {
 		t.Fatalf("the ending counted as a fault: %+v\n%s", st, h.events())
 	}
 
@@ -880,7 +880,7 @@ func TestExitWithNoDisplayIsNotAFault(t *testing.T) {
 	writeFile(t, status, "connected\n")
 	h.clock.Advance(displayWaitMax)
 	h.waitPlaying(0)
-	if h.sup.State().Restarts != 0 || h.countEvent("player.exit") != 0 {
+	if h.restarts() != 0 || h.countEvent("player.exit") != 0 {
 		t.Fatalf("a restart counted:\n%s", h.events())
 	}
 }
@@ -899,8 +899,8 @@ func TestNightlyRestart(t *testing.T) {
 	waitFor(t, "the grace", func() bool { return h.countEvent("player.nightly.grace") == 1 })
 	h.ctl("fake-next")
 	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
-	if !h.eventWith("player.restart", "item boundary") || h.sup.State().Restarts != 0 {
-		t.Fatalf("restarts = %d:\n%s", h.sup.State().Restarts, h.events())
+	if !h.eventWith("player.restart", "item boundary") || h.restarts() != 0 {
+		t.Fatalf("restarts = %d:\n%s", h.restarts(), h.events())
 	}
 	// Item 0 ended, so the new mpv starts at item 1.
 	h.waitPlaying(1)
@@ -1039,14 +1039,14 @@ func TestSuspendAndResume(t *testing.T) {
 		t.Fatal("Suspend returned while mpv still runs")
 	}
 	st := h.sup.State()
-	if !st.Suspended || st.Player != StateStopped || st.NowPlaying != nil {
+	if !h.sup.isSuspended() || st.Player != StateStopped || st.NowPlaying != nil {
 		t.Fatalf("state after Suspend = %+v", st)
 	}
 	if !h.sup.Started() {
 		t.Error("a device with the screen off is not up for the health marker")
 	}
 	h.clock.Advance(time.Hour)
-	if h.sup.proc.alive() || h.sup.State().Restarts != 0 {
+	if h.sup.proc.alive() || h.restarts() != 0 {
 		t.Fatal("mpv started while the screen is off")
 	}
 
@@ -1082,10 +1082,10 @@ func TestDisabledPlayer(t *testing.T) {
 	if s.State().Player != StateDisabled || !s.Started() {
 		t.Fatalf("state = %+v", s.State())
 	}
-	if err := s.Suspend(); err != nil || !s.State().Suspended {
+	if err := s.Suspend(); err != nil || !s.isSuspended() {
 		t.Fatalf("Suspend = %v, state %+v", err, s.State())
 	}
-	if err := s.Resume(); err != nil || s.State().Suspended {
+	if err := s.Resume(); err != nil || s.isSuspended() {
 		t.Fatalf("Resume = %v", err)
 	}
 }
