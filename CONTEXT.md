@@ -427,6 +427,15 @@ or with the ops log.
   put the four old slides into the lab4 image. Extract into an empty directory.
 - A rename that the device refuses still shows as acked on the server. The reason is
   only in the ops log and the status warning of the device.
+- Rule: only "not found" may give the `token-revoked` answer. The first lookup of a device
+  token gave it for each error. A busy database then told every screen that polled to
+  forget its pairing. Now only `db.ErrNotFound` gives it (f195732). A request with no
+  header gets a 401 with no code, and a fault of the database gets a 500. The device keeps
+  its pairing for both.
+- Rule: never save the config that the server runs. It holds the environment and the
+  flags. A save wrote `PORTAPIXEL_TRUSTED_PROXIES` and the `--listen` flag into
+  `server.toml`, and a proxy that a person removed later stayed trusted. `saveField`
+  reads the file, changes one field and writes the file again (8342826).
 
 ### Lessons of the change to mpv
 
