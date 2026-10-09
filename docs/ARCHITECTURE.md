@@ -477,10 +477,16 @@ On a Pi Zero 2 W, 3 and 4 each video item also gets `vd-lavc-o=num_capture_buffe
 3.1 MB each at 1080p, and a 512 MB Pi has a CMA area of 128 MB. The option is per file and
 not on the command line, because each decoder that does not know it writes an error line.
 
-The exit reason in the ops log (`player.exit`) is the last line of the output of mpv that is
-not noise. The noise is the lines of the hardware decoder probe of auto-safe (vaapi, Vulkan,
-VDPAU, at each video on a device that does not have them), the two lines of the DRM output
-with no TTY, and the line of a decoder that does not know the buffer option.
+The exit reason in the ops log (`player.exit`) is the exit status and the last 3 different
+lines of the output of mpv that hold text. There is no list of lines to skip: mpv writes
+probe lines of the hardware decoders at each video, and such a list held the lines of one
+board only. A line that comes again is one line, so the cause stays in the last lines. Each
+line is cut to 120 bytes on a rune boundary, so the ops log stays valid UTF-8.
+
+A line that can come again and again (a broken item, a fault of the script, a failed draw of
+the fallback screen) goes in the ops log at most once an hour for each event and playlist. The
+key never holds the details, which name an item or a temporary file. The next line of a key
+says how many times it came in between (D2).
 
 The kiosk account. mpv parses files from removable media and from the network, so it never
 runs as root. The kernel makes the first process that opens a DRM primary node the DRM
@@ -489,26 +495,54 @@ master, also without root. mpv gets the groups `video` (`/dev/dri/card*`) and `a
 mode 0666, so the render node of vo=gpu (a Pi 4 renders on v3d) needs nothing more. Proven
 on the pp-zero lab VM on 2026-10-08: vo=drm and vo=gpu as `kiosk`.
 
+The kiosk account runs mpv and nothing else (D43). Each stop of mpv, and so each start, also
+stops each live process of that account and waits for its end (`player.stray` in the ops log).
+A daemon that the kernel stopped, or that a panic ended, leaves its mpv: supervise-daemon
+starts the daemon again with no `stop_post`. That mpv holds the DRM master, and no new mpv can
+show a picture. A kiosk user that is root or the account of the daemon is never swept.
+
 Rotation goes to `--video-rotate`, and `display.video_mode` goes to `--drm-mode`. A change
 of `display.rotation`, `display.video_mode`, `display.video_output` or `audio.output`
 restarts mpv (change class `player`). A `video_mode` that the display does not have does
 not stop mpv. No file can show, and mpv goes idle. The ops log can hold `player.item.fail` and
-`player.playlist.fail` lines, and `player.log` holds the error of mpv.
+`player.playlist.fail` lines, and `player.log` holds the error of mpv. Each side of
+`video_mode` must be from 1 to 8192: the fallback screen is drawn at that size.
+
+`audio.output = "auto"` is the first sound card whose name holds HDMI, else card 0
+(`internal/device/audio`). A Pi with `dtparam=audio=on` also has the jack as a card, and the
+order of the cards is not fixed. The daemon writes `/etc/asound.conf` only for an HDMI card
+that is not card 0, and never over a file that a person wrote.
+
+The words of `display.video_output` and `playback.motion` are constants of `internal/config`
+(`VideoOutputs`, `Motions`). The validator and the player use the same constants.
 
 The watchdog ladder (plan 3.3). The thresholds come from `[watchdog]` (D30). T is
 `heartbeat_timeout`.
 
 | Fault | Rule |
 |---|---|
-| mpv ends | Start again at once. An mpv that ends before its first picture waits 5 s, doubled up to 60 s. |
+| mpv ends | Start again at once. An mpv that ends before its first picture waits 5 s, doubled up to 60 s. `player_state` is `stopped` in that wait. |
 | The IPC does not answer | No socket T after the start, or a request with no answer for T. |
-| A video does not move | The `time-pos` of the video does not change for T. |
-| An image does not go on | The same image for its duration plus T. One image alone is not checked. |
+| A video does not move | The `time-pos` of the video does not change for T plus the time from `time-pos` to `demuxer-cache-time` (1 h at most). |
+| An image does not go on | The same image for its duration plus T, and its `time-pos` did not move for T. One image alone is not checked. |
 
 Each fault above is a counted restart. `restarts_before_reboot` counted restarts inside
 `restart_window` reboot the device. A restart from a person, from a setting or from the
-nightly job does not count. After a fault, the new mpv starts at the item after the item
-on the screen. After a restart from a person, it starts at the same item.
+nightly job does not count. After a fault, the new mpv starts at the item after the file that
+mpv opened last. After a restart from a person, it starts at the item on the screen.
+
+A file that ends mpv before its first frame is left out of the list of mpv until the
+playlist changes (`player.item.crash`). mpv loops the list, and each pass would end mpv
+again and count a step on the ladder. The supervisor reads the last `start-file` and
+`playback-restart` events of an mpv that ended before it decides.
+
+The video rule waits for a next frame that the demuxer has read. A slideshow video (one
+frame in 30 s) or a still part of a video with a variable frame rate keeps `time-pos` still
+while mpv waits for the time of the next frame. A decoder that hangs asks for no more data,
+and with no cache for a local file the demuxer reads only about 1 s ahead. An animated image
+(GIF, PNG, WebP) plays as a video for its own length, and its `time-pos` moves, so the image
+rule does not restart it while it moves. A duration of some billion seconds gives the largest
+limit and not a negative sum.
 
 The supervisor measures each duration with `time.Now`, which has a monotonic reading. A device
 with no RTC gets a step of its wall clock, of hours or days, at the first sync of the clock,
@@ -525,11 +559,27 @@ not count.
 The nightly restart (`playback.nightly_restart`) waits for the end of the item on the
 screen, for 60 s at most. A screen schedule that has the screen off at that time skips
 it. The fallback screen and a playlist of one item have no item boundary, so the restart
-is immediate.
+is immediate. The wait ends when mpv stops or ends for another reason (a screen-off, an
+exit, a wait for a display): the next mpv is a new start.
 
 Screen power. `power.Controller` stops mpv first and then switches the display off.
 `Suspend` returns when the process has ended, so the DRM device is free. Going on, the
-display comes first and mpv second.
+display comes first and mpv second. A `Suspend` that times out is followed by a `Resume`:
+its message stays in the queue of the player, and the player must end in the state that the
+controller records.
+
+The on step first undoes the method that switched the display off (`offBy`), also when
+`display.power_method` changed in the meantime. After DPMS the controller holds the DRM
+device, and after CEC the television is in standby, which DPMS cannot wake. `power_method =
+"cec"` probes for its device until a display answers, as `auto` does.
+
+A manual `screen-on` or `screen-off` holds until the screen schedule crosses an edge. While it
+holds, each tick applies the state of the command again when it did not happen: a player with
+a full queue refuses the message.
+
+The player takes `PlaylistChanged` and `DisplayChanged` as flags and not as messages of its
+queue of 8. A full queue dropped them, and nothing asked again. The queue holds the commands
+that answer a person (restart, suspend, resume), and a full queue gives `ErrBusy`.
 
 The health marker of an update (`<run>/health/<version>.ok`): the daemon writes it after
 the first picture of mpv, content or the fallback screen. A device that waits for a
@@ -539,7 +589,9 @@ display, a device with the screen off and a player that is off are also up.
 
 The daemon connects to `<run>/player/mpv.sock`. Each request is one line
 `{"command": [...], "request_id": N}`, and mpv answers the requests in order. The client
-uses the standard library only.
+uses the standard library only. A write that fails or does not end in 2 s breaks the
+connection: each later request fails at once, and the silence rule replaces mpv. A write
+that timed out can have sent a part of its line.
 
 At the connect the daemon observes four properties:
 
@@ -547,7 +599,7 @@ At the connect the daemon observes four properties:
 |---|---|---|
 | 1 | `idle-active` | `true` after a file started: no item of the list could play. |
 | 2 | `hwdec-current` | `status.hwdec` while a video plays. `no` is software decoding. |
-| 3 | `user-data/pptr/fault` | A fault of `transitions.lua`. The daemon writes it to the ops log. |
+| 3 | `user-data/pptr/fault` | A fault of `transitions.lua`: `{count, text}`. The daemon writes the text to the ops log. The count makes the same fault again a new value: mpv sends an event only for a value that changed. |
 | 4 | `user-data/pptr/moved` | The result of a moving crossfade: `{count, dropped, frames, failed}`. The guard reads it. |
 
 At the connect, and at each playlist change, the daemon also sets
@@ -559,7 +611,10 @@ frame), `end-file` (`reason`, `file_error`, `playlist_entry_id`) and `property-c
 
 The manifest (`library.PlayerManifest`) goes to the player in the same process. The daemon
 applies the defaults (`image_duration`, the playlist overrides) and does the shuffle. The
-player gives mpv the whole list, and mpv reads each file directly from the media root:
+manifest holds only what plays: the name, Ken Burns and the items (kind, name, path,
+duration, mute, `max_duration`, the transition into the item). A nil playlist is the
+fallback screen. The player gives mpv the whole list, and mpv reads each file directly from
+the media root:
 
 ```
 ["loadfile", "<path of item 0>", "replace", -1, {<per-file options>}]
@@ -592,8 +647,11 @@ moving crossfade: `lavfi-complex`, `end` and `hwdec` on the item that ends, and 
 the item that comes next.
 
 A schedule change, a library change or a playback setting gives a new manifest. The
-daemon replaces the list only when the manifest is different. No playable content gives
-the fallback screen:
+daemon replaces the list only when the manifest is different, and a new list starts at its
+first item. So a field that does not play (the title, the shuffle flag) is not in the
+manifest. When the schedule names a playlist that the last scan does not hold, the daemon
+scans first: a rename, a fleet manifest and an unpair change the rules before their own scan.
+No playable content gives the fallback screen:
 
 ```
 ["loadfile", "<run>/fallback.png", "replace", -1,
@@ -602,16 +660,25 @@ the fallback screen:
 
 The daemon draws the fallback screen at the size of the display: `display.video_mode`, else
 the first mode of the connected connector, else 1920x1080, turned for a rotation of 90 or
-270. It draws it again for new data, for a new minute and every 3 minutes for the burn-in
-shift. When no item of a list can play, mpv goes idle. The fallback screen then shows, and
-the daemon tries the list again after 5 minutes.
+270. It keeps the shape and scales the picture to at least 320x240 and at most 3840x2160
+(2160x3840 when it is tall); mpv scales it to the screen. It draws it again for new data and
+for a new minute. The burn-in step comes from the minute on the screen (one step in 3
+minutes), so it needs no draw of its own. The check of the data reads the report of the daemon
+one time, and a redraw uses that data. The report runs in its own goroutine: a call that
+starts it waits 2 s at most, and a call that finds it still running gets the last data at
+once. When no item of a list can play, mpv goes idle. The fallback screen then shows, and
+the daemon tries the list again after 5 minutes. A draw that fails is tried again after 5 s.
 
-Every 2 s the daemon asks for `playlist-pos`, and for a video also `time-pos`,
-`frame-drop-count` and `decoder-frame-drop-count`. At each `playback-restart` it asks for
-`playlist-pos` and the two counters again. `now_playing.index` is the index in the
-manifest, and `now_playing.since` is the time of the first frame.
-`now_playing.dropped_frames` is the sum of the two counters since that frame. mpv starts
-the counters again at each file.
+The URL and the QR code of the fallback screen carry the mDNS name that the device announces
+now: the factory name when another device holds the name of the settings. With no
+announcement they carry the first address, and with no address there is no URL.
+
+Every 2 s the daemon asks for `playlist-pos` and `time-pos`. For a video it also asks for
+`demuxer-cache-time` (before `time-pos`, for the stall rule), `frame-drop-count` and
+`decoder-frame-drop-count`. At each `playback-restart` it asks for `playlist-pos` and the two
+counters again. `now_playing.index` is the index in the manifest, and `now_playing.since` is
+the time of the first frame. `now_playing.dropped_frames` is the sum of the two counters since
+that frame. mpv starts the counters again at each file.
 
 The transition script `transitions.lua` is mpv Lua with the LuaJIT FFI. When an item ends,
 its `on_unload` hook covers the screen with a copy (`screenshot-raw window bgra`, OSD
@@ -621,7 +688,14 @@ transition into the next item) and `pptr-kb` of the item on the screen. vo=drm h
 screenshot of its own and mpv stretches the frame to the window, so on vo=drm the script
 scales the copy back into the video rectangle (`osd-dimensions`) and makes the bars black.
 An item that shows no frame (it did not load) keeps the copy of the last good frame for
-the next item.
+the next item. A row of the copy can be longer than 4 bytes times the width: mpv aligns the
+rows (1366 x 768 gives 5504 bytes and not 5464). The script copies the rows into a buffer with
+no gap.
+
+A direction word is the direction that a person sees, also on a turned screen. The overlays
+and `video-pan` work on the window, and `--video-rotate` turns the picture in the window
+clockwise. The table `TURN` of the script turns each word by `video-rotate`: with 90, "left"
+for a person is "up" in the window. `split` still opens across the window.
 
 | Kind | Effect |
 |---|---|
@@ -686,7 +760,9 @@ motion on both sides:
 
 The script makes a moving crossfade only when A is a video of the same shape as B, with no
 rotation and square pixels, A has 1 s before the mix, and no moving crossfade failed in this
-mpv. Else the crossfade uses the copy.
+mpv. A that goes on from a moving crossfade (it starts later than 0) makes no moving crossfade
+of its own: mpv starts the added track of B at the start time of A and not at 0, so B was
+opaque at once and a part of B played two times. Else the crossfade uses the copy.
 
 Faults. A graph that fails in its setup makes mpv refuse the item (`end-file` `error`). A
 graph that stops in the mix ends the item early. mpv writes each fault of the graph with the

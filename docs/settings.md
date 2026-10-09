@@ -92,14 +92,17 @@ call.
 
 | Key | Default | Values | What it does | Takes effect |
 |---|---|---|---|---|
-| `output` | `"auto"` | `auto`, `hdmi`, `analog`, `usb` | Which sound card ALSA uses. `auto` leaves the choice to ALSA. | player |
+| `output` | `"auto"` | `auto`, `hdmi`, `analog`, `usb` | Which sound card ALSA uses. `auto` is the first HDMI card, else card 0. | player |
 | `volume` | `100` | `0` to `100` | The output volume. | live |
 
 The device picks the card by a name pattern in `/proc/asound/cards`: `hdmi`
 takes the first card whose name holds HDMI, `usb` the first that holds USB,
 and `analog` the first that holds neither. It writes the number of that card
-into `/etc/asound.conf`. `auto` writes no file, and ALSA then uses card 0. On
-a Raspberry Pi, `analog` is the 3.5 mm jack.
+into `/etc/asound.conf`. `auto` takes the first card that holds HDMI, else card
+0, and it writes the file only for an HDMI card that is not card 0. A file that
+you wrote yourself stays with `auto`. On a Raspberry Pi, `analog` is the 3.5 mm
+jack. `dtparam=audio=on` adds the jack as a card, and the order of the cards is
+not fixed, so the jack can be card 0.
 
 The player reads the default card when it starts, so a change of `output`
 restarts the player. The volume goes to the ALSA mixer at once.

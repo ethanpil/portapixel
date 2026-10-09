@@ -498,6 +498,33 @@ or with the ops log.
   mpv does not start. The device never reads a DVD.
   The daemon gives mpv the path of a file in the media root, and the extension
   list has no disc format. `LICENSES-THIRD-PARTY.md` names the library.
+- mpv sends a `property-change` event only for a value that changed. A report
+  that can come again with the same text needs a count in its value, as
+  `user-data/pptr/moved` and `user-data/pptr/fault` have. The fake mpv sends
+  events the same way, so a test sees the fault.
+- A message that says "something changed" must never go into a queue that drops
+  a message when it is full. Nothing asks again. `PlaylistChanged` and
+  `DisplayChanged` are flags that the loop reads.
+- The key of a rate limit has few values: an event and a playlist, never the
+  details. An item name or a temporary file name in the key made each line new,
+  and 40 broken items pushed each other out of a memory of 32.
+- The player compares two manifests to decide on a new list, and a new list
+  starts at item 0. Each field of the manifest is a field that plays. A title in
+  it restarted the playlist at each edit of the title.
+- A rule change can name a playlist before the scan that finds it. The rename,
+  the fleet manifest and the unpair all did that, and the screen showed the
+  fallback for a moment. `scheduleChanged` scans first.
+- A state that belongs to one mpv ends with it. The nightly grace survived a
+  screen-off and stopped the next mpv. `clearList` is the one place.
+- Since Go 1.25 a short slice that does not escape is on the stack, and Go can
+  move a stack. An address that goes to the kernel as a plain integer needs the
+  heap: `power.kernelBuffer` is not inlined, so its result escapes.
+- `time-pos` is the time of the frame on the screen. It stands still while mpv
+  waits for a next frame that is far ahead (a slideshow video). The stall rule
+  adds the time to `demuxer-cache-time`. Not proven with real mpv yet.
+- A Go file that imports a package cannot share the package block with a
+  function of that name. The test helper `playlist()` blocked the import of
+  `internal/playlist`, so it is `manifestOf()`.
 - Git Bash rewrites an argument that starts with a slash into a Windows path.
   It does this when the program is not a Git Bash program. `gh api /repos/...`
   became `C:/Program Files/Git/repos/...`. Drop the first slash
