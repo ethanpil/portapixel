@@ -1033,7 +1033,7 @@ func (s *Supervisor) onIdle(now time.Time) {
 		return
 	}
 	if s.list.fallback {
-		s.note("player.fallback.fail", "mpv could not show the fallback screen; the last line of mpv: "+
+		s.note("player.fallback.fail", "mpv could not show the fallback screen; the last lines of mpv: "+
 			s.proc.lastOutput(), now)
 		return
 	}

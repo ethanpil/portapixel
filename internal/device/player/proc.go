@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ethanpil/portapixel/internal/opslog"
 )
@@ -184,8 +185,8 @@ func (l *launcher) pid() int {
 	return l.cmd.Process.Pid
 }
 
-// exitReason gives a short sentence about the last exit, with the end of the
-// output of mpv. It is for the ops log.
+// exitReason gives a short sentence about the last exit: the exit status and the
+// last lines of the output of mpv. It is for the ops log.
 func (l *launcher) exitReason() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -195,23 +196,23 @@ func (l *launcher) exitReason() string {
 		reason = "mpv ended: " + l.err.Error()
 	}
 	if l.out != nil {
-		// Output that holds only noise gives no part: "output: " with nothing
-		// after it says nothing.
-		if line := lastLine(l.out.String()); line != "" {
-			reason += "; output: " + line
+		// Output with no text gives no part: "output: " with nothing after it
+		// says nothing.
+		if lines := lastLines(l.out.String()); lines != "" {
+			reason += "; output: " + lines
 		}
 	}
 	return reason
 }
 
-// lastOutput gives the last line of the output of mpv, or "".
+// lastOutput gives the last lines of the output of mpv, or "".
 func (l *launcher) lastOutput() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.out == nil {
 		return ""
 	}
-	return lastLine(l.out.String())
+	return lastLines(l.out.String())
 }
 
 // outputSink takes every byte that mpv writes. It sends the bytes to two places:
@@ -284,36 +285,46 @@ func (t *tailBuffer) String() string {
 	return string(t.data)
 }
 
-// noise holds parts of the lines that mpv writes in normal work on a device that
-// lacks something. Such a line never says why mpv ended, so lastLine skips it:
-//   - auto-safe tries each hardware decoder of its list at each video, and each
-//     decoder that the device does not have writes an error (seen on pp-zero:
-//     vaapi, Vulkan and VDPAU, three lines at each video);
-//   - the DRM output writes two lines at each start when there is no TTY;
-//   - a decoder that does not know the option of the Pi decoder says so (see
-//     DecoderOptions).
-var noise = []string{
-	"[vaapi] ", "[vdpau] ", "[vulkan] ", "[cuda] ",
-	"[ffmpeg] VAAPI", "[ffmpeg] VDPAU", "[ffmpeg] Vulkan", "[ffmpeg] CUDA",
-	"Can't open TTY for VT control", "Failed to set up VT switcher",
-	"AVOption 'num_capture_buffers' not found",
-}
+// outputLines is how many lines of the output of mpv go into the ops log, and
+// lineMax is the longest part of one line in bytes. With the exit status they
+// stay below the field limit of the ops log.
+const (
+	outputLines = 3
+	lineMax     = 120
+)
 
-// lastLine gives the last line that holds text and is not noise. The interesting
-// message of a program that fails is at the end of its output.
-func lastLine(text string) string {
+// lastLines gives the last outputLines different lines that hold text, the
+// oldest first, with " | " between them. The message of a program that fails is
+// at the end of its output.
+//
+// There is no list of lines to skip. mpv writes lines in normal work on a device
+// that lacks something: each hardware decoder that the device does not have, at
+// each video, and the VT switcher at each start. Such a list held the lines of
+// one lab VM, and on a Pi the reason was a decoder line again. A line that comes
+// again is one line, so the real fault is in the last lines.
+//
+// Each line is cut on a rune boundary, so the ops log stays valid UTF-8. The
+// tail buffer can start in a character, and that broken character goes away.
+func lastLines(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
-	for i := len(lines) - 1; i >= 0; i-- {
-		line := strings.TrimSpace(lines[i])
-		if slices.ContainsFunc(noise, func(n string) bool { return strings.Contains(line, n) }) {
-			continue
-		}
-		if line != "" {
-			if len(line) > 200 {
-				line = line[:200]
-			}
-			return line
+	var out []string
+	for i := len(lines) - 1; i >= 0 && len(out) < outputLines; i-- {
+		line := cutRunes(strings.TrimSpace(strings.ToValidUTF8(lines[i], "")), lineMax)
+		if line != "" && !slices.Contains(out, line) {
+			out = append(out, line)
 		}
 	}
-	return ""
+	slices.Reverse(out)
+	return strings.Join(out, " | ")
+}
+
+// cutRunes gives the first n bytes of s or less, cut on a rune boundary.
+func cutRunes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	for n > 0 && !utf8.RuneStart(s[n]) {
+		n--
+	}
+	return s[:n]
 }

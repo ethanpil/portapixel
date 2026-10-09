@@ -1,56 +1,63 @@
 package player
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
-// Output that holds only noise gives "mpv ended" with no output part, and output
-// with a real line gives that line.
-func TestExitReasonHasNoEmptyOutputPart(t *testing.T) {
+// The exit reason is the exit status and the last different lines of mpv.
+// Output with no text gives no output part.
+func TestExitReason(t *testing.T) {
 	tests := []struct {
-		name, out, want string
+		name, out string
+		err       error
+		want      string
 	}{
-		{"no output", "", "mpv ended"},
-		{"only noise", "[vaapi] libva: init failed\n[ffmpeg] VDPAU: Cannot open the X11 display .\n", "mpv ended"},
-		{"a real line", "[vaapi] libva: init failed\nError opening input files.\n",
-			"mpv ended; output: Error opening input files."},
+		{name: "no output", want: "mpv ended"},
+		{name: "only empty lines", out: "\n \r\n", want: "mpv ended"},
+		{name: "the exit status", err: errors.New("exit status 7"), out: "Error opening input files.\n",
+			want: "mpv ended: exit status 7; output: Error opening input files."},
+		// The real fault comes before the probe lines of the Pi decoder, which come
+		// at each video. A list of lines to skip held the lines of the lab VM only,
+		// so the reason was a decoder line.
+		{name: "a fault before the probe of the Pi decoder", err: errors.New("signal: aborted"),
+			out: "[ffmpeg/video] h264_v4l2m2m: Could not find a valid device\n" +
+				"[vd] Could not open codec.\n" +
+				"[vo/drm/drm] Failed to open card0: Device or resource busy\n" +
+				"[ffmpeg/video] h264_v4l2m2m: Could not find a valid device\n" +
+				"[vd] Could not open codec.\n",
+			want: "mpv ended: signal: aborted; output: [vo/drm/drm] Failed to open card0: Device or resource busy | " +
+				"[ffmpeg/video] h264_v4l2m2m: Could not find a valid device | [vd] Could not open codec."},
+		{name: "windows line ends", out: "Error opening input files.\r\n\r\n",
+			want: "mpv ended; output: Error opening input files."},
 	}
 	for _, tt := range tests {
 		sink := &outputSink{tail: &tailBuffer{max: tailBytes}}
 		sink.Write([]byte(tt.out))
-		l := &launcher{out: sink}
-		got := l.exitReason()
-		if got != tt.want {
+		l := &launcher{out: sink, err: tt.err}
+		if got := l.exitReason(); got != tt.want {
 			t.Errorf("%s: exitReason = %q, want %q", tt.name, got, tt.want)
-		}
-		if strings.HasSuffix(got, "output: ") {
-			t.Errorf("%s: exitReason ends with an empty output part: %q", tt.name, got)
 		}
 	}
 }
 
-// The exit reason is the last line of mpv that says something. The lines of the
-// hardware decoder probe and of the VT switcher come at each video and at each
-// start, so they never are the reason.
-func TestLastLineSkipsNoise(t *testing.T) {
-	tests := []struct {
-		name, out, want string
-	}{
-		{"a real fault after the probe", "[vaapi] libva: /usr/lib/dri/virtio_gpu_drv_video.so init failed\n" +
-			"[vo/drm/drm] Failed to open card0: Device or resource busy\n" +
-			"[ffmpeg] VDPAU: Cannot open the X11 display .\n" +
-			"[ffmpeg] Vulkan: Instance creation failure: VK_ERROR_INCOMPATIBLE_DRIVER\n",
-			"[vo/drm/drm] Failed to open card0: Device or resource busy"},
-		{"only noise", "[vo/drm/drm] Can't open TTY for VT control: No such device or address\n" +
-			"[vo/drm/drm] Failed to set up VT switcher. Terminal switching will be unavailable.\n" +
-			"AVOption 'num_capture_buffers' not found.\n", ""},
-		{"windows line ends", "Error opening input files.\r\n\r\n", "Error opening input files."},
-		{"empty", "", ""},
-	}
-	for _, tt := range tests {
-		if got := lastLine(tt.out); got != tt.want {
-			t.Errorf("%s: lastLine = %q, want %q", tt.name, got, tt.want)
+// A long line is cut on a rune boundary. A cut in a character gave the ops log
+// a line that is not UTF-8, and the log page showed U+FFFD. The tail buffer can
+// also start in a character.
+func TestExitReasonIsValidUTF8(t *testing.T) {
+	long := "[file] Cannot open file '/media/lobby/x" + strings.Repeat("é", 200) + ".mp4'"
+	for _, out := range []string{long + "\n", "\xa9 the start of the tail\n"} {
+		sink := &outputSink{tail: &tailBuffer{max: tailBytes}}
+		sink.Write([]byte(out))
+		l := &launcher{out: sink}
+		got := l.exitReason()
+		if !utf8.ValidString(got) {
+			t.Errorf("exitReason is not valid UTF-8: %q", got)
+		}
+		if len(got) > 160 { // the ops log keeps 512 bytes of a field
+			t.Errorf("exitReason has %d bytes: %q", len(got), got)
 		}
 	}
 }
