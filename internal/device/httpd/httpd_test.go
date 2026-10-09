@@ -1142,7 +1142,7 @@ func TestLicenses(t *testing.T) {
 // stream after the POST answered, so a "done" event that went out first would never
 // reach the page and the progress bar would stand still for ever.
 func TestInstallEventsReplayTheLastEvent(t *testing.T) {
-	hub := NewReplayHub()
+	hub := NewHub()
 	hub.Send("done", map[string]any{"ok": true})
 
 	w := httptest.NewRecorder()
@@ -1164,7 +1164,7 @@ func TestInstallEventsReplayTheLastEvent(t *testing.T) {
 // number two, that sentence tells a person to pull the stick while the device is
 // writing a partition table.
 func TestInstallEventsDoNotReplayTheRunBefore(t *testing.T) {
-	hub := NewReplayHub()
+	hub := NewHub()
 	hub.Send("done", map[string]any{"ok": true})
 	hub.Reset()
 

@@ -184,7 +184,7 @@ func newDaemon(p paths, listen, playerCmd, kioskUser, drmRoot string) (*daemon, 
 	d := &daemon{
 		paths:      p,
 		log:        opslog.New(filepath.Join(p.state, opsLogName)),
-		installHub: httpd.NewReplayHub(),
+		installHub: httpd.NewHub(),
 	}
 
 	// 1. The identity comes from the hardware at each boot (D21).
