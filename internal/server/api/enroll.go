@@ -19,12 +19,14 @@ import (
 //     polls with its claim secret never locks itself out. A request with NO token
 //     shows nothing, so it never clears the count: a caller could otherwise send
 //     one of those between two guesses and guess for ever.
-//   - PendingLimiter counts the requests that carry no token at all. That is the
-//     code-pairing flow, and it is the one request that an unauthenticated caller
-//     can repeat with a new device ID each time to fill the pending table. The
-//     count happens BEFORE the write: a check after the commit can only hold the
-//     answer back, and the row is then already in the table. A screen that waits
-//     polls with its claim secret and is not in this count.
+//   - PendingLimiter counts the requests that make a new row in the pending list:
+//     five an hour from one address. A caller can repeat such a request with a
+//     new device ID each time to fill the table. A request with no token is one,
+//     and so is a request with a pending-mode token, which is in clear text on
+//     each card. The check happens BEFORE the write: a check after the commit can
+//     only hold the answer back, and the row is then already in the table. A
+//     screen that waits polls with its claim secret and makes no new row, so it
+//     is not in this count.
 func (d Deps) postEnroll(w http.ResponseWriter, r *http.Request) {
 	ip := d.clientIP(r)
 	if !d.Limiter.Allow(ip) {
@@ -39,19 +41,26 @@ func (d Deps) postEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.Token == "" {
-		if !d.PendingLimiter.Allow(ip) {
-			httpjson.Error(w, http.StatusTooManyRequests,
-				"too many new screens from this address; wait a while")
-			return
+	// Only the rules of db.Enroll know if this request makes a new row. So the
+	// request takes a place in the count first, and db.Enroll refuses a new row when
+	// there was no place. A request that made no row gives its place back.
+	mayQueue := d.PendingLimiter.Allow(ip)
+	res, err := d.DB.Enroll(req, ip, mayQueue)
+	if mayQueue {
+		if err == nil && res.Created {
+			d.PendingLimiter.Fail(ip)
+		} else {
+			d.PendingLimiter.Done(ip)
 		}
-		// The request counts whatever it does with the table, because a caller that
-		// repeats it is the abuse that this limiter holds back.
-		d.PendingLimiter.Fail(ip)
 	}
-
-	res, err := d.DB.Enroll(req, ip)
 	switch {
+	case errors.Is(err, db.ErrQueueLimited):
+		// Not a wrong token, so the wrong-token count adds nothing. The attempt
+		// that Allow opened must end here, or it holds a place for a whole minute.
+		d.Limiter.Done(ip)
+		httpjson.Error(w, http.StatusTooManyRequests,
+			"too many new screens from this address; wait a while")
+		return
 	case errors.Is(err, db.ErrBadToken):
 		d.Limiter.Fail(ip)
 		httpjson.Revoked(w, "this token is not valid")

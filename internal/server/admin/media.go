@@ -5,9 +5,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
+	"github.com/ethanpil/portapixel/internal/playlist"
 	"github.com/ethanpil/portapixel/internal/server/api"
 	"github.com/ethanpil/portapixel/internal/server/db"
 	"github.com/ethanpil/portapixel/internal/server/httpjson"
@@ -65,6 +68,15 @@ func (d Deps) postMedia(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		httpjson.Fields(w, "the request has a field that this server cannot use",
 			db.Errors{{Field: "name", Message: "the upload needs the " + FilenameHeader + " header"}})
+		return
+	}
+	// The library takes what a screen can show and nothing else. The extension of
+	// the name decides it, because the device reads the kind from the extension of
+	// the object name. internal/playlist holds the one table for the two ends.
+	if playlist.Kind(playlist.Item{File: name}) == playlist.KindUnknown {
+		httpjson.Fields(w, "the request has a field that this server cannot use",
+			db.Errors{{Field: "name", Message: "a screen shows images and videos only, " +
+				"and the extension of this name is not one of them"}})
 		return
 	}
 
@@ -141,10 +153,24 @@ func uploadName(r *http.Request) string {
 	}, raw)
 	raw = strings.TrimSpace(raw)
 	if len(raw) > maxUploadName {
-		raw = raw[:maxUploadName]
+		// The cut keeps the extension, because it says image or video. It also does
+		// not split a character in two.
+		ext := path.Ext(raw)
+		if len(ext) > maxExtension {
+			ext = ""
+		}
+		base := raw[:maxUploadName-len(ext)]
+		for !utf8.ValidString(base) {
+			base = base[:len(base)-1]
+		}
+		raw = base + ext
 	}
 	return raw
 }
+
+// maxExtension is the longest extension that a cut name keeps. Each media extension
+// is far shorter.
+const maxExtension = 16
 
 // deleteMedia removes an object. An object that a playlist holds stays, and the
 // answer names the playlists so the UI can say which ones (plan section 12).
@@ -182,7 +208,7 @@ func (d Deps) deleteMedia(w http.ResponseWriter, r *http.Request) {
 
 // getThumb serves the thumbnail of an object.
 //
-// A file that we cannot decode has no thumbnail: video, WebP, AVIF and SVG all
+// A file that we cannot decode has no thumbnail: video, WebP, AVIF and BMP all
 // answer 404 here and the UI shows the icon of its own kind (D27).
 func (d Deps) getThumb(w http.ResponseWriter, r *http.Request) {
 	sha := r.PathValue("sha256")

@@ -136,7 +136,7 @@ func newServer(dataDir, listenFlag string) (*server, error) {
 			return nil, err
 		}
 		cfg.AdminPasswordHash = hash
-		if err := SaveConfig(dataDir, cfg); err != nil {
+		if err := saveField(dataDir, func(c *Config) { c.AdminPasswordHash = hash }); err != nil {
 			return nil, err
 		}
 		fmt.Printf("\n"+
@@ -441,13 +441,11 @@ func (s *server) setPassword(password string) error {
 		return err
 	}
 	s.mu.Lock()
-	cfg := s.cfg
-	cfg.AdminPasswordHash = hash
-	if err := SaveConfig(s.dataDir, cfg); err != nil {
+	if err := saveField(s.dataDir, func(c *Config) { c.AdminPasswordHash = hash }); err != nil {
 		s.mu.Unlock()
 		return err
 	}
-	s.cfg = cfg
+	s.cfg.AdminPasswordHash = hash
 	s.mu.Unlock()
 	// The admin chose this password, so the "still on the installer password"
 	// banner goes away.
@@ -483,15 +481,12 @@ func (s *server) saveSettings(in admin.Settings) error {
 		return err
 	}
 	s.mu.Lock()
-	changed := in.PublicURL != s.cfg.PublicURL
-	if changed {
-		cfg := s.cfg
-		cfg.PublicURL = in.PublicURL
-		if err := SaveConfig(s.dataDir, cfg); err != nil {
+	if in.PublicURL != s.cfg.PublicURL {
+		if err := saveField(s.dataDir, func(c *Config) { c.PublicURL = in.PublicURL }); err != nil {
 			s.mu.Unlock()
 			return err
 		}
-		s.cfg = cfg
+		s.cfg.PublicURL = in.PublicURL
 	}
 	s.mu.Unlock()
 	s.refreshFleet()

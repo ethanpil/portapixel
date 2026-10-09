@@ -78,12 +78,16 @@ func (p *Proxies) Trusts(addr string) bool {
 // the outermost proxy of the chain saw, and a client cannot put an entry there
 // that a later proxy does not overwrite. When the peer is not a trusted proxy,
 // the header is ignored and the answer is the peer.
+//
+// The list is every X-Forwarded-For line in order, not only the first line. A proxy
+// can add a line of its own after the line that the client sent. With the first
+// line only, the client would choose the address that the rate limiters count.
 func (p *Proxies) ClientIP(r *http.Request) string {
 	peer := httpguard.HostOf(r.RemoteAddr)
 	if !p.Trusts(r.RemoteAddr) {
 		return peer
 	}
-	parts := strings.Split(r.Header.Get("X-Forwarded-For"), ",")
+	parts := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
 	for i := len(parts) - 1; i >= 0; i-- {
 		entry := strings.TrimSpace(parts[i])
 		if entry == "" {
