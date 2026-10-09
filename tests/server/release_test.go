@@ -25,6 +25,8 @@ type testRelease struct {
 	version string
 	public  string
 	files   map[string][]byte
+	// prerelease sets the flag that the fake GitHub puts on the release.
+	prerelease bool
 }
 
 // signRelease makes a key pair and the five files of a release. The release key of
@@ -80,8 +82,8 @@ func fakeGitHubFor(t *testing.T, rel testRelease) string {
 			assets = append(assets, fmt.Sprintf(`{"name":%q,"browser_download_url":%q}`,
 				name, base+"/download/"+name))
 		}
-		fmt.Fprintf(w, `[{"tag_name":%q,"body":"the notes of this release",`+
-			`"published_at":"2026-08-04T10:00:00Z","assets":[%s]}]`, rel.version, strings.Join(assets, ","))
+		fmt.Fprintf(w, `[{"tag_name":%q,"body":"the notes of this release","prerelease":%t,`+
+			`"published_at":"2026-08-04T10:00:00Z","assets":[%s]}]`, rel.version, rel.prerelease, strings.Join(assets, ","))
 	})
 
 	srv := httptest.NewServer(mux)
