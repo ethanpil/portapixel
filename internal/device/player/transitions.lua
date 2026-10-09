@@ -1,10 +1,11 @@
 -- transitions.lua: the transition between two playlist items of PortaPixel.
 --
 -- portapixeld writes this file into its run directory and gives it to mpv with
--- --script. Each playlist entry carries two script options:
+-- --script. Each playlist entry carries these script options:
 --
---   pptr-kind  cut | fade | crossfade | wipe-left | wipe-right | wipe-up |
---              wipe-down | push-left | push-right | push-up | push-down
+--   pptr-kind  the words of config.Transitions: cut | fade | fade-white |
+--              crossfade | wipe-* | push-* | slide-in-* | slide-out-* | zoom-out |
+--              split. The * is left, right, up or down.
 --   pptr-ms    the length of the transition in milliseconds
 --
 -- The script uses the options of the item that ends.
@@ -19,13 +20,26 @@
 -- transition keeps its length.
 --
 -- The kinds:
---   fade       dip to black. The copy of A goes dark. Then one black pixel,
+--   fade       dip to black. The copy of A goes dark. Then a black square,
 --              scaled to the screen, goes clear over B.
+--   fade-white the same, through white.
 --   crossfade  the copy of A goes clear over B.
 --   wipe-*     the copy of A gets smaller; B shows at one side. The word is
 --              the direction in which the edge moves.
 --   push-*     the copy of A moves out in the direction of the word, and B
 --              moves in behind it (video-pan-x and video-pan-y move B).
+--   slide-in-* B moves in over the copy of A, which stays where it is. The
+--              copy gets smaller under B (the same crop as wipe-*), and
+--              video-pan moves B as in push-*.
+--   slide-out-* the copy of A moves out in the direction of the word and B
+--              stays where it is. This is the push without the move of B.
+--   zoom-out   the copy of A gets smaller toward the centre of the screen
+--              (the destination size of the overlay).
+--   split      the copy of A is two halves. They move apart from the centre,
+--              each one in its own overlay. The two overlays do not overlap.
+--
+-- Only fade and fade-white change pixels (a pass of LuaJIT over the copy in the
+-- first half). Each other kind moves, crops or scales an overlay.
 --
 -- The moving crossfade. When portapixeld sets user-data/pptr/motion to "yes",
 -- a crossfade from a video A has motion on both sides. The hook on_preloaded of
@@ -51,7 +65,8 @@
 --   - Every fault ends in a cut: the script removes the overlay.
 --   - When B does not show in 5 s, the script removes the overlay.
 --   - Show one overlay at a time. On vo=drm, two overlays on top of each other
---     mix wrongly (washed-out colours and coloured dots).
+--     mix wrongly (washed-out colours and coloured dots). Only split uses two
+--     overlays, and they do not touch each other.
 --   - A fault goes into the property user-data/pptr/fault. portapixeld reads it
 --     and writes it to the ops log.
 --   - The pixel work needs the FFI of LuaJIT. Without it, each transition is a
@@ -61,6 +76,7 @@ local has_ffi, ffi = pcall(require, "ffi")
 local has_bit, bit = pcall(require, "bit")
 
 local COVER = 62     -- the overlay that holds the copy of A
+local COVER2 = 63    -- the second overlay, for the right half in split
 local STEP = 0.02    -- the time between two steps, in seconds
 local DEADMAN = 5    -- the time that B may take to show, in seconds
 local LEAD = 1       -- the part of A that plays before a moving crossfade, in seconds
@@ -68,9 +84,12 @@ local LATE = 0.25    -- a moving crossfade that stops this much early did not en
 local LEFT = 0.1     -- an item that continues a mix needs this much of itself after it
 
 local KINDS = {
-    ["fade"] = true, ["crossfade"] = true,
+    ["fade"] = true, ["fade-white"] = true, ["crossfade"] = true,
     ["wipe-left"] = true, ["wipe-right"] = true, ["wipe-up"] = true, ["wipe-down"] = true,
     ["push-left"] = true, ["push-right"] = true, ["push-up"] = true, ["push-down"] = true,
+    ["slide-in-left"] = true, ["slide-in-right"] = true, ["slide-in-up"] = true, ["slide-in-down"] = true,
+    ["slide-out-left"] = true, ["slide-out-right"] = true, ["slide-out-up"] = true, ["slide-out-down"] = true,
+    ["zoom-out"] = true, ["split"] = true,
 }
 
 -- fault tells portapixeld about a fault. The transition is then a cut.
@@ -106,6 +125,7 @@ local function finish(why)
     if not S then return end
     if S.timer then S.timer:kill() end
     mp.commandv("overlay-remove", COVER)
+    if S.kind == "split" then mp.commandv("overlay-remove", COVER2) end
     if S.pan then
         mp.set_property_number("video-pan-x", 0)
         mp.set_property_number("video-pan-y", 0)
@@ -119,33 +139,46 @@ local function finish(why)
 end
 
 -- show puts a part of a picture on the screen: w x h pixels from the byte
--- offset off, at x, y.
-local function show(ptr, off, x, y, w, h)
+-- offset off, at x, y. id is the overlay; the default is COVER.
+local function show(ptr, off, x, y, w, h, id)
+    id = id or COVER
     if w < 1 or h < 1 then
-        mp.commandv("overlay-remove", COVER)
+        mp.commandv("overlay-remove", id)
         return true
     end
-    return mp.commandv("overlay-add", COVER, x, y, addr(ptr), off, "bgra", w, h, S.stride)
+    return mp.commandv("overlay-add", id, x, y, addr(ptr), off, "bgra", w, h, S.stride)
 end
 
--- black shows one black pixel with the alpha a (0 to 255), scaled to the
--- screen. It replaces the copy in the same overlay, so the change is one step
--- and there is never a frame with no cover. mpv copies the pixel at each call,
--- so one buffer is enough.
-local pixel = ffi.new("int32_t[1]")
-local function black(a)
-    pixel[0] = lshift(a, 24)
-    return mp.commandv("overlay-add", COVER, 0, 0, addr(pixel), 0, "bgra", 1, 1, 4, S.w, S.h)
+-- dot shows a square of one colour with the alpha a (0 to 255), black or white,
+-- scaled to the screen. It replaces the copy in the same overlay, so the change
+-- is one step and there is never a frame with no cover. mpv copies the bitmap at
+-- each call, so one buffer is enough.
+--
+-- The square has DOT x DOT pixels and not one pixel. vo=gpu puts a clear border
+-- of one pixel around each bitmap and smooths the scaled bitmap into it. With one
+-- pixel, the whole screen fades to half alpha toward its edge: the dip is dark in
+-- the centre and the next item shows at the edges. A larger square keeps this to
+-- a few pixels at the edge.
+local DOT = 256
+local pixel = ffi.new("int32_t[?]", DOT * DOT)
+local function dot(a, white)
+    local v = white and bor(lshift(a, 24), lshift(a, 16), lshift(a, 8), a) or lshift(a, 24)
+    for i = 0, DOT * DOT - 1 do pixel[i] = v end
+    return mp.commandv("overlay-add", COVER, 0, 0, addr(pixel), 0, "bgra", DOT, DOT, DOT * 4, S.w, S.h)
 end
 
 -- scale writes src * a / 256 into dst for all four channels of n premultiplied
--- pixels. orm is ORed into each pixel; OPAQUE keeps the result opaque.
-local function scale(src8, dst, n, a, orm)
+-- pixels. orm is ORed into each pixel; OPAQUE keeps the result opaque. With
+-- white, the pixels go to white and not to black: the result is the sum of
+-- src * a / 256 and 255 * (256 - a) / 256.
+local function scale(src8, dst, n, a, orm, white)
     local src = ffi.cast("const int32_t *", src8)
+    local add = 0
+    if white then add = (256 - a) * 255 * 65537 end
     for i = 0, n - 1 do
         local px = src[i]
-        local rb = band(px, 0x00FF00FF) * a
-        local ga = band(rshift(px, 8), 0x00FF00FF) * a
+        local rb = band(px, 0x00FF00FF) * a + add
+        local ga = band(rshift(px, 8), 0x00FF00FF) * a + add
         dst[i] = bor(band(rshift(rb, 8), 0x00FF00FF), band(ga, -16711936), orm)
     end
 end
@@ -157,6 +190,26 @@ local function pan(x, y)
     mp.set_property_number("video-pan-y", y / S.vh)
 end
 
+-- zoomout shows the copy at the part s (0 to 1) of its size, at the centre.
+local function zoomout(s)
+    local w, h = math.floor(S.w * s + 0.5), math.floor(S.h * s + 0.5)
+    if w < 1 or h < 1 then
+        mp.commandv("overlay-remove", COVER)
+        return true
+    end
+    return mp.commandv("overlay-add", COVER, math.floor((S.w - w) / 2), math.floor((S.h - h) / 2),
+        addr(S.base), 0, "bgra", S.w, S.h, S.stride, w, h)
+end
+
+-- doors shows the two halves of the copy, each one d pixels away from the
+-- centre. The left half is in COVER and the right half is in COVER2. They do
+-- not touch the same pixel, and with d = 0 they are the whole copy.
+local function doors(d)
+    local half = math.floor(S.w / 2)
+    local ok = show(S.base, d * 4, 0, 0, half - d, S.h)
+    return show(S.base, half * 4, half + d, 0, S.w - half - d, S.h, COVER2) and ok
+end
+
 -- step draws the transition at the time now.
 local function step()
     local ok, err = pcall(function()
@@ -165,12 +218,12 @@ local function step()
         local W, H, R, k = S.w, S.h, S.stride, S.kind
         local dx, dy = math.floor(W * p), math.floor(H * p)
         local r
-        if k == "fade" then
+        if k == "fade" or k == "fade-white" then
             if p < 0.5 then
-                scale(S.base, S.buf, W * H, math.floor((1 - 2 * p) * 256 + 0.5), OPAQUE)
+                scale(S.base, S.buf, W * H, math.floor((1 - 2 * p) * 256 + 0.5), OPAQUE, k == "fade-white")
                 r = show(S.buf, 0, 0, 0, W, H)
             else
-                r = black(math.floor((1 - p) * 510 + 0.5))
+                r = dot(math.floor((1 - p) * 510 + 0.5), k == "fade-white")
             end
         elseif k == "crossfade" then
             scale(S.base, S.buf, W * H, math.floor((1 - p) * 256 + 0.5), 0)
@@ -193,6 +246,27 @@ local function step()
         elseif k == "push-down" then
             pan(0, dy - H)
             r = show(S.base, 0, 0, dy, W, H - dy)
+        -- A slide-in moves B in over the copy, which stays where it is. B moves
+        -- first, as in the push. The copy gets the crop of the wipe.
+        elseif k == "slide-in-left" then
+            pan(W - dx, 0)
+            r = show(S.base, 0, 0, 0, W - dx, H)
+        elseif k == "slide-in-right" then
+            pan(dx - W, 0)
+            r = show(S.base, dx * 4, dx, 0, W - dx, H)
+        elseif k == "slide-in-up" then
+            pan(0, H - dy)
+            r = show(S.base, 0, 0, 0, W, H - dy)
+        elseif k == "slide-in-down" then
+            pan(0, dy - H)
+            r = show(S.base, dy * R, 0, dy, W, H - dy)
+        -- A slide-out moves the copy away and B stays where it is.
+        elseif k == "slide-out-left" then r = show(S.base, dx * 4, 0, 0, W - dx, H)
+        elseif k == "slide-out-right" then r = show(S.base, 0, dx, 0, W - dx, H)
+        elseif k == "slide-out-up" then r = show(S.base, dy * R, 0, 0, W, H - dy)
+        elseif k == "slide-out-down" then r = show(S.base, 0, 0, dy, W, H - dy)
+        elseif k == "zoom-out" then r = zoomout(1 - p)
+        elseif k == "split" then r = doors(math.floor(math.floor(W / 2) * p))
         end
         if not r then finish("the overlay failed") end
     end)
@@ -209,10 +283,10 @@ local function start()
     end
     S.t0 = mp.get_time()
     local k = S.kind
-    if k == "fade" or k == "crossfade" then
+    if k == "fade" or k == "fade-white" or k == "crossfade" then
         S.buf = ffi.new("int32_t[?]", S.w * S.h)
     end
-    if k:sub(1, 5) == "push-" then
+    if k:sub(1, 5) == "push-" or k:sub(1, 9) == "slide-in-" then
         local d = mp.get_property_native("osd-dimensions")
         S.vw = math.max(1, d.w - d.ml - d.mr)
         S.vh = math.max(1, d.h - d.mt - d.mb)
@@ -432,7 +506,9 @@ local function cover()
         S.own = shaped
         S.base = ffi.cast("const uint8_t *", shaped)
     end
-    if not show(S.base, 0, 0, 0, S.w, S.h) then
+    local shown
+    if kind == "split" then shown = doors(0) else shown = show(S.base, 0, 0, 0, S.w, S.h) end
+    if not shown then
         finish("the overlay failed")
         return
     end

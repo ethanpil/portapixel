@@ -171,7 +171,8 @@ func TestTransitionScript(t *testing.T) {
 	s := string(TransitionScript())
 	for _, want := range []string{
 		`mp.add_hook("on_unload"`, `"playback-restart"`, "user-data/pptr/fault", "screenshot-raw",
-		`["fade"]`, `["crossfade"]`, `["wipe-left"]`, `["push-down"]`, "DEADMAN = 5",
+		`["fade"]`, `["fade-white"]`, `["crossfade"]`, `["wipe-left"]`, `["push-down"]`, `["slide-in-left"]`,
+		`["slide-out-down"]`, `["zoom-out"]`, `["split"]`, "COVER2", "DEADMAN = 5",
 		`mp.add_hook("on_preloaded"`, "video-add", "user-data/pptr/motion", "user-data/pptr/moved",
 	} {
 		if !strings.Contains(s, want) {
@@ -181,6 +182,22 @@ func TestTransitionScript(t *testing.T) {
 	for _, bad := range []string{"/root/", "io.open", "pptr.log"} {
 		if strings.Contains(s, bad) {
 			t.Errorf("the script holds the lab leftover %q", bad)
+		}
+	}
+}
+
+// Each word that the script knows has a branch that draws it. A word in KINDS
+// with no branch would draw nothing, and the transition would be a cut that no
+// test sees. The word is in the list of kinds and in the draw step, so it
+// appears two times in the script at least.
+func TestScriptDrawsEveryTransition(t *testing.T) {
+	s := string(TransitionScript())
+	for _, w := range config.Transitions {
+		if w == "cut" {
+			continue
+		}
+		if n := strings.Count(s, `"`+w+`"`); n < 2 {
+			t.Errorf("the script holds %q %d times; the list of kinds and the draw step need it", w, n)
 		}
 	}
 }

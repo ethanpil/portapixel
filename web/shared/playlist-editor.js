@@ -13,10 +13,11 @@ import { h, fill, icon, toast, modal, confirmDialog, fmtDuration, fmtBytes, bann
 import { warningsFor } from './item-warnings.js';
 
 /* The same words as config.Transitions in internal/config, with a label for a
-   person. The device settings page uses this list too. A wipe or a push moves in
-   the direction of its word. */
+   person. The device settings page uses this list too. A wipe, a push, a
+   slide-in and a slide-out move in the direction of their word. */
 export const TRANSITIONS = [
   ['fade', 'Fade through black'],
+  ['fade-white', 'Fade through white'],
   ['crossfade', 'Crossfade'],
   ['cut', 'Hard cut'],
   ['wipe-left', 'Wipe left'],
@@ -27,6 +28,16 @@ export const TRANSITIONS = [
   ['push-right', 'Push right'],
   ['push-up', 'Push up'],
   ['push-down', 'Push down'],
+  ['slide-in-left', 'Slide in left'],
+  ['slide-in-right', 'Slide in right'],
+  ['slide-in-up', 'Slide in up'],
+  ['slide-in-down', 'Slide in down'],
+  ['slide-out-left', 'Slide out left'],
+  ['slide-out-right', 'Slide out right'],
+  ['slide-out-up', 'Slide out up'],
+  ['slide-out-down', 'Slide out down'],
+  ['zoom-out', 'Zoom out'],
+  ['split', 'Split from the centre'],
 ];
 
 const KIND_LABEL = { image: 'Image', video: 'Video' };

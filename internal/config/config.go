@@ -158,13 +158,21 @@ type Logging struct {
 }
 
 // Transitions are the transition names that a playlist may use (D14). "fade"
-// goes through black. A wipe or a push moves in the direction of its word.
+// goes through black and "fade-white" through white. A wipe, a push, a slide-in
+// and a slide-out move in the direction of their word. A push moves both
+// items, a slide-in moves the new item over the old one, and a slide-out moves
+// the old item away. "zoom-out" shrinks the old item into the centre, and
+// "split" opens it from the centre like a barn door.
 // playback.transition_ms is the length of each transition except "cut". The
-// player script internal/device/player/transitions.lua knows the same words.
+// player script internal/device/player/transitions.lua and the editor
+// web/shared/playlist-editor.js know the same words.
 var Transitions = []string{
-	"cut", "fade", "crossfade",
+	"cut", "fade", "fade-white", "crossfade",
 	"wipe-left", "wipe-right", "wipe-up", "wipe-down",
 	"push-left", "push-right", "push-up", "push-down",
+	"slide-in-left", "slide-in-right", "slide-in-up", "slide-in-down",
+	"slide-out-left", "slide-out-right", "slide-out-up", "slide-out-down",
+	"zoom-out", "split",
 }
 
 // IsTransition reports if name is a transition that the player knows.
