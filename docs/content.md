@@ -1,8 +1,8 @@
 # Playlists and content
 
-This page covers playlists, the images and videos that a playlist can hold,
-the transitions, Ken Burns, schedules, and the two ways to add media: the web
-UI and the stick itself.
+This page covers playlists and the images and videos that they hold. It also
+covers the transitions, Ken Burns and schedules. Last, it shows the two ways to
+add media: the web UI and the stick itself.
 
 ## What a playlist is
 
@@ -29,16 +29,17 @@ A playlist item is an image or a video. There are no other kinds of item.
 | Video | `.mp4`, `.m4v`, `.mov`, `.webm`, `.mkv`, `.ogv` |
 
 A file with another extension is not a playable item. An SVG file is an
-example. The device skips such a file and writes a line to the activity log.
-See "A broken item" below.
+example. The device skips such a file, and the web UI marks the item with a
+warning. See "A broken item" below.
 
 A photo with an EXIF orientation shows the right way up. The player turns the
 picture for you.
 
 ### Advice on video files
 
-- Use H.264 for video on a Raspberry Pi. A Pi Zero 2 W, Pi 3 and Pi 4 decode
-  H.264 in hardware.
+- Use H.264 for video on a Raspberry Pi. A Pi Zero 2 W, Pi 3 and Pi 4 have an
+  H.264 decoder, and the player should use it. No real board has proven this
+  yet.
 - HEVC (H.265) decodes in software on a Pi 4 and a Pi 5. A Pi 4 and a Pi 5
   have an HEVC decoder, but the FFmpeg of Alpine cannot use it. A Pi Zero 2 W
   and a Pi 3 have no HEVC hardware. A large HEVC video can drop frames.
@@ -176,14 +177,17 @@ decides. It has three words: `auto`, `on` and `off`.
 
 With `auto`, a moving crossfade can fail, or it can drop more than a quarter
 of its frames. The device then switches it off until the next restart of the
-daemon, and the ops log writes `player.motion.off`. With `on`, the device keeps
-it on and writes `player.motion.slow`, at most one time each hour.
+daemon, and the ops log writes `player.motion.off`. With `on`, the device does
+not switch it off after a slow crossfade. The ops log writes
+`player.motion.slow`, at most one time each hour.
 
 A moving crossfade needs these conditions. Else the device uses the copy.
 
 - The old item is a video, and it is at least 1 second longer than the
   transition.
-- Both items have the same width and height. The next item can be an image.
+- Both items have the same shape (the same ratio of width to height). The
+  device scales the next item to the size of the old one. The next item can be
+  an image.
 - Neither item has a rotation tag, and both have square pixels.
 
 ## Ken Burns
@@ -195,8 +199,9 @@ shows. A video does not move this way.
 
 Ken Burns needs the `gpu` video output. A screen can use the `drm` output, for
 example a virtual machine or a board with no graphics driver. It shows the
-images still. The ops log writes `player.kenburns.off` one time when the
-playlist loads. See `display.video_output` in `docs/settings.md`.
+images still. The ops log writes `player.kenburns.off` when the playlist
+loads, and again at most one time each hour. See `display.video_output` in
+`docs/settings.md`.
 
 An image alone in a playlist has no end, so it gets no Ken Burns.
 
@@ -270,13 +275,14 @@ device refuses a file path that:
 ## A broken item
 
 An item can name a file that is not there, or a file kind that PortaPixel
-does not play. The device skips that one item and writes a line to the
-activity log (Ops log). It never stops the rest of the playlist for one bad
-item.
+does not play. The device leaves that item out, and the web UI marks it with a
+warning. A file can also be damaged. Then mpv cannot play it, the device skips
+it, and the ops log names the file (`player.item.fail`). One bad item never
+stops the rest of the playlist.
 
 When no item of the playlist can play, the screen shows the fallback screen
-with the address of the device. The device tries the playlist again after 5
-minutes.
+with the address of the device. If mpv failed on every item, the device tries
+the playlist again after 5 minutes.
 
 ## The comment-loss warning
 
