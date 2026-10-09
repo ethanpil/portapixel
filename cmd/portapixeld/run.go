@@ -207,6 +207,11 @@ func newDaemon(p paths, listen, playerCmd, kioskUser, drmRoot string) (*daemon, 
 		// (D38). The dashboard needs the code to tell that fault from a hand edit
 		// that the daemon refused.
 		d.cfgCode = manifest.WarnConfigRepaired
+		// A file with no bad value and a key that the device does not know has its
+		// own code: every value is as the person wrote it.
+		if len(result.Repaired) == 0 && len(result.Unknown) > 0 {
+			d.cfgCode = manifest.WarnConfigUnknownKey
+		}
 		d.log.Log("config.warning", result.Warning)
 	}
 
@@ -479,7 +484,11 @@ func (d *daemon) cleanConfigLocked() (cfg config.Config, clean bool) {
 
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.cfg, !d.fromShadow && d.cfgWarning == "" && d.cfgCode == ""
+	// A key that the device does not know is a warning and not a fault. Every
+	// value that the device runs is as the person wrote it. A save drops the key,
+	// and the key had no effect.
+	unknownOnly := d.cfgCode == manifest.WarnConfigUnknownKey
+	return d.cfg, !d.fromShadow && (unknownOnly || (d.cfgWarning == "" && d.cfgCode == ""))
 }
 
 // fleetUpdate is the work of the fleet "update" command: check the mirror of the
@@ -1247,9 +1256,10 @@ func (d *daemon) reloadConfigLocked(modified time.Time) {
 	d.mu.Unlock()
 
 	var next config.Config
+	var unknown []string
 	data, err := os.ReadFile(config.MediaPath(d.paths.media))
 	if err == nil {
-		next, err = config.Parse(data)
+		next, unknown, err = config.ParseKeys(data)
 	}
 	if err == nil {
 		next.Device.ID = d.id.DeviceID
@@ -1279,6 +1289,11 @@ func (d *daemon) reloadConfigLocked(modified time.Time) {
 			"; the value in portapixel.toml is not used"
 		code = manifest.WarnConfigManagedIgnored
 		d.log.Log("config.reload.managed", warning)
+	} else if w := config.UnknownWarning(unknown); w != "" {
+		// The dashboard shows one config warning. The fleet warning comes first.
+		warning = w
+		code = manifest.WarnConfigUnknownKey
+		d.log.Log("config.reload.unknown", warning)
 	}
 
 	changes := config.ChangeClass(old, next)

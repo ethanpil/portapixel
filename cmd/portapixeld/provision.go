@@ -92,6 +92,8 @@ func provisionCommand(args []string) int {
 // factory defaults. It also puts a default value in each field that breaks a rule.
 // A write of that result over the file of the user loses the WiFi key and the
 // password. One character that the parser did not like must not cost them.
+// A file that holds a key the device does not know stays as it is as well. A
+// write would drop the key before the daemon could warn of it.
 //
 // The id in the TOML is a reference copy for a person who reads the card. The true
 // id comes from the hardware and lives in state.json (D21), so leaving the file as
@@ -108,6 +110,12 @@ func refreshConfigID(mediaRoot, stateDir, deviceID string, log *opslog.Log) erro
 	case len(result.Repaired) > 0:
 		log.Log("provision.config.kept",
 			"portapixel.toml has a fault, so the file is left as it is: "+config.Errors(result.Repaired).Error())
+		return nil
+	case len(result.Unknown) > 0:
+		// A write now would drop the key, and the daemon warns of it only while the
+		// key is in the file. A person who turned on a key and left its [table] line
+		// commented must see the warning, not lose the line.
+		log.Log("provision.config.kept", "the file is left as it is: "+result.Warning)
 		return nil
 	}
 	if result.Config.Device.ID == deviceID {

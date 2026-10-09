@@ -324,7 +324,8 @@ func writePlaylistDir(t *testing.T, media, dir, title, file string) {
 
 // provision must never write the configuration back when config.Load repaired it
 // or fell back. That write cost the user their WiFi key and their password for one
-// character that the parser did not like.
+// character that the parser did not like. The same holds for a key that the device
+// does not know: the dashboard can warn of the key only while it is in the file.
 func TestRefreshConfigIDKeepsAFileThatHasAFault(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -333,6 +334,7 @@ func TestRefreshConfigIDKeepsAFileThatHasAFault(t *testing.T) {
 	}{
 		{"a file that does not parse", "[device\nname = ", false},
 		{"a file with one bad value", "[device]\nid = \"px-00000000\"\nname = \"Lobby\"\n[display]\nrotation = 45\n", false},
+		{"a file with a key whose table line is a comment", "[device]\nid = \"px-00000000\"\nname = \"Lobby\"\nurl = \"https://fleet.example.com\"\n", false},
 		{"a file that is good", "", true},
 	}
 	for _, tt := range tests {
@@ -863,6 +865,45 @@ func TestARenameDoesNotWriteOverAFileWithAFault(t *testing.T) {
 				t.Errorf("the running name is %q", name)
 			}
 		})
+	}
+}
+
+// A hand edit with a key that the device does not know gives the warning with its
+// own code. The other values of the edit apply, and the rename is not refused: the
+// running configuration is the file as the person wrote it, minus a key with no
+// effect. A second edit that fixes the key takes the warning away.
+func TestAHandEditWithAnUnknownKeyWarnsAndApplies(t *testing.T) {
+	start := config.Default()
+	start.Device.Name = "Lobby"
+	d := renameDaemon(t, start)
+
+	handEdit(t, d, `timezone = "UTC"`, "timezone = \"Europe/Berlin\"\nurl = \"https://fleet.example.com\"")
+	d.reloadConfig(configMTime(d.paths.media))
+
+	d.mu.Lock()
+	code, warning := d.cfgCode, d.cfgWarning
+	d.mu.Unlock()
+	if code != manifest.WarnConfigUnknownKey || !strings.Contains(warning, "device.url") {
+		t.Errorf("code %q, warning %q; want %s and a warning that names device.url", code, warning, manifest.WarnConfigUnknownKey)
+	}
+	if got := d.config().Device.Timezone; got != "Europe/Berlin" {
+		t.Errorf("the running time zone is %q; the edit must apply", got)
+	}
+	if err := d.saveName("Front desk"); err != nil {
+		t.Errorf("an unknown key stopped the rename: %v", err)
+	}
+
+	// A fixed file has no warning.
+	d = renameDaemon(t, start)
+	handEdit(t, d, `timezone = "UTC"`, "timezone = \"Europe/Berlin\"\nurl = \"https://fleet.example.com\"")
+	d.reloadConfig(configMTime(d.paths.media))
+	handEdit(t, d, `url = "https://fleet.example.com"`, "")
+	d.reloadConfig(configMTime(d.paths.media))
+	d.mu.Lock()
+	code, warning = d.cfgCode, d.cfgWarning
+	d.mu.Unlock()
+	if code != "" || warning != "" {
+		t.Errorf("code %q, warning %q after the key was removed; want none", code, warning)
 	}
 }
 
