@@ -94,8 +94,10 @@ type Controller struct {
 	// on is the state that the controller last applied.
 	on bool
 	// manual is true while a command from a person or from the fleet overrides
-	// the schedule. The next schedule edge clears it.
-	manual bool
+	// the schedule. The next schedule edge clears it. manualOn is the state that
+	// the command asked for.
+	manual   bool
+	manualOn bool
 	// lastWant is the answer of the schedule at the last tick. A different answer
 	// is an edge.
 	lastWant bool
@@ -182,6 +184,10 @@ func (c *Controller) Run(done <-chan struct{}) {
 // step is one pass of the loop. A manual command holds until the schedule crosses
 // an edge, so "screen on" in the middle of the night lasts until the morning and
 // not until the next tick.
+//
+// While the command holds, the loop applies the state of the command. A command
+// that the player refused (a full queue) did not happen, and the loop stopped at
+// the hold: a screen-on at night stayed lit and black until the next edge.
 func (c *Controller) step() {
 	want := c.opt.ShouldBeOn(c.opt.Now())
 
@@ -195,17 +201,20 @@ func (c *Controller) step() {
 	if cleared {
 		c.manual = false
 	}
-	hold := c.manual
+	reason := "the screen schedule"
+	if c.manual {
+		want, reason = c.manualOn, "a manual command, again"
+	}
 	same := c.on == want
 	c.mu.Unlock()
 
 	if cleared {
 		c.log("power.manual.end", "the screen schedule takes the screen again")
 	}
-	if hold || same {
+	if same {
 		return
 	}
-	c.apply(want, "the screen schedule")
+	c.apply(want, reason)
 }
 
 // Set is the manual command: screen-on and screen-off from the API, and later
@@ -220,7 +229,7 @@ func (c *Controller) Set(on bool, reason string) error {
 	defer c.applyMu.Unlock()
 
 	c.mu.Lock()
-	c.manual = true
+	c.manual, c.manualOn = true, on
 	same := c.on == on
 	c.mu.Unlock()
 

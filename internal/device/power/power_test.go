@@ -622,3 +622,36 @@ func TestAPlayerThatRefusesToStopLeavesTheDisplayOn(t *testing.T) {
 		t.Error("the controller recorded the screen as off after a player that refused")
 	}
 }
+
+// A manual command that the player refused is tried again at the next tick. The
+// manual hold stopped the loop, so a screen-on at night that met a busy player
+// left the display lit and black until the next schedule edge.
+func TestAManualCommandThatFailedIsTriedAgain(t *testing.T) {
+	r := newRecorder()
+	c := New(Options{
+		Method:     func() string { return MethodNone },
+		ShouldBeOn: func(time.Time) bool { return false }, // the night
+		Run:        r,
+		Player:     r,
+		Tick:       time.Hour,
+	})
+	c.Start()
+	if c.ScreenOn() {
+		t.Fatal("the screen is on in the night")
+	}
+
+	r.playerErr = errors.New("the player is busy; ask again in a moment")
+	if err := c.Set(true, "the admin asked"); err == nil {
+		t.Fatal("Set(true) answered no error while the player refused")
+	}
+	r.playerErr = nil
+	c.step()
+	if !c.ScreenOn() {
+		t.Fatal("the next tick did not try the screen-on again")
+	}
+	// The hold stays: the next tick does not follow the schedule.
+	c.step()
+	if !c.ScreenOn() {
+		t.Fatal("a tick with no edge took the screen off again")
+	}
+}
