@@ -66,7 +66,9 @@ as untested until a real device passes the checklist.
 4. Connect the machine to a screen over HDMI.
 5. Find the address of the device. A device with nothing to play shows its
    address and a QR code on the screen. A new device plays the demo videos
-   instead, so read the address from your router, or use `portapixel.local`.
+   instead, so read the address from your router, or use
+   `portapixel-<last4>.local`, where `<last4>` is the last four characters
+   of the device ID. See `docs/install.md`.
 6. Open that address in a browser on the same network.
 7. Sign in with the password `portapixel`. The web UI tells you to change it.
 8. The default root password for SSH is also `portapixel`. Change this too.

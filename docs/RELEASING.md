@@ -87,10 +87,19 @@ A pushed pre-release tag is NOT a draft. When every gate passes and the release
 is signed, the pre-release is public at the end of the run, with no step by
 hand. An unsigned run stays a draft, the same as every unsigned release
 (section 3). A pre-release never gets the `latest` tag of the server container
-image, and no device gets it as an update: the updater asks for the newest full
-release. A dispatched run with a pre-release tag is always a pre-release too,
+image. A dispatched run with a pre-release tag is always a pre-release too,
 and its `draft` input still decides the draft. Any other tag, for example
 `v0.5.0` or `v0.5.0-lab5`, keeps the rules above.
+
+Which devices get a pre-release:
+
+- A standalone device never offers it. Its updater asks GitHub for the newest
+  full release.
+- A fleet server lists every public release on its Versions page, and the
+  pre-release has no mark there. An admin can approve it, and then each screen
+  of that approval installs it, the same as a full release.
+- The suffix compares as text: `-rc.10` is older than `-rc.9`, so a screen on
+  rc.9 sees no newer release in rc.10. Keep `N` to one digit, `rc.1` to `rc.9`.
 
 ### The inputs
 
@@ -99,7 +108,7 @@ and its `draft` input still decides the draft. Any other tag, for example
 | `release_tag` | `v0.0.0-dev` | the tag, and with it `VERSION`. It must start with `v` and a number. |
 | `alpine_release` | `3.23.2` | an EXACT Alpine release. Never a branch: a branch moves and two builds of one release would differ (D50). |
 | `draft` | `true` | a draft release is not public. Keep it true until you read the release. |
-| `prerelease` | `false` | a prerelease is public and is not offered to a device, because the updater asks for the newest full release. A pre-release tag is always one. |
+| `prerelease` | `false` | a prerelease is public. A standalone device does not offer it, because its updater asks for the newest full release. A fleet server can approve it (see "A pre-release"). A pre-release tag is always one. |
 
 `draft` and `prerelease` also decide the `latest` tag of the server container
 image: only a release that is neither gets it.
@@ -248,14 +257,26 @@ gh run view <run-id> --log-failed
 | `server` | The Docker image is built by `deploy/Dockerfile`. A container that does not answer prints its own log in the job. |
 | `smoke-vanilla-install` | It is not blocking. A fault is a fault of `os/install.sh` in on-box mode. It boots two virtual machines, so read the serial output from the start. |
 
-A failed run publishes nothing. Start a new run with the same tag after the fix:
-the tag is made by the release step, so a run that never got there left no tag.
+A failed run publishes nothing. After a dispatched run, start a new run with
+the same tag after the fix: the release step makes the tag, so a run that never
+got there left no tag.
+
+A pushed tag is different. It was there before the run, and it names the
+commit with the fault. A second push of the same tag starts nothing. A
+dispatched run would build the fix but publish it on the old tag. Move the tag
+to the commit with the fix, or use the next number (`v0.5.0-rc.2`):
+
+```sh
+git push --delete origin v0.5.0-rc.1
+git tag -f v0.5.0-rc.1 <commit with the fix>
+git push origin v0.5.0-rc.1
+```
 
 To take a draft release away again:
 
 ```sh
 gh release delete v0.1.0 --yes
-git push --delete origin v0.1.0   # only if the release step made the tag
+git push --delete origin v0.1.0   # when the tag exists: pushed, or made by the release step
 ```
 
 ## 8. After the release

@@ -101,12 +101,16 @@ network.
 A new device plays the seven demo videos, so it does not show its address. Use
 one of these ways instead:
 
-- Open `http://portapixel.local/`. This is the default name of a device.
 - Read the address from the list of clients on your router.
+- Open `http://portapixel-<last4>.local/`. `<last4>` is the last four
+  characters of the device ID: the device `px-1a2b3c4d` answers at
+  `portapixel-3c4d.local`. A device with the default name announces this
+  name, and no other.
 
-Every device also answers at `portapixel-<last4>.local`, where `<last4>` is
-the last four characters of the device ID. The address screen shows the ID.
-Use this name when the device has not been given its own name yet.
+When you give the device a name in Settings, it announces that name instead:
+"Lobby screen" becomes `lobby-screen.local`. When another device on the
+network already answers for that name, the device goes back to
+`portapixel-<last4>.local`. Settings shows the address under the name.
 
 ## 5. Sign in
 
@@ -152,10 +156,12 @@ media partition, name a spare partition instead:
 sh install.sh --binary portapixeld --version 0.1.0 --media-partition /dev/sdb1
 ```
 
-**`--media-partition` erases everything on that partition.** `install.sh`
-refuses a partition that is mounted, that is the running root file system, or
-that already carries a PortaPixel label. For every other partition, it asks
-you to type the device path back before it formats it:
+**`--media-partition` erases everything on that partition**, unless it is
+PPMEDIA already. `install.sh` refuses a partition that is mounted, that is the
+running root file system, or that carries the label PPROOT or PPBOOT. A
+partition with the label PPMEDIA keeps its files, so a second run does not
+erase your media. For every other partition, it asks you to type the device
+path back before it formats it:
 
 ```
 WARNING: install.sh is about to write a new exFAT file system on
