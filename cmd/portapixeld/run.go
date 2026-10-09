@@ -450,17 +450,7 @@ func (d *daemon) saveName(name string) error {
 	d.cfgWriteMu.Lock()
 	defer d.cfgWriteMu.Unlock()
 
-	d.mu.Lock()
-	known := d.cfgModified
-	d.mu.Unlock()
-	if modified := configMTime(d.paths.media); !modified.Equal(known) {
-		d.reloadConfigLocked(modified)
-	}
-
-	d.mu.Lock()
-	clean := !d.fromShadow && d.cfgWarning == "" && d.cfgCode == ""
-	next := d.cfg
-	d.mu.Unlock()
+	next, clean := d.cleanConfigLocked()
 	if !clean {
 		return errConfigNotClean
 	}
@@ -470,6 +460,26 @@ func (d *daemon) saveName(name string) error {
 	next.Device.Name = name
 	_, err := d.writeConfigLocked(next, false)
 	return err
+}
+
+// cleanConfigLocked takes a hand edit that the daemon did not read yet, and then
+// gives the running configuration. clean is false when the running
+// configuration is not the file on PPMEDIA as the person wrote it: a shadow
+// copy, the defaults, a repaired file, or a hand edit that the daemon refused or
+// took only in part. A save writes the whole file, so a save that no person
+// asked for in this moment must not write then (CONTEXT.md, section 5). The
+// caller holds cfgWriteMu.
+func (d *daemon) cleanConfigLocked() (cfg config.Config, clean bool) {
+	d.mu.Lock()
+	known := d.cfgModified
+	d.mu.Unlock()
+	if modified := configMTime(d.paths.media); !modified.Equal(known) {
+		d.reloadConfigLocked(modified)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.cfg, !d.fromShadow && d.cfgWarning == "" && d.cfgCode == ""
 }
 
 // fleetUpdate is the work of the fleet "update" command: check the mirror of the
@@ -1315,10 +1325,23 @@ func (d *daemon) applyChanges(changes []config.Change) {
 // directory name. Without this, a rename left every rule with the name of a
 // directory that is not there. The rule then matched nothing, the default playlist
 // was gone, and the screen showed the fallback picture.
+//
+// It is a save of the configuration like the others: it holds cfgWriteMu, it
+// takes an unread hand edit first, and it does not write over a file with a
+// fault. Before this, it read, changed and wrote with no lock, so a save of the
+// settings page at the same time lost one of the two changes.
 func (d *daemon) playlistRenamed(old, next string) {
-	cfg := d.config()
+	d.cfgWriteMu.Lock()
+	defer d.cfgWriteMu.Unlock()
+
+	cfg, clean := d.cleanConfigLocked()
 	updated, count := renamePlaylistRefs(cfg, old, next)
 	if count == 0 {
+		return
+	}
+	if !clean {
+		d.log.Log("playlist.rename.refs.fail", fmt.Sprintf("%d references in portapixel.toml still name %s: %v",
+			count, old, errConfigNotClean))
 		return
 	}
 	if err := config.Save(d.paths.media, d.paths.state, updated); err != nil {

@@ -899,6 +899,74 @@ func TestARenameAndAnUnpairDoNotLoseEachOther(t *testing.T) {
 	}
 }
 
+// The playlist rename corrects the references in portapixel.toml with a save of
+// the whole file. It is a save like the others: one lock, an unread hand edit
+// first, and no write over a file with a fault.
+func TestAPlaylistRenameSavesUnderTheRulesOfASave(t *testing.T) {
+	start := config.Default()
+	start.Playback.DefaultPlaylist = "lobby"
+	start.Server.URL = "https://fleet.example.com"
+	start.Server.Token = "the device token"
+
+	t.Run("a file with a fault is not written", func(t *testing.T) {
+		d := renameDaemon(t, start)
+		want := handEdit(t, d, "rotation = 0 ", "rotation = 45 ")
+		d.playlistRenamed("lobby", "front-desk")
+		got, err := os.ReadFile(config.MediaPath(d.paths.media))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != want {
+			t.Errorf("the rename of a playlist wrote over a file with a fault:\n%s", got)
+		}
+		if tail := d.log.Tail(1); len(tail) == 0 || tail[0].Event != "playlist.rename.refs.fail" {
+			t.Errorf("no log line for the refused write: %+v", tail)
+		}
+	})
+
+	t.Run("an unread hand edit is taken first", func(t *testing.T) {
+		d := renameDaemon(t, start)
+		handEdit(t, d, `timezone = "UTC"`, `timezone = "Europe/Berlin"`)
+		d.playlistRenamed("lobby", "front-desk")
+		data, err := os.ReadFile(config.MediaPath(d.paths.media))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, want := range []string{`"Europe/Berlin"`, `"front-desk"`} {
+			if !strings.Contains(string(data), want) {
+				t.Errorf("portapixel.toml holds no %s:\n%s", want, data)
+			}
+		}
+	})
+
+	t.Run("a save at the same time is not lost", func(t *testing.T) {
+		d := renameDaemon(t, start)
+		for i := range 40 {
+			if err := config.Save(d.paths.media, d.paths.state, start); err != nil {
+				t.Fatal(err)
+			}
+			d.adopt(start, false, "", "")
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				d.playlistRenamed("lobby", "front-desk")
+			}()
+			go func() {
+				defer wg.Done()
+				if err := d.saveServer("", ""); err != nil {
+					t.Error(err)
+				}
+			}()
+			wg.Wait()
+			got := d.config()
+			if got.Server.URL != "" || got.Playback.DefaultPlaylist != "front-desk" {
+				t.Fatalf("round %d lost a change: url %q, default playlist %q", i, got.Server.URL, got.Playback.DefaultPlaylist)
+			}
+		}
+	})
+}
+
 // The player loop calls fallbackInfo, and the report reads the media mount. A
 // mount that hangs must not hold the loop: the caller gets the last answer after
 // the wait, and a second call does not start a second report.
