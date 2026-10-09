@@ -570,6 +570,12 @@ func (s *Supervisor) step() {
 	}
 	now := s.opt.Now()
 
+	if s.everUp && !s.expectExit && !s.proc.alive() {
+		// mpv ended on its own. A display that went away can be the cause, and the
+		// last look at the connectors can be old. Look again before the ending
+		// counts as a fault: no display is a wait (D44).
+		s.probeNext = time.Time{}
+	}
 	if !s.displayReady(now) {
 		return
 	}
@@ -616,9 +622,8 @@ func (s *Supervisor) displayReady(now time.Time) bool {
 
 	s.probeNext = now.Add(s.waitDelay)
 	s.waitDelay = min(2*s.waitDelay, displayWaitMax)
-	if s.proc.alive() {
-		s.stopPlayer()
-	}
+	// Also when mpv ended already: the ending is part of the wait, not a fault.
+	s.stopPlayer()
 	if !s.waitLogged {
 		s.log("player.display.wait", "no display is connected; the device waits and does not count a restart")
 		s.waitLogged = true

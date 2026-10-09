@@ -470,7 +470,9 @@ used to measure a duration.
 
 No display is a wait and never a fault (D44). The daemon reads `/sys/class/drm/*/status`
 every 5 s. While nothing is connected, the period doubles up to 60 s, mpv stops, and
-`player_state` is `waiting-for-display`.
+`player_state` is `waiting-for-display`. An mpv that ends on its own makes the daemon read
+the connectors at once. If nothing is connected, the ending is part of the wait and it does
+not count.
 
 The nightly restart (`playback.nightly_restart`) waits for the end of the item on the
 screen, for 60 s at most. A screen schedule that has the screen off at that time skips

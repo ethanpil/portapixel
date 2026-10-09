@@ -442,6 +442,32 @@ func TestDisplayWait(t *testing.T) {
 	}
 }
 
+// A display that goes away can end mpv before the next look at the connectors.
+// That ending is part of the wait. It is not a fault and it does not count.
+func TestExitWithNoDisplayIsNotAFault(t *testing.T) {
+	var status string
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) {
+		status = filepath.Join(h.drm, "card0-HDMI-A-1", "status")
+		writeFile(t, status, "connected\n")
+	})
+	h.waitPlaying(0)
+
+	writeFile(t, status, "disconnected\n")
+	h.ctl("fake-exit", 1)
+	waitFor(t, "the wait state", func() bool { return h.sup.State().Player == StateWaiting })
+	if st := h.sup.State(); st.Restarts != 0 || h.countEvent("player.exit") != 0 || st.DisplayConnected {
+		t.Fatalf("the ending counted as a fault: %+v\n%s", st, h.events())
+	}
+
+	// The display comes back: mpv starts, and still nothing counts.
+	writeFile(t, status, "connected\n")
+	h.clock.Advance(displayWaitMax)
+	h.waitPlaying(0)
+	if h.sup.State().Restarts != 0 || h.countEvent("player.exit") != 0 {
+		t.Fatalf("a restart counted:\n%s", h.events())
+	}
+}
+
 // The nightly restart waits for an item boundary and does not count.
 func TestNightlyRestart(t *testing.T) {
 	h := newHarness(t, videos(), func(o *Options, h *harness) {
