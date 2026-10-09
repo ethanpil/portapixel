@@ -4,7 +4,7 @@
 // Why this package exists: the device and the fleet server are two programs from
 // one module, and both replace themselves the same way. The steps, the refusals
 // and the health gate belong in one place, so a fix reaches both. Nothing in this
-// package knows about a device: no playlist, no browser, no media partition. The
+// package knows about a device: no playlist, no player, no media partition. The
 // caller gives the paths, the release source and the functions that touch the
 // world.
 //

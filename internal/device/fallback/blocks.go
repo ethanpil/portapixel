@@ -153,7 +153,7 @@ func (s *scene) leftBlock(maxW int) block {
 		})
 	}
 
-	// The message. The page of the browser player limited it to 34 "0" widths.
+	// The message. A line of it is 34 "0" widths wide at most.
 	msgFace := s.face(s.fonts.regular, 1.85)
 	msgW := min(maxW, 34*width(msgFace, "0"))
 	msgLines := wrap(msgFace, strings.Fields(wordMessage), " ", msgW, 4)

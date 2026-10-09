@@ -58,7 +58,7 @@ func TestStatusReadsTheSystemFiles(t *testing.T) {
 	f.write(t, filepath.Join(f.src.SysRoot, "class", "thermal", "thermal_zone0", "temp"), "48312\n")
 	f.write(t, filepath.Join(f.src.SysRoot, "class", "thermal", "thermal_zone1", "temp"), "51987\n")
 	f.write(t, filepath.Join(f.src.EtcRoot, "portapixel-release"), "PORTAPIXEL_VERSION=0.1.0\nALPINE_RELEASE=3.23.2\nARCH=x86_64\n")
-	f.write(t, filepath.Join(f.src.ShareRoot, "packages.manifest"), "chromium-149.0\ncage-0.2.1\n")
+	f.write(t, filepath.Join(f.src.ShareRoot, "packages.manifest"), "mpv-0.40.0\nmesa-gbm-25.0.0\n")
 
 	cfg := config.Default()
 	cfg.Device.Name = "Lobby Screen"

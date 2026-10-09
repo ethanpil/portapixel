@@ -5,11 +5,10 @@
 // shows the PNG with image-display-duration=inf, so the daemon renders again
 // when the data changes or when the minute changes.
 //
-// The picture has the same parts as the old page of the browser player: the
-// brand, the name and the ID of the device, the admin address, the IP
-// addresses, the pairing code, a QR code of the address, the clock and a
-// warning line. Every size follows the size of the screen, so 720p, 1080p and
-// 4K look the same.
+// The picture has these parts: the brand, the name and the ID of the device, the
+// admin address, the IP addresses, the pairing code, a QR code of the address,
+// the clock and a warning line. Every size follows the size of the screen, so
+// 720p, 1080p and 4K look the same.
 package fallback
 
 import (
@@ -44,9 +43,8 @@ const (
 	minHeight = 240
 )
 
-// The colours. They are the dark values of web/shared/pp.css, as the page of
-// the browser player used them. The accents are a little brighter than the
-// admin UI, because the background here is pure black.
+// The colours. They are the dark values of web/shared/pp.css. The accents are a
+// little brighter than the admin UI, because the background here is pure black.
 var (
 	colInk        = color.RGBA{0xf4, 0xf1, 0xed, 0xff} // oklch(0.96 0.006 85)
 	colMuted      = color.RGBA{0xae, 0xaa, 0xa4, 0xff} // oklch(0.74 0.010 80)
@@ -101,8 +99,8 @@ func Render(info Info, w, h int) ([]byte, error) {
 }
 
 // unitFor gives the unit u of the layout in pixels. It is 0.6 % of the width
-// plus 0.36 % of the height, the same rule as the page of the browser player.
-// It gives about 10 px at 1280x720, 15 px at 1920x1080 and 31 px at 3840x2160.
+// plus 0.36 % of the height. It gives about 10 px at 1280x720, 15 px at
+// 1920x1080 and 31 px at 3840x2160.
 func unitFor(w, h int) float64 { return 0.006*float64(w) + 0.0036*float64(h) }
 
 // scene holds what the drawing code needs.

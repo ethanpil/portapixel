@@ -42,8 +42,8 @@
 #
 # THE PLAYER IS mpv, directly on DRM/KMS. There is no compositor, no seat
 # daemon, no X server and no Wayland session. The daemon starts mpv as the
-# kiosk user and controls it over a unix socket. The owner chose mpv on
-# 2026-10-08, in place of Chromium in a cage session.
+# kiosk user and controls it over a unix socket. CONTEXT.md, section 3, has
+# the reason for this choice.
 
 # ---------------------------------------------------------------- base system
 alpine-base                # busybox, OpenRC, /etc skeleton. The Alpine base (D1).

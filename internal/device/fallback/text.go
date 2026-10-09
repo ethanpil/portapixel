@@ -99,8 +99,8 @@ func width(face font.Face, text string) int {
 	return font.MeasureString(face, text).Ceil()
 }
 
-// lineHeight gives the height of a line: 1.35 times the size, as the page of
-// the browser player did.
+// lineHeight gives the height of a line: the size times factor. The factor of the
+// text is lineFactor.
 func (s *scene) lineHeight(units, factor float64) int { return s.px(units * factor) }
 
 // baseline gives the y of the baseline of a line that has its top at y and the

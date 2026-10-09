@@ -10,7 +10,7 @@ import (
 //
 // A reboot clears everything in RAM, so the count has to be on the disk. Nothing in
 // Go counted reboots before: the only guard was the per-release boot counter of
-// health-gate.sh, which says nothing about a hardware fault that kills the browser
+// health-gate.sh, which says nothing about a hardware fault that kills the player
 // every ten minutes.
 func TestRebootLoop(t *testing.T) {
 	now := time.Date(2026, 9, 18, 12, 0, 0, 0, time.UTC)
@@ -20,7 +20,7 @@ func TestRebootLoop(t *testing.T) {
 		t.Fatalf("a device that never rebooted is in a loop: %d %v", n, loop)
 	}
 
-	// Two reboots inside the hour are not a loop: four browser restarts give one
+	// Two reboots inside the hour are not a loop: four player restarts give one
 	// reboot, and one reboot that repairs the device is normal.
 	s.MarkReboot(now.Add(-50 * time.Minute))
 	s.MarkReboot(now.Add(-20 * time.Minute))

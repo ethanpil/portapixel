@@ -815,9 +815,10 @@ func (d *daemon) adminURL() string {
 	return "http://" + host + "/"
 }
 
-// fallbackInfo gives the data of the fallback screen (D18): the same facts that
-// the page of the browser player showed. The player adds the clock and the
-// burn-in step, and draws the screen again when a fact changes.
+// fallbackInfo gives the data of the fallback screen (D18): the name, the ID, the
+// admin address, the IP addresses, the pairing code and one warning. The player
+// adds the clock and the burn-in step, and draws the screen again when a fact
+// changes.
 //
 // The player loop calls this function, and the loop must never wait for the disk:
 // it also serves Suspend, the watchdog and the nightly restart. The report reads
