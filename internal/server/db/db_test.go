@@ -312,10 +312,10 @@ func TestForeignKeysAreOn(t *testing.T) {
 	}
 }
 
-// TestOpenResetsAWorkingMirror covers the process that stopped in the middle of a
-// mirror. A row that says "working" for ever makes the mirror route answer 409 and
-// the admin has no button that works.
-func TestOpenResetsAWorkingMirror(t *testing.T) {
+// TestOpenLeavesAWorkingMirror covers a second process that opens the database
+// while the server runs, for example "selftest" in a container. The mirror of the
+// server is a live goroutine, so Open must not mark it as failed.
+func TestOpenLeavesAWorkingMirror(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "test.db")
 	d, err := Open(path)
 	if err != nil {
@@ -331,6 +331,38 @@ func TestOpenResetsAWorkingMirror(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer again.Close()
+
+	rel, err := again.Release("1.5.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.MirrorState != MirrorWorking {
+		t.Fatalf("Open changed the mirror state to %q", rel.MirrorState)
+	}
+}
+
+// TestResetWorkingMirrors covers the process that stopped in the middle of a
+// mirror. A row that says "working" for ever makes the mirror route answer 409 and
+// the admin has no button that works.
+func TestResetWorkingMirrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "test.db")
+	d, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := d.SetMirrorState("1.5.0", MirrorWorking, ""); err != nil {
+		t.Fatal(err)
+	}
+	d.Close()
+
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer again.Close()
+	if err := again.ResetWorkingMirrors(); err != nil {
+		t.Fatal(err)
+	}
 
 	rel, err := again.Release("1.5.0")
 	if err != nil {

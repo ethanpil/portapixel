@@ -67,8 +67,13 @@ func selftestCommand(args []string) int {
 	}
 
 	// The configuration, the database, the store, the mirror and the routes. The
-	// check builds the whole server with newServer, which is what "run" does, so
+	// check builds the whole server with openServer, which is what "run" does, so
 	// it proves the work that "run" does and not a copy of it. It never listens.
+	//
+	// It does not tidy. A container can run this check while its server runs
+	// on the same data directory. The tidy step would mark a mirror that runs as
+	// failed and would delete its staging directory. The code has no lock and no
+	// pid file to tell the two cases apart, so the check never tidies.
 	dir := *dataDir
 	if _, err := os.Stat(dir); err != nil {
 		tmp, err := os.MkdirTemp("", "portapixel-selftest")
@@ -80,7 +85,7 @@ func selftestCommand(args []string) int {
 		fmt.Printf("%s is not there, so the check uses a temporary directory\n", *dataDir)
 	}
 
-	srv, err := newServer(dir, *listen)
+	srv, err := openServer(dir, *listen, false)
 	if err != nil {
 		return fail("%v", err)
 	}

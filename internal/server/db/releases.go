@@ -152,14 +152,15 @@ func (d *DB) SetMirrorState(version, state, errText string) error {
 	return err
 }
 
-// resetWorkingMirrors turns every mirror that says "working" into a failure. Open
-// calls it.
+// ResetWorkingMirrors turns every mirror that says "working" into a failure. The
+// server calls it one time at start, before it takes a request.
 //
 // A mirror runs in a goroutine of the process. A process that stopped in the
 // middle of one leaves a row that says "working" for ever, and the admin page then
 // offers no button: the mirror route answers 409 because it believes that a mirror
-// runs.
-func (d *DB) resetWorkingMirrors() error {
+// runs. Never call it while another process uses the database. It would mark the
+// mirror of that process as failed.
+func (d *DB) ResetWorkingMirrors() error {
 	_, err := d.w.Exec(`UPDATE releases SET mirror_state = ?, mirror_error = ?
 		WHERE mirror_state = ?`,
 		MirrorFailed, "the server stopped while it mirrored this version", MirrorWorking)
