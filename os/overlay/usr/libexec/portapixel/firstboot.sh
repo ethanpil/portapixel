@@ -43,7 +43,9 @@ if ! mkdir "$LOCK" 2>/dev/null; then
 fi
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT INT TERM
 
-oplog firstboot.start "version=$(tr '\n' ' ' </etc/portapixel-release 2>/dev/null)"
+# The release file has one KEY=value pair on each line. The line holds the
+# pairs as they are, with one space between two pairs.
+oplog firstboot.start "$(tr '\n' ' ' </etc/portapixel-release 2>/dev/null | sed 's/ $//')"
 
 # --------------------------------------------------------------------- helpers
 # Write a marker and put it on the disk before the caller goes on. PPROOT has
