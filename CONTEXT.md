@@ -494,7 +494,8 @@ or with the ops log.
   0.40.0-r8 with `libdvdnav.so.4` as a needed library. `libdvdnav` needs
   `libdvdread.so.8`, and `libdvdread` 6.1.3-r2 needs `libdvdcss.so.2` (checked with
   `readelf -d` on the packages on 2026-10-09). The library is not loaded with
-  `dlopen`. A missing file stops mpv at its start. The device never reads a DVD:
+  `dlopen`. The musl loader refuses `libdvdread` when the file is missing, so
+  mpv does not start. The device never reads a DVD:
   the daemon gives mpv the path of a file in the media root, and the extension
   list has no disc format. `LICENSES-THIRD-PARTY.md` names the library.
 - Git Bash rewrites an argument that starts with a slash into a Windows path.
