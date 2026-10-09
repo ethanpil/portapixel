@@ -295,13 +295,21 @@ func (d *DB) validatePlaylist(p Playlist) Errors {
 			errs = append(errs, FieldError{field + ".sha256", "is not a SHA-256 value of 64 lower case hex characters"})
 			continue
 		}
-		var n int
-		if err := d.r.QueryRow(`SELECT COUNT(*) FROM media WHERE sha256 = ?`, it.SHA256).Scan(&n); err != nil {
+		var origName string
+		err := d.r.QueryRow(`SELECT orig_name FROM media WHERE sha256 = ?`, it.SHA256).Scan(&origName)
+		if errors.Is(err, sql.ErrNoRows) {
+			errs = append(errs, FieldError{field + ".sha256", "names a file that the media library does not hold"})
+			continue
+		}
+		if err != nil {
 			errs = append(errs, FieldError{field + ".sha256", "could not be checked: " + err.Error()})
 			continue
 		}
-		if n == 0 {
-			errs = append(errs, FieldError{field + ".sha256", "names a file that the media library does not hold"})
+		// The manifest names the object by the name of the media row, and the device
+		// reads the kind from its extension. A file of another kind is an item that
+		// each screen skips, so the playlist must not take it.
+		if playlist.Kind(playlist.Item{File: origName}) == playlist.KindUnknown {
+			errs = append(errs, FieldError{field + ".sha256", "is not an image or a video that a screen can show"})
 			continue
 		}
 		// The name carries the extension, which is what says image or video.

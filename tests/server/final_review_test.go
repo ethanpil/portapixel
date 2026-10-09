@@ -335,22 +335,28 @@ func TestEveryAnswerCarriesTheBrowserRules(t *testing.T) {
 	}
 }
 
-// TestAStoredObjectIsInert is the answer to an uploaded SVG.
+// TestAStoredObjectIsInert is the answer to a stored SVG.
 //
-// An SVG can carry a script, and internal/server/media gives it the type
+// An SVG can carry a script, and a system with a mime.types file gives it the type
 // image/svg+xml. An admin who opened such an object on this origin would run that
 // script with the admin session, which is the whole fleet. The policy of the answer
 // puts it in a sandbox with no script, and the disposition makes it a download. An
 // image in an <img> tag still draws: a policy of a response does not reach an image
 // load.
+//
+// The upload route refuses an SVG now, because no screen shows one. The library of an
+// older build can still hold one, so the object goes into the store directly.
 func TestAStoredObjectIsInert(t *testing.T) {
 	f := newFleet(t)
 	f.login()
 	token := f.pairDevice("px-inert001")
 
-	svg := []byte(`<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">` +
-		`<script>fetch("/api/admin/devices")</script></svg>`)
-	sha := f.uploadMedia("logo.svg", svg)
+	svg := `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="8">` +
+		`<script>fetch("/api/admin/devices")</script></svg>`
+	if res := f.upload("/api/admin/media", "logo.svg", []byte(svg)); res.status != http.StatusUnprocessableEntity {
+		t.Fatalf("the upload of an SVG answered %d, want 422: %s", res.status, res.body)
+	}
+	sha := addObject(t, f, "logo.svg", svg)
 	png := f.uploadMedia("welcome.png", imageBytes(t, 20, 20))
 
 	type check struct {

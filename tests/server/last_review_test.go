@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/ethanpil/portapixel/internal/server/httpjson"
 )
@@ -100,5 +101,56 @@ func TestARefusedNewScreenDoesNotBlockAGoodToken(t *testing.T) {
 	f.mustOK(res, "an enroll with a good auto token after the pending limit")
 	if out.Status != "paired" {
 		t.Fatalf("the card with a good token got %+v", out)
+	}
+}
+
+// TestAPlaylistTakesOnlyWhatAScreenShows covers the kind of an item.
+//
+// The library took any file, and the playlist took any object of the library. A PDF
+// or an SVG then went to each screen as an item, and each screen skipped it with no
+// word on the server. The upload refuses such a file now, and the playlist refuses an
+// object of an older library that is not an image or a video.
+func TestAPlaylistTakesOnlyWhatAScreenShows(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+
+	if res := f.upload("/api/admin/media", "notes.pdf", []byte("%PDF-1.4")); res.status != http.StatusUnprocessableEntity {
+		t.Fatalf("the upload of a PDF answered %d, want 422: %s", res.status, res.body)
+	}
+
+	old := addObject(t, f, "notes.pdf", "%PDF-1.4")
+	res := f.adminCall(http.MethodPost, "/api/admin/playlists", map[string]any{
+		"title": "Wrong kind",
+		"items": []map[string]any{{"sha256": old, "name": "notes.png", "duration": 10}},
+	})
+	if res.status != http.StatusUnprocessableEntity {
+		t.Fatalf("a playlist with a PDF answered %d, want 422: %s", res.status, res.body)
+	}
+	fields := res.fields(t)
+	if len(fields) != 1 || fields[0].Field != "items[0].sha256" {
+		t.Fatalf("the answer names %+v", fields)
+	}
+}
+
+// TestALongUploadNameKeepsItsExtension covers the cut of a name to 255 bytes.
+//
+// The cut took the first 255 bytes. That dropped the extension, which says image or
+// video, and it could split a character in two. The playlist then took the object as
+// "unknown", and each screen skipped it.
+func TestALongUploadNameKeepsItsExtension(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+
+	name := strings.Repeat("é", 150) + ".png"
+	res := f.mustOK(f.upload("/api/admin/media", name, imageBytes(t, 8, 8)), "a long name")
+	var out struct {
+		Media struct {
+			OrigName string `json:"orig_name"`
+		} `json:"media"`
+	}
+	res.json(t, &out)
+	got := out.Media.OrigName
+	if !strings.HasSuffix(got, ".png") || len(got) > 255 || !utf8.ValidString(got) {
+		t.Fatalf("the name was stored as %q (%d bytes)", got, len(got))
 	}
 }
