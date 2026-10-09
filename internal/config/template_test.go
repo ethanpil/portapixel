@@ -3,6 +3,7 @@ package config
 import (
 	"bytes"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -140,5 +141,20 @@ func TestTemplateIsPlainText(t *testing.T) {
 	}
 	if got := strings.Count(string(data), "password = "); got != 1 || !strings.Contains(string(data), `# password = "portapixel"`) {
 		t.Errorf("the template must hold one password, the documented default")
+	}
+}
+
+// The image ships os/portapixel.toml. It is a generated file, and this test is
+// the only thing that keeps it in step with Render and Default.
+func TestShippedTemplateIsCurrent(t *testing.T) {
+	path := filepath.Join("..", "..", "os", FileName)
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("cannot read the template that the image ships: %v", err)
+	}
+	if !bytes.Equal(got, Template()) {
+		t.Fatalf("os/%s is not the output of config.Template().\n"+
+			"Run this command in the repository root and commit the result:\n\n"+
+			"\tgo run ./internal/config/cmd/gentemplate\n", FileName)
 	}
 }

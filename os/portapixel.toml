@@ -1,0 +1,107 @@
+# PortaPixel settings. This file has every setting, and each one is off.
+# To turn on a setting, remove the "#" at the start of its line.
+# Also remove the "#" from the [table] line above it, for example [server].
+# A key under the wrong [table] line does not do what you want.
+# At the first boot, the device writes this file again with all the values.
+# Your values stay. See docs/settings.md for every key.
+
+# PortaPixel device configuration.
+# You can edit this file by hand. Every computer can read this partition.
+# You can also use the web UI at http://portapixel.local/ .
+# A save from the web UI writes this file again. These comments come back.
+# Your own comments do not come back.
+
+# [device]
+# name = "PortaPixel"        # The display name. mDNS uses it in lower case.
+# id = "px-00000000"         # Comes from the hardware at each boot. An edit does nothing.
+# timezone = "UTC"           # IANA name, for example "America/New_York".
+                             # The schedules use it. The web UI asks you to set it.
+
+# [network]
+# mode = "dhcp"              # dhcp | static
+# Set the three keys below when mode is static.
+# address = "192.168.1.50/24"
+# gateway = "192.168.1.1"
+# dns = ["192.168.1.1", "1.1.1.1"]
+# wifi_ssid = ""             # Empty for a wired network.
+# wifi_psk = ""
+# wifi_country is the two-letter regulatory domain of the radio, for example
+# "US" or "DE". Leave it out and some radios show fewer channels.
+# wifi_country = "US"
+
+# [display]
+# rotation = 0               # 0 | 90 | 180 | 270
+# video_mode forces the output mode when the display or an HDMI splitter
+# gives a bad EDID. Leave it out to trust the display.
+# video_mode = "1920x1080@60"
+# video_output = "auto"      # auto | gpu | drm. auto: gpu when the GPU has
+                             # an OpenGL driver (Raspberry Pi, Intel, AMD), else drm.
+# power_method = "auto"      # auto | cec | dpms | none
+# Set both times for a screen schedule. Leave both out to keep the screen on.
+# on_time = "07:30"
+# off_time = "22:00"
+# power_days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+# [audio]
+# output = "auto"            # auto (HDMI first) | hdmi | analog | usb
+# volume = 100               # 0 to 100
+
+# [playback]
+# default_playlist = "default"
+# transition = "fade"        # cut | fade | fade-white | crossfade |
+                             # wipe-left | wipe-right | wipe-up | wipe-down |
+                             # push-left | push-right | push-up | push-down |
+                             # slide-in-left | slide-in-right | slide-in-up |
+                             # slide-in-down | slide-out-left |
+                             # slide-out-right | slide-out-up |
+                             # slide-out-down | zoom-out | split
+# transition_ms = 500        # The length of a transition.
+# image_duration = 10        # Seconds for an image that has no duration.
+# shuffle = false
+# nightly_restart = "03:30"  # The daily player restart. "" stops it.
+# motion = "auto"            # auto | on | off. on: in a crossfade from a
+                             # video, both items move. auto: on for a PC
+                             # (x86_64) and a Raspberry Pi 5, off for others.
+
+# The recovery ladder of the player. The daemon asks the player for its state
+# every 2 seconds. No answer, or a video that does not move, for
+# heartbeat_timeout restarts the player, and restarts_before_reboot restarts
+# inside restart_window reboot the device.
+# [watchdog]
+# enabled = true             # false stops the whole ladder. Keep it true.
+# heartbeat_timeout = 30     # Seconds. 10 to 600.
+# restarts_before_reboot = 4 # 0 to 20. 0 never reboots.
+# restart_window = 60        # Minutes. 1 to 1440.
+
+# Playlist schedule rules. The first rule that matches wins. If no rule
+# matches, default_playlist plays. A rule with no days matches every day.
+# Omit start and end for the whole day, for example a weekend rule. Set
+# both or neither: one time on its own is an error.
+# [[schedule]]
+# playlist = "weekday-loop"
+# days = ["mon", "tue", "wed", "thu", "fri"]
+# start = "08:00"
+# end = "18:00"
+#
+# [[schedule]]
+# playlist = "weekend-loop"
+# days = ["sat", "sun"]
+
+# [server]
+# url = ""                   # The fleet server. Empty keeps the device standalone.
+# token = ""                 # An enrollment token or a device token.
+                             # Leave it empty to pair by code in the web UI.
+# poll_seconds = 60          # 10 or more
+
+# [web]
+# port = 80
+# password = "portapixel"    # The local admin password. Change it.
+
+# [ssh]
+# enabled = true             # The first boot sets the root password. Change it.
+
+# [updates]
+# auto = false               # false: you approve each update. This is the safe value.
+
+# [logging]
+# persist = false            # true writes the system log to the disk. It adds wear.
