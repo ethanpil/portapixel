@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"strings"
@@ -152,5 +153,38 @@ func TestALongUploadNameKeepsItsExtension(t *testing.T) {
 	got := out.Media.OrigName
 	if !strings.HasSuffix(got, ".png") || len(got) > 255 || !utf8.ValidString(got) {
 		t.Fatalf("the name was stored as %q (%d bytes)", got, len(got))
+	}
+}
+
+// TestAFailedDeleteDoesNotRejectTheRequestInstead covers the delete of a screen.
+//
+// The route read every error of the delete as "there is no such screen" and then
+// rejected a pending request of the same device ID. A screen that another machine
+// asked to be then stayed paired, and the admin read that it was gone.
+func TestAFailedDeleteDoesNotRejectTheRequestInstead(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	f.pairDevice("px-del00001")
+	if _, res := f.enrollAs("px-del00001", hardwareOf("px-another"), ""); res.status != http.StatusOK {
+		t.Fatalf("the second machine answered %d: %s", res.status, res.body)
+	}
+
+	// A fault of the write, and only of the write.
+	raw, err := sql.Open("sqlite", f.dir+"/test.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	if _, err := raw.Exec(`CREATE TRIGGER fail_delete BEFORE DELETE ON devices
+		BEGIN SELECT RAISE(ABORT, 'an injected fault'); END`); err != nil {
+		t.Fatal(err)
+	}
+
+	res := f.adminCall(http.MethodDelete, "/api/admin/devices/px-del00001", nil)
+	if res.status == http.StatusOK {
+		t.Fatalf("a delete that failed answered 200: %s", res.body)
+	}
+	if _, err := f.db.PendingByDevice("px-del00001"); err != nil {
+		t.Fatalf("the failed delete rejected the waiting request: %v", err)
 	}
 }

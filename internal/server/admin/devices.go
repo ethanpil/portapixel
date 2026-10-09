@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -92,7 +93,12 @@ func (d Deps) getDevice(w http.ResponseWriter, r *http.Request) {
 	dev, err := d.DB.Device(id)
 	if err != nil {
 		// A request that waits has no devices row yet. The detail page of the
-		// pending card asks for it by the same path, so it answers here.
+		// pending card asks for it by the same path, so it answers here. Any other
+		// error is a fault, and a paired screen must not show as a request.
+		if !errors.Is(err, db.ErrNotFound) {
+			fail(w, err)
+			return
+		}
 		if p, pendErr := d.DB.PendingByDevice(id); pendErr == nil {
 			httpjson.Write(w, http.StatusOK, DeviceView{
 				Device:           pendingAsDevice(p),
@@ -222,6 +228,13 @@ func (d Deps) deleteDevice(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	err := d.DB.DeleteDevice(id)
 	if err != nil {
+		// Only a device ID with no row can be a request that waits. After any other
+		// error the screen is still there, and a reject of its pending request with
+		// the answer "gone" would hide that.
+		if !errors.Is(err, db.ErrNotFound) {
+			fail(w, err)
+			return
+		}
 		if p, pendErr := d.DB.PendingByDevice(id); pendErr == nil {
 			if rejectErr := d.DB.RejectPending(p.ID); rejectErr != nil {
 				fail(w, rejectErr)
