@@ -18,7 +18,8 @@
 #   6. PPMEDIA holds portapixel.toml, the settings template, as it is in the
 #      repository.
 #
-# Run it as root. It needs losetup, mount and qemu-user binfmt for aarch64.
+# Run it as root. It needs losetup, mount and qemu-user binfmt for aarch64. The
+# kernel needs the exfat driver, to mount PPMEDIA.
 #
 # Usage: smoke-arm.sh IMAGE.img.gz VERSION
 set -eu
