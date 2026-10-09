@@ -331,8 +331,8 @@ type Supervisor struct {
 	shown bool
 	// heard is the last time at which mpv had answered every request.
 	heard time.Time
-	// notes remembers when each note last went in the ops log.
-	notes map[string]time.Time
+	// notes is the rate limit of the notes, by event and key.
+	notes map[string]noteState
 	// playlistDue and displayDue are the changes that the loop did not take
 	// yet. They are flags and not messages of the queue: a full queue dropped
 	// such a message, and nothing asked again.
@@ -383,7 +383,7 @@ func New(opt Options) *Supervisor {
 		lastDisplay: true,
 		waitDelay:   opt.DisplayProbe,
 		launchDelay: launchRetryMin,
-		notes:       make(map[string]time.Time),
+		notes:       make(map[string]noteState),
 		crashed:     make(map[string]bool),
 	}
 	if s.opt.Reboot == nil {
@@ -851,7 +851,7 @@ func (s *Supervisor) onMoved(data json.RawMessage, now time.Time) {
 		return
 	}
 	if s.motionFor == MotionOn {
-		s.logRepeat("player.motion.slow", MotionOn, reason+"; playback.motion is on, so the moving crossfade stays on")
+		s.note("player.motion.slow", MotionOn, reason+"; playback.motion is on, so the moving crossfade stays on", now)
 		return
 	}
 	s.motionOff = true
@@ -961,7 +961,7 @@ func (s *Supervisor) onReply(m message, now time.Time) {
 	switch r.what {
 	case reqLoad:
 		if !success {
-			s.note("player.load.fail", "mpv refused a file: "+m.Error, now)
+			s.note("player.load.fail", s.listKey(), "mpv refused a file: "+m.Error, now)
 			return
 		}
 		var d struct {
@@ -1024,7 +1024,7 @@ func (s *Supervisor) onProperty(m message, now time.Time) {
 			Text string `json:"text"`
 		}
 		if json.Unmarshal(m.Data, &f) == nil && f.Text != "" {
-			s.note("player.transition.fault", f.Text, now)
+			s.note("player.transition.fault", s.listKey(), f.Text, now)
 		}
 	case obsMoved:
 		s.onMoved(m.Data, now)
@@ -1040,11 +1040,11 @@ func (s *Supervisor) onIdle(now time.Time) {
 		return
 	}
 	if s.list.fallback {
-		s.note("player.fallback.fail", "mpv could not show the fallback screen; the last lines of mpv: "+
+		s.note("player.fallback.fail", "", "mpv could not show the fallback screen; the last lines of mpv: "+
 			s.proc.lastOutput(), now)
 		return
 	}
-	s.note("player.playlist.fail", fmt.Sprintf("no item of the playlist %s could play; the fallback screen shows, "+
+	s.note("player.playlist.fail", s.listKey(), fmt.Sprintf("no item of the playlist %s could play; the fallback screen shows, "+
 		"and the player tries again in %s", s.list.playlist.Name, failedRetry), now)
 	s.showFallback(now, "no item of the playlist could play")
 	s.failedAt = now
@@ -1078,7 +1078,7 @@ func (s *Supervisor) onEndFile(m message, now time.Time) {
 				name = fmt.Sprintf("the item %d (%s) of %s", idx, s.list.playlist.Items[idx].Name, s.list.playlist.Name)
 			}
 		}
-		s.note("player.item.fail", name+" could not play: "+m.FileError, now)
+		s.note("player.item.fail", s.listKey(), name+" could not play: "+m.FileError, now)
 	case "eof":
 		if !s.graceUntil.IsZero() {
 			s.graceUntil = time.Time{}
@@ -1204,8 +1204,8 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	// screen for the next transition also does not show the zoom there.
 	kenBurns := p.KenBurns && s.output == OutputGPU
 	if p.KenBurns && !kenBurns {
-		s.logRepeat("player.kenburns.off", p.Name, p.Name+": Ken Burns is off, because the video output is "+
-			s.output+" and not "+OutputGPU)
+		s.note("player.kenburns.off", p.Name, p.Name+": Ken Burns is off, because the video output is "+
+			s.output+" and not "+OutputGPU, now)
 	}
 	// mpv loads the first file of a replace at once and the others behind it.
 	for j, idx := range order {
@@ -1221,7 +1221,7 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 		}
 	}
 	// Each item carries its own transition, so the line names none.
-	s.logRepeat("player.playlist", p.Name, fmt.Sprintf("%s: %d items", p.Name, len(order)))
+	s.note("player.playlist", p.Name, fmt.Sprintf("%s: %d items", p.Name, len(order)), now)
 }
 
 // fileOptions gives the per-file options of one item (ARCHITECTURE 7a). mpv sets
@@ -1313,7 +1313,7 @@ func (s *Supervisor) clearList() {
 func (s *Supervisor) showFallback(now time.Time, why string) {
 	s.fb = fallbackScreen{}
 	if s.drawFallback(now, s.fallbackInfo(now)) {
-		s.logRepeat("player.fallback", why, "the fallback screen shows: "+why)
+		s.note("player.fallback", why, "the fallback screen shows: "+why, now)
 	}
 }
 
@@ -1335,7 +1335,7 @@ func (s *Supervisor) drawFallback(now time.Time, info fallback.Info) bool {
 		err = fsutil.WriteFileAtomic(s.opt.Command.FallbackPath(), data, 0o644)
 	}
 	if err != nil {
-		s.note("player.fallback.fail", "the fallback screen could not be drawn: "+err.Error(), now)
+		s.note("player.fallback.fail", "", "the fallback screen could not be drawn: "+err.Error(), now)
 		// mpv has no picture to show, and no event will come to say so. The loop
 		// asks again after fallbackCheck.
 		s.fb.failed = true
@@ -1592,50 +1592,66 @@ func (s *Supervisor) log(event, details string) {
 	}
 }
 
-// note writes a fault that can come again and again, for example a broken item
-// in a loop. The same note goes in the ops log at most once per noteRepeat. The
+// note writes a line that can come again and again, for example a broken item
+// in a loop. The same event and key go in the ops log at most once per
+// noteRepeat, and the line says how many times the note came in between. The
 // ops log is a file on the flash card, and a device in its steady state writes
 // nothing to the flash (D2).
-func (s *Supervisor) note(event, details string, now time.Time) {
-	slog.Debug(event, "details", details)
-	s.mu.Lock()
-	first := s.rememberNote(event+" "+details, now)
-	s.mu.Unlock()
-	if first {
-		s.log(event, details)
-	}
-}
-
-// logRepeat is note for a line of the normal work, keyed by a short value: one
-// line per key per noteRepeat.
-func (s *Supervisor) logRepeat(event, key, details string) {
-	slog.Debug(event, "details", details)
-	s.mu.Lock()
-	first := s.rememberNote(event+" "+key, s.opt.Now())
-	s.mu.Unlock()
-	if first {
-		s.log(event, details)
-	}
-}
-
-// rememberNote reports if a note may go in the ops log now, and records it. The
-// caller holds the lock.
 //
-// Each note has its own time, because two broken items that take turns would
-// beat a memory of one note and write a line at each pass.
-func (s *Supervisor) rememberNote(note string, now time.Time) bool {
-	if last, seen := s.notes[note]; seen && now.Sub(last) < noteRepeat {
-		return false
+// key has few values: the name of a playlist, or a word. The details are never
+// part of the key. They name an item, or they hold an error with the name of a
+// temporary file, so with them each line was a new note. More notes than
+// noteMemory then pushed each other out, and each one went in the log again.
+func (s *Supervisor) note(event, key, details string, now time.Time) {
+	slog.Debug(event, "details", details)
+	s.mu.Lock()
+	first, missed := s.rememberNote(event+" "+key, now)
+	s.mu.Unlock()
+	if !first {
+		return
 	}
-	if len(s.notes) >= noteMemory {
+	if missed > 0 {
+		details += fmt.Sprintf(" (and %d more times since the last line of this kind)", missed)
+	}
+	s.log(event, details)
+}
+
+// listKey names the list of mpv for a note: the playlist, or "" for the
+// fallback screen and for no list.
+func (s *Supervisor) listKey() string {
+	if s.list == nil || s.list.fallback {
+		return ""
+	}
+	return s.list.playlist.Name
+}
+
+// noteState is what the rate limit keeps of one note.
+type noteState struct {
+	at     time.Time // the last time that it went in the ops log
+	missed int       // the times that it came after that and did not go in
+}
+
+// rememberNote reports if a note may go in the ops log now, and the times that
+// it came since its last line. It records the note. The caller holds the lock.
+//
+// Each note has its own time, because two faults that take turns would beat a
+// memory of one note and write a line at each pass.
+func (s *Supervisor) rememberNote(key string, now time.Time) (bool, int) {
+	n, seen := s.notes[key]
+	if seen && now.Sub(n.at) < noteRepeat {
+		n.missed++
+		s.notes[key] = n
+		return false, 0
+	}
+	if !seen && len(s.notes) >= noteMemory {
 		oldest, at := "", time.Time{}
 		for k, v := range s.notes {
-			if at.IsZero() || v.Before(at) {
-				oldest, at = k, v
+			if at.IsZero() || v.at.Before(at) {
+				oldest, at = k, v.at
 			}
 		}
 		delete(s.notes, oldest)
 	}
-	s.notes[note] = now
-	return true
+	s.notes[key] = noteState{at: now}
+	return true, n.missed
 }

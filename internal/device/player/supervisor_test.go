@@ -2,6 +2,7 @@ package player
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"net"
 	"os"
@@ -474,8 +475,9 @@ func TestEveryItemFails(t *testing.T) {
 		d, _ := h.tryDump()
 		return len(d.List) == 1 && d.List[0].Path == h.sup.opt.Command.FallbackPath()
 	})
-	if !h.eventWith("player.item.fail", "broken-a.mp4") || !h.eventWith("player.item.fail", "broken-b.jpg") {
-		t.Errorf("the faults of the items are not in the ops log:\n%s", h.events())
+	// One line for the playlist: the first fault, and a count for the others.
+	if !h.eventWith("player.item.fail", "broken-a.mp4") || h.countEvent("player.item.fail") != 1 {
+		t.Errorf("player.item.fail lines:\n%s", h.events())
 	}
 	if h.countEvent("player.playlist.fail") != 1 {
 		t.Errorf("player.playlist.fail lines:\n%s", h.events())
@@ -485,6 +487,63 @@ func TestEveryItemFails(t *testing.T) {
 	loads := h.dump().Loads
 	h.advance(failedRetry)
 	waitFor(t, "a second try of the playlist", func() bool { return h.dump().Loads >= loads+2 })
+}
+
+// A note goes in the ops log one time per hour for each event and playlist, with
+// a count of the times that it came in between. The key held the details: each
+// broken item was a note of its own, and more than noteMemory of them pushed
+// each other out, so each pass of the loop wrote each fault to the flash again.
+func TestManyBrokenItemsGiveOneLine(t *testing.T) {
+	items := []library.ManifestItem{{Name: "good.mp4"}}
+	for i := range 40 {
+		items = append(items, library.ManifestItem{Name: fmt.Sprintf("broken-%02d.jpg", i)})
+	}
+	h := newHarness(t, playlist("lobby", "fade", 400, items...), nil)
+	h.waitPlaying(0)
+	for range 2 { // two passes of the loop
+		h.settle()
+		h.ctl("fake-next")
+		h.waitPlaying(0)
+	}
+	h.settle()
+	if n := h.countEvent("player.item.fail"); n != 1 {
+		t.Fatalf("%d player.item.fail lines, want 1:\n%s", n, h.events())
+	}
+
+	h.advance(noteRepeat)
+	h.ctl("fake-next")
+	waitFor(t, "the line of the next hour", func() bool { return h.countEvent("player.item.fail") == 2 })
+	if !h.eventWith("player.item.fail", "(and 79 more times since the last line of this kind)") {
+		t.Errorf("the line of the next hour has no count of the faults in between:\n%s", h.events())
+	}
+}
+
+// The error of a failed draw names a temporary file with a random name. With the
+// error in the key, each retry of the draw was a new note and a new line.
+func TestAFallbackFaultWithANewTextIsOneNote(t *testing.T) {
+	tries := 0
+	h := newHarness(t, library.PlayerManifest{}, func(o *Options, h *harness) {
+		o.Render = func(info fallback.Info, w, h2 int) ([]byte, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			tries++
+			return nil, fmt.Errorf("write /run/portapixel/fallback.png.tmp%d: no space left on device", tries)
+		}
+	})
+	waitFor(t, "the first failed draw", func() bool { return h.countEvent("player.fallback.fail") == 1 })
+	h.settle()
+	for range 3 {
+		h.advance(fallbackCheck + time.Second)
+	}
+	h.mu.Lock()
+	n := tries
+	h.mu.Unlock()
+	if n < 3 {
+		t.Fatalf("the draw was tried %d times, want a retry at each check", n)
+	}
+	if got := h.countEvent("player.fallback.fail"); got != 1 {
+		t.Errorf("%d player.fallback.fail lines, want 1:\n%s", got, h.events())
+	}
 }
 
 // The watchdog: an mpv that ends is started again, the restart counts, and the
