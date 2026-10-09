@@ -437,6 +437,13 @@ or with the ops log.
   `server.toml`, and a proxy that a person removed later stayed trusted. `saveField`
   reads the file, changes one field and writes the file again (8342826).
 
+- The image ships `os/portapixel.toml` on PPMEDIA: `config.Template()`, every line
+  a comment. `Load` reads it as the defaults and finds no fault, so the first boot
+  keeps it, `refreshConfigID` writes the full file, and the ops log has no
+  `provision.config` line. `boot-smoke.exp` tests for that line. A key whose
+  `[table]` line keeps its `#` is not an error: the parser drops it or the key joins
+  the table above it (lab8, 2026-10-09). Copy the file onto exFAT with a plain `cp`.
+
 ### Lessons of the change to mpv
 
 - The reports of the conversion stages 2A to 2c are not in the repository. The
