@@ -338,6 +338,36 @@ local function settle()
     return nil
 end
 
+-- reshape gives the copy of the screen in the shape of the picture, or nil
+-- when the copy is right already. vo=drm has no screenshot of its own: mpv
+-- scales the video frame to the size of the window and does not keep its
+-- aspect (player/screenshot.c). On a 16:10 screen a 16:9 picture then fills
+-- the bars, and the shape jumps when the copy shows. The function scales the
+-- copy back into the video rectangle (osd-dimensions) and makes the bars
+-- opaque black. vo=gpu gives a copy of the window that is right.
+local function reshape(src8, W, H)
+    if mp.get_property("current-vo") ~= "drm" then return nil end
+    local d = mp.get_property_native("osd-dimensions")
+    local x0, y0 = d.ml, d.mt
+    local vw, vh = W - d.ml - d.mr, H - d.mt - d.mb
+    if vw < 1 or vh < 1 or (vw == W and vh == H) then return nil end
+    local src = ffi.cast("const int32_t *", src8)
+    local dst = ffi.new("int32_t[?]", W * H)
+    for i = 0, W * H - 1 do dst[i] = OPAQUE end
+    local map = ffi.new("int32_t[?]", vw)
+    for x = 0, vw - 1 do map[x] = math.floor(x * W / vw) end
+    for y = 0, vh - 1 do
+        local row = src + math.floor(y * H / vh) * W
+        local out = dst + (y0 + y) * W + x0
+        if vw == W then
+            ffi.copy(out, row, W * 4)
+        else
+            for x = 0, vw - 1 do out[x] = bor(row[map[x]], OPAQUE) end
+        end
+    end
+    return dst
+end
+
 -- cover puts the copy of the screen on top before mpv unloads item A.
 local function cover()
     local kind = settle() or mp.get_opt("pptr-kind") or "cut"
@@ -369,6 +399,11 @@ local function cover()
         for i = 0, S.w * S.h - 1 do own[i] = bor(src[i], OPAQUE) end
         S.own = own
         S.base = ffi.cast("const uint8_t *", own)
+    end
+    local shaped = reshape(S.base, S.w, S.h)
+    if shaped then
+        S.own = shaped
+        S.base = ffi.cast("const uint8_t *", shaped)
     end
     if not show(S.base, 0, 0, 0, S.w, S.h) then
         finish("the overlay failed")
