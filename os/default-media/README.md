@@ -11,8 +11,8 @@ The owner replaces them with real content.
 | `03-forest.mp4` | The camera moves slowly into a pine forest | 24 s | Mixkit, clip 50847 | Mixkit Stock Video Free License |
 | `04-beach.mp4` | Waves come onto a sand beach | 9 s | Mixkit, clip 5016 | Mixkit Stock Video Free License |
 | `05-mountain-road.mp4` | A drive down a curved road in the mountains | 50 s | Mixkit, clip 41576 | Mixkit Stock Video Free License |
-| `06-waterfall.mp4` | A waterfall falls into a brown river between rocks | 19 s | Source not recorded; supplied by the maintainer | Not recorded |
-| `07-roses.mp4` | Red roses with drops of water | 13 s | Source not recorded; supplied by the maintainer | Not recorded |
+| `06-waterfall.mp4` | A waterfall falls into a brown river between rocks | 19 s | Source unknown, to be confirmed by the maintainer | Source unknown, to be confirmed by the maintainer |
+| `07-roses.mp4` | Red roses with drops of water | 13 s | Source unknown, to be confirmed by the maintainer | Source unknown, to be confirmed by the maintainer |
 
 Each file is H.264, 1280x720, yuv420p, about 3 Mbit/s, with no audio track. The
 seven files are 59 MB together. They are the files that the maintainer
@@ -49,13 +49,27 @@ here.
 
 ## Licence
 
-These files are NOT CC0. Plan D37 asks for CC0 content, and these files do not
-meet that rule. The maintainer must make sure that the terms permit us to put
-the files in the image and give the image to other persons.
+Five of the videos are clips from Mixkit (<https://mixkit.co/>). We thank Mixkit
+and the people who made the clips. The clips use the **Mixkit Stock Video Free
+License**:
 
-- The five Mixkit clips have the Mixkit Stock Video Free License. Read the
-  terms at <https://mixkit.co/license/>.
-- The source and the licence of `06-waterfall.mp4` and `07-roses.mp4` are not
-  recorded.
+- The licence: <https://mixkit.co/license/#videoFree>
+- The Mixkit terms: <https://mixkit.co/terms/>
+
+The licence permits free commercial use. It lets a person copy, modify,
+distribute, perform and broadcast the clips. It is non-exclusive, worldwide and
+sub-licensable. It does not require attribution, but Mixkit asks for it. Read the
+licence and the terms for the exact words.
+
+These files are NOT under the MIT licence of PortaPixel, and they are NOT CC0.
+The Mixkit terms still apply to everyone who takes the clips from this
+repository or from an image. A person who wants the clips for another use should
+get them from Mixkit.
+
+The source and the licence of `06-waterfall.mp4` and `07-roses.mp4` are unknown.
+The maintainer must confirm them.
+
+Plan D37 asks for CC0 content, and these files do not meet that rule. The owner
+decided on 2026-10-09 to keep all seven videos as they are.
 
 `LICENSES-THIRD-PARTY.md` has the same list.

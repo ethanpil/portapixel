@@ -2,13 +2,11 @@
 
 This is the manual hardware checklist for a PortaPixel release. Check off
 each line by hand, on real hardware, before a release ships. Nothing in
-`docs/` or in CI can replace this list: CI proves that the daemon and the
-browser come up; this list proves that a person can watch the screen play.
+`docs/` or in CI can replace this list: CI proves that the daemon and mpv
+come up; this list proves that a person can watch the screen play.
 
 The checklist comes from the project plan, corrected for what the project
-actually built: the display stack is Chromium inside `cage`, not the
-WebKit-based browser the plan first named, and there are two navigation
-rungs (the DevTools protocol, then a relaunch), not three. See
+actually built: the player is mpv, directly on DRM/KMS. See
 `docs/ARCHITECTURE.md` section 7 and `CONTEXT.md` section 3.
 
 ## Boot and display
@@ -21,10 +19,21 @@ rungs (the DevTools protocol, then a relaunch), not three. See
 - [ ] Boot and play on one UEFI PC.
 - [ ] Rotation 90 works on a Raspberry Pi and on an x86 machine.
 - [ ] 4K output works where the display and the hardware allow it.
+- [ ] The text console never shows: not at boot, not between two items, not
+      when the player restarts, and not when the screen comes on. Test on a
+      Raspberry Pi and on an x86 machine. Stop mpv by hand and watch the
+      screen. The kernel command line has `quiet`,
+      `vt.global_cursor_default=0`, `consoleblank=0` and `logo.nologo`, and the
+      init script clears tty1.
 
 ## Audio and network
 
 - [ ] HDMI audio works on a Raspberry Pi and on an x86 machine.
+- [ ] The 3.5 mm jack plays sound on a Raspberry Pi 3 and a Pi 4 with
+      `audio.output = "analog"`. The line `dtparam=audio=on` in
+      `os/rpi/config.txt` stands above the first `dtoverlay` line. Before the
+      fix, the line went to the `vc4-kms-v3d` overlay and never reached the
+      jack.
 - [ ] WiFi connects from the values in `portapixel.toml`.
 - [ ] A static address, set in `portapixel.toml`, works.
 
@@ -34,12 +43,61 @@ rungs (the DevTools protocol, then a relaunch), not three. See
       the first boot, each for its full length.
 - [ ] The maintainer confirmed that the terms of the demo videos permit us to
       give them to other persons in the image. See `LICENSES-THIRD-PARTY.md`.
-- [ ] A mixed playlist with an image, a video and a web page item plays, with
-      every transition tried at least once.
-- [ ] A web page item on a slow site shows an acceptable gap and always
-      recovers.
-- [ ] Single-URL kiosk mode with `refresh_seconds` runs for 24 hours with no
-      manual step.
+- [ ] A mixed playlist with images and videos plays. Try each of the 22
+      transitions at least once. Set it as the default, as the transition of a
+      playlist and as the transition of one item.
+- [ ] A playlist of one image stays on the screen. A playlist of one video
+      plays again and again with no gap.
+- [ ] An item that the player cannot play is skipped, the ops log names it, and
+      the rest of the playlist goes on.
+
+## The player on real hardware
+
+Everything in this section is untested outside the lab. The lab has a virtual
+machine with the limits of a Pi Zero 2 W. It has no VideoCore GPU and no
+hardware video decoder.
+
+- [ ] H.264 decodes in hardware (`v4l2m2m-copy`) on a Raspberry Pi Zero 2 W,
+      Pi 3 and Pi 4. `hwdec` in `/api/status` is not `no`. In a 10 minute run
+      of the demo videos, `dropped_frames` is 0 or near 0. The CPU load is
+      much lower than with software decode.
+- [ ] The module `bcm2835-codec` loads by itself on a Pi Zero 2 W, Pi 3 and
+      Pi 4. udev loads it by its modalias.
+- [ ] The decoder takes its buffers from the CMA area. The daemon asks for 8
+      capture buffers (`DecoderOptions` in `command.go`) instead of the default
+      20. A 1080p video does not stall on a 512 MB Pi. If a Pi stalls in
+      decode, raise the count.
+- [ ] The CMA area of 128 MB (`dtparam=cma-128` for the Zero 2 W and the Pi 3
+      A+) is large enough. Read `CmaTotal` and `CmaFree` in `/proc/meminfo`
+      during a 1080p video and during a transition. A Pi 4 keeps 508 MB and a
+      Pi 5 keeps 64 MB, the defaults of their overlays.
+- [ ] HEVC video decodes in software on a Pi 4 and a Pi 5. Note the CPU load
+      and the dropped frames, so that the docs can say what a Pi can play.
+- [ ] A Pi 5 plays H.264 video in software with no stall.
+- [ ] `display.video_output = "auto"` takes `gpu` on a Raspberry Pi (vc4 or v3d)
+      and on a PC with an Intel or AMD GPU. It takes `drm` on a virtual machine.
+- [ ] mpv runs as the `kiosk` account on every board. It opens `/dev/dri/card*`
+      and `/dev/snd` and becomes the DRM master.
+- [ ] LuaJIT works in the mpv of the aarch64 image. A `fade` shows, and the ops
+      log holds no `player.transition.fault`.
+- [ ] All 22 transitions look right on a vc4 and a v3d GPU with the `gpu` video
+      output: no black frame, no wrong colours, no early frame of the next
+      item. Note the number of steps of a 1080p transition on a Pi Zero 2 W.
+      The lab numbers come from software rendering and do not apply.
+- [ ] The copy of the screen (`screenshot-raw window`) and the texture upload of
+      a transition step are fast enough on vc4. If a step takes more than
+      about 50 ms, use a shorter transition or a 720p mode.
+- [ ] Ken Burns is smooth on vc4 and v3d, and the picture shows no jump at the
+      end of an image. It stays off with the `drm` output, and the ops log
+      says `player.kenburns.off`.
+- [ ] The moving crossfade works on a Pi 5 and on an x86 machine with VA-API:
+      both items move and `player.motion.off` does not appear. On a Pi 4 with
+      `playback.motion = "on"`, note the dropped frames.
+- [ ] MemAvailable stays above about 100 MB on a 512 MB Pi in a 10 minute run
+      with a crossfade. Nothing is killed for lack of memory. This is the new
+      measurement that the README asks for.
+- [ ] A 4K screen on a Pi 4, a Pi 5 and an x86 machine shows a transition
+      without a long stall. A copy of the screen is 33 MB at 4K.
 
 ## Power cuts and reliability
 
@@ -58,7 +116,9 @@ rungs (the DevTools protocol, then a relaunch), not three. See
 ## Screen power
 
 - [ ] CEC turns a real television on and off, and follows a schedule.
-- [ ] DPMS turns a real monitor on and off.
+- [ ] DPMS turns a real monitor on and off. The player stops first, the
+      picture goes away, and the display comes on again at the on time with
+      the picture of the playlist. No manual step is necessary.
 
 ## Fleet
 
@@ -97,18 +157,12 @@ release ready until each line above that depends on one of these has passed
 on real hardware.
 
 - [ ] Real GPU drivers under load, on each supported board.
-- [ ] VA-API hardware video decode on x86_64. Chromium 149 names the feature
-      `AcceleratedVideoDecodeLinuxGL` (also `AcceleratedVideoDecodeLinuxZeroCopyGL`).
-      The name `VaapiVideoDecodeLinuxGL` is not in the binary. Test with
-      `--enable-features=AcceleratedVideoDecodeLinuxGL` and, when the GPU is on the
-      block list, `--ignore-gpu-blocklist`. In QEMU the browser log shows
-      `vaInitialize failed`; on real hardware that line must be absent.
-- [ ] V4L2 hardware video decode on a Raspberry Pi. The feature is `V4L2VideoDecoder`.
-- [ ] `--enable-gpu-rasterization` on a real GPU. QEMU cannot show it.
-- [ ] `--enable-low-end-device-mode` on a 1 GB device. In QEMU it saved 6.5 MB and
-      cost 0.2 points of CPU. Decide with a measurement on the real machine.
-- [ ] CEC, on a real television, in a real `cage` session.
-- [ ] DPMS, on a real monitor, in a real `cage` session.
+- [ ] VA-API hardware video decode on x86_64. `hwdec` in `/api/status` shows a
+      VA-API decoder and not `no`. In QEMU the player log shows `libva ... init
+      failed` for the decoder probe; on real hardware that line must be absent.
+- [ ] CEC, on a real television. The player stops, the television goes to
+      standby, and the picture comes back at the on time.
+- [ ] DPMS, on a real monitor, with the DRM calls of the daemon.
 - [ ] A display with a misleading EDID, and the `video_mode` override that
       corrects it.
 - [ ] HDMI audio output, end to end, on both architectures.
@@ -123,9 +177,8 @@ on real hardware.
 - [ ] The media partition growth step, on a real SD card, eMMC module, and
       USB stick, not only in a virtual disk.
 - [ ] Rotation, on real GPU drivers rather than the virtual GPU that CI uses.
+      Test the images, the videos, a transition and the fallback screen.
 - [ ] `install-to-disk` onto a real SATA disk and a real eMMC module.
-- [ ] The Chromium start-up network connections, measured against a real
-      firewall rather than a packet capture in a test network.
 
 ### The commands of `install-to-disk` that no test has ever run
 
@@ -155,9 +208,9 @@ on the first real run, in this order (`internal/device/installer/install.go`):
 
 ## The 30-day soak gate
 
-Before a 1.0 release, run two devices, one Raspberry Pi Zero 2 W and one
-x86_64 machine, on a mixed playlist that includes web page items, for 30
-days with no manual intervention.
+Before a 1.0 release, run two devices for 30 days with no manual
+intervention: one Raspberry Pi Zero 2 W and one x86_64 machine. Give them a
+mixed playlist with images, videos and several transitions.
 
 Pass criteria:
 

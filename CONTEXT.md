@@ -27,6 +27,7 @@ something that cost you time. Remove an entry when it is no longer true.
 | v0.2 the appliance | Built and reviewed. CEC, DPMS and install-to-disk have no hardware check yet. |
 | v0.3 the fleet | Built and reviewed. Proven with two machines in the lab (`tests/qemu/lab`). |
 | v1.0 hardening | Reviews done. The release pipeline is proven to a draft release. Open: the release key, the 30 day soak, the hardware checklist. |
+| Change to mpv (2026-10-08) | Done on main: the content model, the mpv player, the OS image and CI, and the docs. Proven in QEMU and in the pp-zero lab VM. No real hardware check yet. See the decision record in section 3. |
 
 The aarch64 image builds in GitHub Actions (the test container has no qemu-user binfmt),
 and CI reads the boot files inside it. No Raspberry Pi has started this image.
@@ -35,105 +36,92 @@ and CI reads the boot files inside it. No Raspberry Pi has started this image.
 
 | Plan | What we did | Why |
 |---|---|---|
-| D3, D4, D5: WPE WebKit + cog on DRM/KMS, no compositor, three navigation rungs | Chromium in kiosk mode inside `cage`. Two navigation rungs: CDP, then relaunch. The `--autoplay-policy=no-user-gesture-required` flag is now REQUIRED. `seatd` and `wlr-randr` are in the image. | Alpine removed `cog`, `wpewebkit` and `wpebackend-fdo` after 3.21 (checked with `apk` against 3.22, 3.23 and edge on 2026-09-18). The maintainer chose Chromium + cage on 2026-09-18. `cage` shows one fullscreen window. It is not a desktop. Weston, sway and labwc stay out of scope. |
-| Section 7: GStreamer packages | Not installed. | Chromium has its own media stack. |
-| D39: browser tmpfs about 96 MB | About 256 MB. | A Chromium profile is larger than a WebKit one. |
+| D3, D4, D5: a browser on DRM/KMS as the player, with three navigation rungs | mpv directly on DRM/KMS, with no compositor and no browser. `portapixeld` controls it over JSON IPC. | See the decision record below. |
+| Section 7: GStreamer packages | Not installed. | mpv decodes with FFmpeg. |
 | D6, D7: vendored Bootstrap for the two admin UIs | One hand-written stylesheet, `web/shared/pp.css`. No Bootstrap. | The wireframes give a full custom design (IBM Plex, moss green, `oklch` colours). Bootstrap below it would be more code, not less. Open decision for the maintainer. |
 | Fonts from Google Fonts (wireframes) | IBM Plex Sans and Mono as local `woff2` files in `web/shared/fonts/` | A device on a closed network cannot get remote fonts. The licence is OFL. |
 | D52: a sideload bundle names its version | The version comes from the staged binary, after the signature check. | The release assets are `portapixeld-<arch>`, `<name>.minisig` and `SHA256SUMS`. Not one of the three names holds a version, and a person who downloads them from GitHub has three loose files. Running a binary that minisign already proved is safe; a naming rule would be one more thing to get wrong. |
-| D37: a CC0 image set, 1920x1080 | Seven H.264 720p demo videos, 59 MB in total, in `os/default-media/`. Five come from Mixkit (Mixkit Stock Video Free License). Two have no recorded source. | The maintainer supplied them on 2026-09-22. They are not CC0. The maintainer must confirm that the terms permit them in a public image. |
+| D37: a CC0 image set, 1920x1080 | Seven H.264 720p demo videos, 59 MB in total, in `os/default-media/`. Five come from Mixkit (Mixkit Stock Video Free License). Two have no recorded source. | The maintainer supplied them on 2026-09-22. They are not CC0. The owner decided on 2026-10-09 to keep all seven. The maintainer must confirm the source of the last two. |
 | Plan section 15: stage in `releases/<ver>.staging` | A download does. A sideload stages in `releases/.sideload.staging`. | A sideload does not know the version until the binary is verified (the row above). |
+
+### Decision record: the display stack is mpv on DRM/KMS (2026-10-08)
+
+The plan (D3 to D5) had a browser as the player. The first build used Chromium
+inside a `cage` session. On 2026-10-08 the owner chose mpv on DRM/KMS.
+`portapixeld` controls it over JSON IPC. There is no compositor and no browser.
+
+Why. A lab spike measured mpv on pp-zero, a virtual machine with the limits of
+a Raspberry Pi Zero 2 W: 512 MB, the speed of an SD card, and a CPU duty cycle.
+It played the seven demo videos. The Chromium values come from earlier logs of
+the same machine. The spike did not run them again.
+
+| With the CPU limit | Chromium and cage | mpv `drm` | mpv `gpu` |
+|---|---|---|---|
+| Memory (RSS) | 430 to 475 MB | 87 to 136 MB | 108 to 215 MB |
+| Swap in use | 167 to 178 MB | 23 to 31 MB | 23 to 62 MB |
+| CPU on video, of one core | 281 to 299 % | 135 to 150 % | about 300 % |
+| Dropped frames | about 28 % | 0 % | 40 to 65 % |
+
+The `gpu` output ran on llvmpipe, which is software. It was not good on the
+proxy, and this is why `video_output` has `drm`. Without the limit, mpv `drm`
+used about 26 % of a core on video and dropped no frame. The picture came
+0.05 s after a load, the gap between two items was 0.03 to 0.07 s, and no black
+frame showed. The image shrank: PPROOT 1062 MB against 1558 MB, `.img.gz`
+1035 MiB against 1297 MiB, and 282 packages against 334.
+
+The cost. There are no web page items and no kiosk mode (D42). A Lua script in
+mpv does the transitions. Go draws the fallback screen as a PNG. DPMS through
+DRM switches the screen off.
+
+The limit of the evidence. The spike had no VideoCore GPU and no hardware
+decoder, so the absolute CPU and drop values do not transfer to a Pi. The
+Chromium numbers of the old 512 MB tests no longer apply. A 512 MB Pi needs a
+new measurement (`docs/release-checklist.md`).
 
 ## 4. M0 results
 
-Proven on 2026-09-19 with a real image in QEMU (KVM, virtio-gpu, llvmpipe). Each line was
-checked with a screenshot of the virtual display or with the ops log.
+Proven in QEMU (KVM, virtio-gpu, llvmpipe) with a real image on 2026-09-19, and again with
+the mpv image on 2026-10-08. Each line was checked with a screenshot of the virtual display
+or with the ops log.
 
-- The image boots with SeaBIOS and with OVMF. Chromium draws the player in `cage`.
-  `browser_state` is `running` 22 s after power on (BIOS, 2 GB) and 38 s (UEFI, 1 GB).
-- Rung 1 (CDP) works. A URL item goes to the page, stays for the dwell time and comes
-  back to the player at the next item. No relaunch occurs.
-- Rotation 90 and 270 through `wlr-randr` work. All content turns.
-- A killed browser is back in 1 s. A stopped browser (`kill -STOP`) is restarted after
-  31 s with no heartbeat. The nightly restart waits for an item boundary.
+- The image boots with SeaBIOS and with OVMF. The boot test
+  (`tests/qemu/boot-smoke.sh`) waits for `player_state` `running` and a
+  `now_playing` item, and it reads the owner of the mpv process. Result with the
+  0.5.0-lab5 image on 2026-10-08: PASS in 68 s (SeaBIOS) and 69 s (OVMF). mpv
+  runs as `kiosk` and plays `01-meadow.mp4`.
+- mpv runs as the unprivileged `kiosk` account, in the groups `video` and
+  `audio`. The first process that opens `/dev/dri/card*` becomes the DRM master,
+  also without root. Proven on pp-zero on 2026-10-08, with vo=drm and with
+  vo=gpu.
+- Screen off works in QEMU (pp-zero, virtio-gpu, mpv 0.40, 2026-10-08). Stop
+  mpv, set DPMS off, and the VNC picture shows "Display output is not active"
+  for the whole hold. DPMS on and a new mpv bring the picture back. Both
+  outputs, vo=drm and vo=gpu.
+- Rotation 90 turns the video and each transition (`--video-rotate`). Checked
+  on pp-zero with a 1280x800 mode and 1280x720 media. The picture keeps its
+  black bars.
 - First boot runs one time. After a reboot the picture comes back.
-- The Chromium sandbox is complete. There is no `--no-sandbox` and no
-  `--disable-gpu-sandbox`. The user namespace sandbox works for the `kiosk` user.
-- No GPU flag is necessary. The default path draws correctly on virtio-gpu.
-- RAM: about 340 MB of anonymous memory plus 130 MB of tmpfs. 2 GB and 1 GB are good.
-  512 MB with no swap FAILS (Chromium error code 4, restart loop). 512 MB with 512 MB of
-  zram works, but 189 MB is in swap for the fallback screen alone. Do not promise the
-  Pi Zero 2 W.
-- Do not put `WAYLAND_DISPLAY` in the environment of `cage`. wlroots then selects its
-  nested backend, finds no parent compositor and stops. The screen stays black. Only an
-  outside client, `wlr-randr`, needs the variable.
-- Chromium 149 refuses a DevTools WebSocket (403) when the request has an `Origin` that
-  `--remote-allow-origins` does not name. `golang.org/x/net/websocket` always sends an
-  `Origin`. The flag names the loopback DevTools endpoint only, never `*`.
-- `cage` 0.2.1 does not read `XCURSOR_THEME`. It gives wlroots no theme name, and wlroots
-  then asks for the theme `default`. With no such theme, wlroots draws its own arrow in
-  the middle of the screen. The image has a transparent theme, `portapixel-blank`, and
-  `/usr/share/icons/default/index.theme` inherits it. Chromium does read the `XCURSOR_*`
-  variables for the pointer in a page, so they stay.
-- The cursor files are copies, not links. A checkout on Windows changes a link into a
-  text file.
-- Chromium 149 calls Google at start unless flags stop it. Measured with a QEMU packet
-  dump: `OptimizationHints` stops the optimization guide calls,
-  `NetworkTimeServiceQuerying` stops `clients2.google.com`, and only the three `--gcm-*`
-  endpoint flags stop Google Cloud Messaging. `--disable-background-networking` and
-  `--disable-sync` do not stop it. With the flags, an idle screen makes no DNS request
-  in 185 s. Two TLS connections stay, to `www.google.com` and `accounts.google.com`,
-  one time at each browser start. No flag stops them. Use a firewall if that matters.
-- `--disable-client-side-phishing-detection` does not exist in Chromium 149. Nor do
-  `--disable-pdf-extension` and `--enable-oop-rasterization`. Chromium ignores a switch
-  that it does not know, with no message. Check a new switch against the binary with
-  `strings -a /usr/lib/chromium/chrome | grep -x -- '--name'` before you add it.
-- Chromium 149 keeps the page of a URL item in memory after the daemon goes back to the
-  player. Three URL items made three more renderer processes and about 380 MB more
-  RSS, and it never came back. The name `BackForwardCache` in `--disable-features`
-  stops it: the process count does not grow and the renderer goes back to 109 MB
-  after each item. The count at rest depends on the RAM: 8 at 1 GB, 9 at 2 GB, because
-  Chromium keeps a spare renderer when it has room. Judge the fix by growth, not by
-  the number. Measured in QEMU on 2026-09-22 (BIOS, 1 GB, 2 CPUs). A 30 minute soak
-  with a URL item in each loop showed no growth. On a slide-only playlist the flag
-  shows nothing, so measure with URL items.
-- Flags measured on 2026-09-22 and refused. The noise of the measurement is 5 MB of
-  PSS and 0.2 points of CPU, from three baseline runs. Inside the noise:
-  `--renderer-process-limit=1`, `--disable-extensions`, `--disk-cache-size`,
-  `--disable-gpu-shader-disk-cache`, `--num-raster-threads=1` (Chromium already sets
-  it on 2 CPUs), `--force-device-scale-factor=1` and the group `--disable-notifications
-  --disable-speech-api --disable-print-preview --no-pings --disable-hang-monitor
-  --disable-prompt-on-repost`. `--enable-low-end-device-mode` saved 6.5 MB and cost
-  0.2 points of CPU: a hardware checklist item.
-- `--disable-dev-shm-usage` BREAKS the picture. It moves the shared memory of Chromium
-  from `/dev/shm` (483 MB) to `/tmp` (64 MB). The renderer dies again and again. Both
-  paths are RAM, so the flag saves nothing.
-- `--js-flags=--expose-gc` with a `window.gc()` call at each item COSTS memory: 589 MB
-  against 553 MB of PSS, a 211 MB against a 177 MB renderer, and 0.4 points more CPU.
-- `--js-flags=--max-old-space-size=256` makes a runaway page worse. V8 stops the
-  renderer in the middle of the item, CDP stops, the watchdog restarts the browser, and
-  four restarts started the reboot ladder. With no cap the dwell timer ends the item,
-  the memory goes back and the slides come back each time.
-- `boot-dev.sh shot` cannot show a URL item: the screendump gives the last player frame
-  for the whole dwell. Prove the page with the CDP target list, the ops log and the
-  CPU of the gpu process.
 - A DNS name in a packet dump is in label form. `strings | grep` does not find it. Parse
   the DNS questions.
-- The browser output is in `/var/cache/kiosk/browser.log` (tmpfs, 1 MiB limit). Read it
-  first when the screen is black.
-- The daemon makes `HOME` for the kiosk user in the tmpfs. The init script must create
-  it. Chromium writes its crash reports there.
-- A status API that answers does not prove a picture. `player.js` once had a syntax
-  error: the screen was black and the status looked good. Use
-  `tests/qemu/boot-dev.sh shot` to see the screen. Check each player module with
-  `node --check` on a copy with the `.mjs` extension.
-- Not proven without real hardware: real GPU drivers, VA-API decode, CEC, DPMS, EDID and
-  `video_mode`, HDMI audio, WiFi, the aarch64 image, and the PPMEDIA grow on a real card.
-- Alpine 3.23 has no `cog` and no `wpewebkit`. The last branch with them is 3.21
-  (WPE WebKit 2.40.5, from 2023). This is risk 1 of the plan's risk register. See
-  section 3 for the decision.
-- Alpine 3.23 has `chromium` 149, `cage` 0.2.1, `seatd` and `wlr-randr` for x86_64 and
-  aarch64.
+- The output of mpv is in `/run/portapixel/player.log` (tmpfs, 1 MiB limit, new
+  at each start of the player). Read it first when the screen is black.
+- The `HOME` of mpv is `/run/portapixel/player` (`kiosk`, 0700). The daemon
+  makes it at each start. A shader cache would fill this small tmpfs, so mpv runs
+  with `--gpu-shader-cache=no` and `MESA_SHADER_CACHE_DISABLE=true`.
+- A status API that answers does not prove a picture. Use
+  `tests/qemu/boot-dev.sh shot` to see the screen. `tests/ci/js-check.sh` checks
+  each admin UI module.
+- Not proven without real hardware:
+  - real GPU drivers
+  - the Raspberry Pi video decoder (`v4l2m2m-copy`) and the CMA sizes
+  - transitions and Ken Burns on vc4 and v3d
+  - VA-API decode, CEC, DPMS, EDID and `video_mode`
+  - HDMI audio and the 3.5 mm jack
+  - WiFi, the aarch64 image, and the PPMEDIA grow on a real card
+
+  `docs/release-checklist.md` lists each one.
+- Alpine 3.23 has `mpv` 0.40.0 for x86_64 and aarch64. It brings FFmpeg,
+  libplacebo, libass and LuaJIT as dependencies.
 - `swclock` is part of the `openrc` package. `cec-ctl` is in `v4l-utils`. `sgdisk` is its
   own package. `intel-ucode`, `amd-ucode`, `syslinux`, `intel-media-driver` and
   `libva-intel-driver` are x86_64 only.
@@ -141,8 +129,8 @@ checked with a screenshot of the virtual display or with the ops log.
   `-p`. For another architecture, apk needs the keys from `/usr/share/apk/keys/<arch>/`.
   The x86_64 keys refuse the aarch64 index as UNTRUSTED.
 - Alpine 3.23 puts each OpenRC script in a `-openrc` subpackage, for example
-  `openssh-server-common-openrc`, `busybox-openrc`, `chrony-openrc`, `seatd-openrc`.
-  Without it, `rc-update add` fails.
+  `openssh-server-common-openrc`, `busybox-openrc`, `chrony-openrc`,
+  `acpid-openrc`. Without it, `rc-update add` fails.
 - Firmware names: iwlwifi is in `linux-firmware-intel`. nouveau uses
   `linux-firmware-nvidia`. mt76 is in `linux-firmware-mediatek`. PCIe ath9k needs no
   firmware. `partx` is its own package. `partprobe` is in `parted`.
@@ -159,8 +147,8 @@ checked with a screenshot of the virtual display or with the ops log.
 - A size test must be good on the second boot. After a cut, the kernel already has the new
   partition size. Compare with the size in the GPT, not with the old size.
 - OpenRC does not run `start_post` when the start fails. Arm a gate in `start_pre`.
-- `supervise-daemon` sends KILL after about 5 s unless `retry` is set. The daemon needs
-  more time to stop the browser: `retry="TERM/25/KILL/5"`.
+- `supervise-daemon` sends KILL after about 5 s unless `retry` is set. The daemon
+  needs more time to stop the player: `retry="TERM/25/KILL/5"`.
 - The `acpid` package arrives as a dependency, but its service is not enabled.
 - The initramfs of Alpine 3.23 is gzip. A kernel module file is `.ko.gz` and its name has
   hyphens: `xhci-pci.ko`, not `xhci_pci`.
@@ -178,44 +166,50 @@ checked with a screenshot of the virtual display or with the ops log.
 - busybox `blkid` takes no options. Use `findfs LABEL=...` in shell scripts.
 - Name the clock service for each architecture: `hwclock` on x86_64, `swclock` on
   aarch64. The two provide `clock`. If it is implicit, OpenRC makes the choice.
-- `install.sh` makes the `seat` group. The post-install script of `seatd` cannot run for
-  another architecture.
 - With UEFI, the firmware framebuffer takes `/dev/dri/card0` and the GPU is `card1`. Do
   not write `card0` into code.
 - QEMU needs the package `qemu-hw-display-virtio-vga` to give the guest a DRM device.
-- The x86_64 root filesystem is 1062 MB with mpv and the seven demo videos, 29 % of
-  the 3.5 GB PPROOT, in 282 packages (lab5 build, 3c0744b). The `.img.gz` is
-  1035 MiB. With Chromium it was 1558 MB, 334 packages and 1297 MiB (lab4).
+- The x86_64 root filesystem is 1062 MB with mpv and the seven demo videos. That
+  is 29 % of the 3.5 GB PPROOT, in 282 packages (lab5 build, 3c0744b). The
+  `.img.gz` is 1035 MiB.
 - The aarch64 build needs qemu-user binfmt on the build host (plan section 17). Without
   it the apk triggers fail with `Exec format error`. GitHub Actions has it. The test
   container does not.
 - A container has no loop devices. `tests/qemu/builder-vm.sh` builds an image in a KVM
   guest.
-- The Pi Zero 2 W (512 MB) is now marginal, because Chromium uses more RAM than WPE.
-  Test it on real hardware before we promise it.
+- Test the Pi Zero 2 W (512 MB) on real hardware before we promise it. The pp-zero
+  lab VM is a proxy and not a Pi. It has no VideoCore GPU, no hardware decode and
+  no ARM code. Its `gpu` output runs on llvmpipe and says little about a Pi.
 
 ## 5. Lessons
 
 - The daemon does not serve `*.toml` files or `_update/` from `/media/`. The first live
   run showed that `/media/portapixel.toml` gave the admin password and the WiFi key to
-  the LAN. `/media/` has no session check, because the player has no session.
-- `--browser-cmd none` sets the browser off (`browser_state: "disabled"`). Use it for
+  the LAN. `/media/` has no session check.
+- `--player-cmd none` sets the player off (`player_state: "disabled"`). Use it for
   development on a desktop. The health marker treats it as healthy.
-- The daemon picks the navigation rung one time, at the first browser start. A probe at
-  each restart would cost 45 s each time.
 - The reboot ladder counts crashes and watchdog restarts only. A restart from a person,
   from a settings change or from the nightly job does not count.
-- The frame counter starts at 0 on each new page. A lower value is a reset. The same
-  value in three heartbeats is a stall (D45).
+- Rule: the watchdog measures each duration with the monotonic clock
+  (`time.Now()`), never with the wall clock. A device with no RTC gets a step of
+  its wall clock at the first sync of chrony. The step is hours or days, and mpv
+  already runs then. The first version used `time.Now().In(zone)`. `In` removes
+  the monotonic reading. An image on the screen then looked hours old, and the
+  watchdog restarted mpv and counted the restart. This happened on most cold
+  boots (ab9b606). `Options.Local` gives a time of day in the zone of the device.
+  Use it for the nightly restart and the clock of the fallback screen only.
 - The device ID falls back to a hash of the host name when there is no Pi serial, no DMI
   UUID and no physical NIC. Only a development machine gets there.
 - A day that is not in `power_days` has no on-period. The screen stays off that day.
 - A `playlist.toml` with no items is not a fault. The editor makes one before the first
   item.
-- Rule: the screen-off order is the display first and the browser second. The DPMS path
-  is `wlr-randr` inside the cage session, so a browser that stopped first takes the
-  compositor with it and the display stays on all night. `internal/device/power` owns
-  both steps for that one reason.
+- Rule: the screen-off order is: stop the player, then switch the display off
+  with DPMS. The screen-on order is the reverse. The player is the DRM master
+  while it runs, and only the master may set the DPMS property.
+  `internal/device/power` owns both steps for that one reason. The hold of the
+  DRM device is the off state: the kernel puts the display on again when the last
+  handle closes. The screen-on step must end the hold for every power method
+  (0de6a4f), or the player cannot start its display.
 - A manual `screen-on` or `screen-off` holds until the screen schedule crosses an EDGE.
   A hold that ended at the next tick made the button useless.
 - Rule: a `[[schedule]]` rule has both times or neither. Both empty is the whole day,
@@ -223,9 +217,6 @@ checked with a screenshot of the virtual display or with the ops log.
   nothing at all and the person saw the default playlist with no word about why.
 - `status.warnings` is a list of `{code, message}`. The UI matches the code. It matched
   the first words of the message before, and one better sentence broke a banner.
-- The player probes MediaCapabilities one time and sends the answer with its FIRST
-  heartbeat. The daemon caches it in `status.codecs`, so the admin UI warns about the
-  screen and not about the laptop of the person who looks at it (D12).
 - `POST /api/rescan` also looks for a release bundle in `_update/`. The daemon owns that
   rule, so `httpd` calls `Deps.Rescan` and not `Library.Rescan`.
 - The install progress hub replays its last event. The admin UI opens the stream after
@@ -261,13 +252,12 @@ checked with a screenshot of the virtual display or with the ops log.
   `/lib/modules`. The first `@image` tag also took the GPU, WiFi and network firmware
   from an on-box install. `@image` is only for a package that installs a kernel or
   writes the boot chain. QEMU needs no firmware, so CI cannot see this fault.
-- Rule: a file that a user supplies is never active content. An SVG can hold a script.
-  `/media/` has no session and has the same origin as the admin UI. A correct media type
-  for `.svg` made a sideloaded SVG able to run a script with the session of the admin.
-  Each answer with a user file has `Content-Security-Policy: sandbox` and `nosniff`. An
-  SVG in an `<img>` element still shows, because that policy does not apply to an image
-  load. The old `text/plain` answer was safe only by accident. When you correct a type,
-  ask what the wrong type protected.
+- Rule: a file that a user supplies is never active content. `/media/` has no
+  session and has the same origin as the admin UI. Each answer with a user file
+  has `Content-Security-Policy: sandbox` and `nosniff`. SVG is not a media kind
+  now, and `/media/` answers 404 for it. A correct media type for a script
+  carrier once made a sideloaded SVG able to run a script with the session of
+  the admin. When you correct a type, ask what the wrong type protected.
 - `os.ModeDevice` is also set for a character device. A block device has `ModeDevice`
   set and `ModeCharDevice` clear. Without the second test, `/dev/null` is a good target.
 - `/api/status` needs no session, so each field on it is public. The first version told
@@ -284,13 +274,6 @@ checked with a screenshot of the virtual display or with the ops log.
 - A guard that protects two fields must not refuse the one route that owns them. The
   lock on `server.url` refused the write of the pairing that succeeded, and the UI
   showed a fault for a pairing that worked.
-- The rung 1 "control session dead" check runs only in a URL window or a kiosk page. A
-  dead CDP socket under a live player page is found by the heartbeat rule, not by CDP.
-- Any local process can drive the CDP port 9222. A page cannot: the
-  `--remote-allow-origins` flag names the loopback endpoint only. The player secret
-  never reaches a URL item page: `Page.navigate` sends no referrer, the page has
-  `Referrer-Policy: no-referrer`, and a `?k=` GET from another origin executes but is
-  not readable.
 - An image build needs about 7 GB of free disk on the test box, and each earlier worker
   left its 4 GB raw images under `/root/ppwork`. Remove the raw images of a session
   when it ends. The `.img.gz` is sufficient: `gunzip` gives the raw image again.
@@ -299,7 +282,10 @@ checked with a screenshot of the virtual display or with the ops log.
   does not run them. HEAD clears the list at each new pairing (a80fa15). The lab client
   of build 0.3.0-lab1 showed the fault.
 - On the test container, `free -m` reports the RAM of the Proxmox host (64 GB). The
-  real limit is in `/proc/meminfo` (4 GB). `builder-vm.sh` reads the second.
+  real limit is in `/proc/meminfo` (4 GB). `builder-vm.sh` reads the second and
+  refuses to start a builder VM that is larger than `MemAvailable`. The builder
+  takes 3072 MB by default and keeps its root in a tmpfs of half that size. Stop
+  the lab VMs first, or lower `--mem`.
 - A job that PUBLISHES must wait for every gate. A job that only tests must not. The
   first pipeline pushed the container image before the boot test ran, and a push cannot
   be undone. `server-image` and `release` now need each gate.
@@ -315,10 +301,9 @@ checked with a screenshot of the virtual display or with the ops log.
 - A `const` that a page reads above its own line gives a blank page and an error in
   the console only. Drive each page in a browser after a change. No test found the
   blank Activity page.
-- A device with no network reaches its picture in 16.6 s, the same as a device with a
-  network. A cable in a dead network costs 10 s more: one bounded DHCP attempt. A move
-  of `networking` out of the boot runlevel would not help: `portapixeld` has `use net`
-  and `rc_parallel` is off.
+- A cable in a dead network costs 10 s more at boot: one bounded DHCP attempt. A
+  move of `networking` out of the boot runlevel would not help: `portapixeld` has
+  `use net` and `rc_parallel` is off.
 - The release also ships `portapixel-os-<version>.tar.gz`: `install.sh` needs
   `packages.list`, `packages-read.awk` and `overlay/`, so `install.sh` alone is not an
   install path.
@@ -332,11 +317,12 @@ checked with a screenshot of the virtual display or with the ops log.
 - The first run on Linux found five tests that pass on Windows only. Run the tests on
   Linux before you trust them: `go test` on the Alpine test container works, also with
   `-race` after `apk add build-base`.
-- Alpine and a distroless container have no `/etc/mime.types`. `mime.TypeByExtension`
-  then knows almost no extension, and Go cannot identify SVG, AVIF or Matroska from the
-  first bytes. Windows reads the registry and Ubuntu has mailcap, so the two hide it.
-  `internal/playlist` has the one table. Call `playlist.MediaType` directly: a fix that
-  depends on the `init` of an imported package fails when an import goes away.
+- Alpine and a distroless container have no `/etc/mime.types`.
+  `mime.TypeByExtension` then knows almost no extension, and Go cannot identify
+  AVIF or Matroska from the first bytes. Windows reads the registry and Ubuntu
+  has mailcap, so the two hide it. `internal/playlist` has the one table. Call
+  `playlist.MediaType` directly: a fix that depends on the `init` of an imported
+  package fails when an import goes away.
 - A `--root` rule must not run in the on-box mode. The installer counted the kernels of
   the host. The `@image` tag marks the packages that only an image gets.
 - BuildKit ignores `ARG TARGETARCH` unless the stage starts with
@@ -405,8 +391,8 @@ checked with a screenshot of the virtual display or with the ops log.
   file can stay, and a denylist on `.toml` does not catch it.
 - `config.Load` never returns an error. It always gives a config that works (D38). The
   caller reads `FromShadow`, `FromDefault` and `Warning`.
-- `config.ChangeClass` has three classes: `live`, `browser` (restart the browser) and
-  `reboot`. The reasons are in `internal/config/change.go`.
+- `config.ChangeClass` has three classes: `live`, `player` (restart the player)
+  and `reboot`. The reasons are in `internal/config/change.go`.
 - The rendered TOML comments are in Simplified Technical English. They are not a copy of
   plan section 11.1. Each key and default of 11.1 is there.
 - `version.PublicKey` is empty until release 1. `sigverify` refuses an empty key, so a
@@ -434,8 +420,6 @@ checked with a screenshot of the virtual display or with the ops log.
   with a script, then search the diff for U+200B to U+206F and U+FEFF.
 - The Bash tool makes `\` into `\`. Write code that holds backslashes with Edit or
   Write.
-- `--browser-cmd` gives the browser no environment, and the browser runs in the
-  working directory of the daemon.
 - Before a push, run `go vet ./...` at EACH new commit, not only at HEAD. 37930f6
   passed at HEAD and failed alone.
 - `git archive HEAD os | tar -x` over an old checkout does not remove files that HEAD
@@ -443,3 +427,78 @@ checked with a screenshot of the virtual display or with the ops log.
   put the four old slides into the lab4 image. Extract into an empty directory.
 - A rename that the device refuses still shows as acked on the server. The reason is
   only in the ops log and the status warning of the device.
+
+### Lessons of the change to mpv
+
+- The reports of the conversion stages 2A to 2c are not in the repository. The
+  commit messages from `69259cc` to `d0feef1` hold their evidence: lab numbers,
+  what was seen on screen, and what was refused. Run `git log 69259cc..d0feef1`.
+  The contract is `docs/ARCHITECTURE.md`, sections 7 and 7a.
+- A transition is a cover and not a live mix. When an item ends,
+  `transitions.lua` takes `screenshot-raw window bgra`, shows it as an OSD
+  overlay, lets the next item load under it, and moves the cover away. The load
+  gap is hidden. It works with `gpu` and with `drm`, and every fault ends in a
+  cut. A live mix was refused in the lab (2026-10-08):
+  - lavfi `xfade` takes 4:4:4 frames only, so it converts each frame of the old
+    video. It needs frames in memory, so hwdec must be a `-copy` mode for the
+    whole item. A graph error makes the next item fail to load. On the Zero 2 W
+    proxy, 2 s of decode and `xfade` took 2.9 s at 720p and 5.5 s at 1080p. That
+    is not real time. The moving crossfade uses `overlay` and `fade` with alpha
+    instead, and `playback.motion` limits it to fast devices.
+  - Pre-rendered clips need one clip for each pair of items. A shuffle, a
+    schedule or a playlist change makes new pairs, and a clip takes seconds to
+    encode on a Zero.
+  - A shader sees one video only. libplacebo needs GLSL 130 (GLES 3.0), and vc4
+    on the Zero 2 W is GLES 2.0.
+  - A second mpv or a compositor does not work: there is one DRM master.
+- On vo=drm, `screenshot-raw window` scales the frame to the window and keeps
+  no aspect. It also ignores `video-zoom` and `video-pan`. The copy of a
+  transition then filled the black bars (seen in the lab), and a copy after a
+  zoom jumped. The script scales the copy back into the video rectangle of
+  `osd-dimensions` and makes the bars black. Ken Burns runs on `gpu` only for
+  the same reason. On `drm` a zoom is also a software scale of the whole picture
+  at each step. It took 131 % of a core on the Zero 2 W proxy.
+- Stacked overlays blend wrongly on vo=drm: the colours wash out and pink and
+  blue specks show. Overlays that sit side by side and do not touch are right.
+  So `fade` puts one black square in the place of the copy, and `split` uses two
+  halves that do not touch. Keep to one overlay for anything that overlaps.
+- mpv 0.40 or later is necessary. An older mpv refuses `--load-commands` and
+  `--load-positioning` and does not start. mpv also stops on an option that it
+  does not know. Test each new option of `command.go` with the mpv of the image.
+- `--hwdec=auto-safe` does not try `v4l2m2m`. It is not in the whitelist of mpv
+  (`video/decode/vd_lavc.c`), so a Pi decoded H.264 in software. `command.go`
+  gives `v4l2m2m-copy` when `/proc/device-tree/model` starts with `Raspberry Pi`.
+  The HEVC decoder of a Pi 4 and a Pi 5 needs the V4L2 request API. The FFmpeg
+  of Alpine aarch64 does not have it. So HEVC is software on every Pi.
+- `vd-lavc-o=num_capture_buffers=8` goes in the per-file options of a video.
+  Never put it on the command line. mpv gives the option to each decoder that it
+  opens, and a decoder that does not know it writes `AVOption ... not found`.
+  On the command line that line came for each image and each redraw of the
+  fallback screen. By default, the Pi H.264 decoder takes 20 buffers of about
+  3.1 MB at 1080p from the CMA area. A 512 MB Pi has 128 MB of it.
+- The kernel shows tty1 each time mpv stops, for example at a restart, until the
+  next mpv takes the display. tty1 still holds the text of the BIOS and the boot
+  loader, because vgacon copies the VGA text screen at boot. The kernel command
+  line (`quiet vt.global_cursor_default=0 consoleblank=0 logo.nologo`) hides the
+  messages, the cursor and the logo, but not this text. The init script writes
+  `ESC[H ESC[2J ESC[3J` to `/dev/tty1` in `start_pre`. It tests for the character
+  device first, because a redirect to a missing node makes a plain file in
+  `/dev`. Measured in QEMU: after a kill of mpv the screen showed the SeaBIOS and
+  SYSLINUX lines for about 1 s. With the clear, 187 screenshots in a row were
+  black.
+- When mpv ends on its own, read the connectors at once. If nothing is connected,
+  the exit is part of the wait for a display (D44) and it does not count. The
+  loop read them every 5 s before, and a television that drops its HDMI signal
+  could reboot the device (92d8046).
+- libdvdcss is in the image, and the file must stay. Alpine 3.23 builds mpv
+  0.40.0-r8 with `libdvdnav.so.4` as a needed library. `libdvdnav` needs
+  `libdvdread.so.8`, and `libdvdread` 6.1.3-r2 needs `libdvdcss.so.2` (checked with
+  `readelf -d` on the packages on 2026-10-09). The library is not loaded with
+  `dlopen`. The musl loader refuses `libdvdread` when the file is missing, so
+  mpv does not start. The device never reads a DVD:
+  the daemon gives mpv the path of a file in the media root, and the extension
+  list has no disc format. `LICENSES-THIRD-PARTY.md` names the library.
+- Git Bash rewrites an argument that starts with a slash into a Windows path.
+  It does this when the program is not a Git Bash program. `gh api /repos/...`
+  became `C:/Program Files/Git/repos/...`. Drop the first slash
+  (`gh api repos/...`) or set `MSYS_NO_PATHCONV=1`.

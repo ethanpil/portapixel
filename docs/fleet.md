@@ -54,10 +54,13 @@ A `PUT /api/config` that changes one of the five answers 403 and names every one
 of them in `fields`.
 
 **Everything else stays local to the device.** This includes rotation,
-audio, the network settings, `video_mode`, the transition and its length,
-the nightly restart time, and whether updates install automatically.
-Pushing a hardware setting to every screen in a fleet is how you brick a
-screen that nobody is standing in front of.
+audio, the network settings, `video_mode`, `video_output`, `motion`, the
+transition and its length, the nightly restart time, and whether updates
+install automatically. A hardware setting that goes to every screen of a fleet
+can brick a screen that nobody stands in front of.
+
+A playlist from the server can set its own transition, the transition of each
+item, and Ken Burns. These are content, so they come with the playlist.
 
 The device's own Playlists and Schedule pages turn read-only while it is
 paired, and say which server manages them. Unpair the device to take local
@@ -91,7 +94,7 @@ boxes then have to ask to join again, and you see which one comes back.
 
 ## Commands
 
-The server can queue a command for a screen: reboot, restart the browser,
+The server can queue a command for a screen: reboot, restart the player,
 turn the screen on, turn the screen off, or look for new files. A screen
 takes its queued commands at its next check-in.
 

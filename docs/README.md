@@ -8,8 +8,8 @@ This page is an index of the documentation. Start at the main
 - [install.md](install.md) — flash the image, set up WiFi before the first
   boot, install onto an existing Alpine host, and move a trial install onto
   an internal disk.
-- [content.md](content.md) — playlists, item types, schedules, and the two
-  ways to add media.
+- [content.md](content.md) — playlists, images and videos, the transitions,
+  Ken Burns, schedules, and the two ways to add media.
 - [settings.md](settings.md) — every key of `portapixel.toml`, its default
   value, and when a change of it takes effect.
 - [troubleshooting.md](troubleshooting.md) — symptoms, their causes, and

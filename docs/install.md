@@ -12,7 +12,7 @@ does not sign its boot loader yet, so a machine with Secure Boot on refuses
 to start it.
 
 Get a USB stick of 8 GB or more. A 4 GB stick technically works, but it
-leaves little room for media.
+leaves little room for media. The compressed x86_64 image is about 1 GiB.
 
 ## 1. Flash the image
 
@@ -94,12 +94,19 @@ still the simple path.
 
 ## 4. Find the device
 
-The screen shows the device name, its address, and a QR code. Scan the QR
-code, or type the address into a browser on the same network.
+A device that has nothing to play shows its name, its address and a QR code on
+the screen. Scan the QR code, or type the address into a browser on the same
+network.
+
+A new device plays the seven demo videos, so it does not show its address. Use
+one of these ways instead:
+
+- Open `http://portapixel.local/`. This is the default name of a device.
+- Read the address from the list of clients on your router.
 
 Every device also answers at `portapixel-<last4>.local`, where `<last4>` is
-the last four characters of the device ID shown on the screen. Use this name
-when the device has not been given its own name yet.
+the last four characters of the device ID. The address screen shows the ID.
+Use this name when the device has not been given its own name yet.
 
 ## 5. Sign in
 

@@ -16,9 +16,12 @@ PortaPixel keeps two release directories side by side, `current` and
 4. Restarts the daemon.
 
 The new daemon has two minutes to write a health marker: the web server up,
-and the browser session started. When the marker does not appear in time,
-the device flips `current` back to the previous release, restarts again, and
-marks the failed release as bad so that it is never offered again.
+and the first picture of the player on the screen. That picture is content or
+the fallback screen. A device that waits for a display also counts as up.
+
+The marker can fail to appear in time. The device then flips `current` back
+to the previous release and restarts again. It marks the failed release as bad,
+so that the device never offers it again.
 
 **No update ever half-applies.** Either the new release comes up and proves
 itself healthy, or the device is back on the release it started from.
