@@ -1,14 +1,15 @@
 #!/sbin/openrc-run
-# The PortaPixel device daemon. It serves the web UI, the player, the API, and
-# it supervises the browser (plan section 8).
+# The PortaPixel device daemon. It serves the web UI and the API, and it
+# supervises the player (plan section 8).
 
 description="PortaPixel device daemon"
-# The daemon starts the browser itself, as the kiosk user:
-#   cage -s -- chromium --kiosk --ozone-platform=wayland ...
-# This service only has to make the run time directories that session needs.
+# The daemon starts the player itself, as the kiosk user:
+#   mpv --idle=yes --vo=gpu --gpu-context=drm ...   (or --vo=drm)
+# mpv runs directly on DRM/KMS. It needs no compositor, no seat daemon and no
+# directory from this script: the daemon makes ${PP_RUN}/player for it.
 
 # supervise-daemon restarts the daemon when it crashes (plan 3.3). The daemon
-# then supervises the browser. Nothing else supervises anything.
+# then supervises the player. Nothing else supervises anything.
 supervisor="supervise-daemon"
 respawn_delay=5
 # 0 = no limit. A signage box must always come back. supervise-daemon only
@@ -24,23 +25,21 @@ respawn_max=0
 : "${PP_RUN:=/run/portapixel}"
 : "${PP_RELEASES:=/opt/portapixel}"
 : "${PP_KIOSK_USER:=kiosk}"
-: "${PP_KIOSK_CACHE:=/var/cache/kiosk}"
-: "${PP_KIOSK_RUNTIME:=/run/user/1300}"
 
 command="${PP_RELEASES}/current/portapixeld"
 # The quotes are inside the string on purpose: supervise-daemon puts this
 # through eval, so a path with a space would become two arguments.
-command_args="run --media \"${PP_MEDIA}\" --state \"${PP_STATE}\" --run \"${PP_RUN}\" --releases \"${PP_RELEASES}\" --kiosk-user \"${PP_KIOSK_USER}\" --kiosk-cache \"${PP_KIOSK_CACHE}\""
+command_args="run --media \"${PP_MEDIA}\" --state \"${PP_STATE}\" --run \"${PP_RUN}\" --releases \"${PP_RELEASES}\" --kiosk-user \"${PP_KIOSK_USER}\""
 pidfile="/run/portapixeld.pid"
 output_log="/var/log/portapixeld.log"
 error_log="/var/log/portapixeld.log"
 
 # Stop schedule. Without "retry" supervise-daemon sends TERM, waits about five
 # seconds, then sends KILL. The daemon needs longer. It gives the HTTP server a
-# grace period, and only then tells the browser to stop. A KILL at five seconds
-# ends the daemon before it reaches the browser. cage and Chromium then stay as
-# orphans and hold DRM master, and the next start finds no display. An update
-# restarts the service, so the whole A/B flow depends on this line.
+# grace period, and only then tells the player to stop. A KILL at five seconds
+# ends the daemon before it reaches the player. mpv then stays as an orphan and
+# holds DRM master, and the next start finds no display. An update restarts the
+# service, so the whole A/B flow depends on this line.
 retry="TERM/25/KILL/5"
 
 depend() {
@@ -48,14 +47,16 @@ depend() {
 	need localmount
 	after portapixel-firstboot portapixel-net
 	# "use", never "need": the network must never stall playback (plan 3.3).
-	# A box with no cable plays what it has. seatd is the same: without it there
-	# is no picture, but the web UI must still come up and report the problem.
-	use net dbus seatd
+	# A box with no cable plays what it has.
+	use net
 }
 
 gate_pidfile="/run/portapixel-health-gate.pid"
 
 start_pre() {
+	# 0755: the kiosk user must pass through this directory to reach
+	# ${PP_RUN}/player, the socket of mpv, the transition script and the
+	# fallback picture.
 	checkpath -d -m 0755 "${PP_RUN}"
 
 	# Start the update health gate FIRST, and before the binary check below.
@@ -96,19 +97,17 @@ start_pre() {
 	# of the gate. Both must survive a restart of the machine.
 	checkpath -d -m 0755 "${PP_RELEASES}/health"
 	checkpath -d -m 0755 "${PP_STATE}"
-	# The tmpfs for the browser profile and cache starts empty on every boot
-	# (D39), so the directories are made again here.
-	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/profile"
-	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/cache"
-	# HOME of the browser. Chromium writes dot directories into HOME, so it must
-	# be on the capped tmpfs and not on the flash (D39). The daemon gives this
-	# path in HOME; it does not make the directory, and Chromium does not make it
-	# either.
-	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_CACHE}/home"
-	# XDG_RUNTIME_DIR for the cage session. /run is a tmpfs: it is empty now.
-	# The mode must be 0700 or Wayland refuses to use it.
-	checkpath -d -m 0755 /run/user
-	checkpath -d -m 0700 -o "${PP_KIOSK_USER}" "${PP_KIOSK_RUNTIME}"
+
+	# Clear tty1. The kernel shows tty1 each time mpv stops, for example at a
+	# restart, until the next mpv takes the display. tty1 still holds the text of
+	# the BIOS and of the boot loader: the kernel copies the VGA text screen into
+	# tty1 when it takes the console. Measured in QEMU (SeaBIOS): that text was
+	# on the screen for 1 s after each kill of mpv. ESC [3J also clears the
+	# scrollback. The kernel command line hides the cursor. The -c test comes
+	# first: a redirect to a missing device node makes a plain file in /dev.
+	if [ -c /dev/tty1 ]; then
+		printf '\033[H\033[2J\033[3J' >/dev/tty1 2>/dev/null || :
+	fi
 }
 
 stop_pre() {
@@ -122,11 +121,10 @@ stop_pre() {
 }
 
 stop_post() {
-	# The daemon signals its own browser. A daemon that was killed cannot do it.
-	# cage and Chromium run in a process group of their own, as the kiosk user.
-	# They would stay as orphans and hold DRM master. The next start would then
-	# find no display.
+	# The daemon signals its own player. A daemon that was killed cannot do it.
+	# mpv runs in a process group of its own, as the kiosk user. It would stay
+	# as an orphan and hold DRM master. The next start would then find no
+	# display.
 	pkill -KILL -u "${PP_KIOSK_USER}" 2>/dev/null || true
-	rm -f "${PP_KIOSK_RUNTIME}/wayland-0" "${PP_KIOSK_RUNTIME}/wayland-0.lock"
 	return 0
 }

@@ -16,7 +16,8 @@
 # Environment:
 #   PP_SECRET_KEY_FILE   the minisign secret key file, or empty for no signing
 #   PP_PUBLIC_KEY        the matching public key, for the check after signing
-#   PP_MINISIGN_PASSWORD the password of the key, when it has one
+#   PP_MINISIGN_PASSWORD the password of the key, when it has one (the secret
+#                        PORTAPIXEL_MINISIGN_PASSWORD, optional)
 #
 # Usage: sign-release.sh DIR
 set -eu
@@ -78,7 +79,7 @@ done
 say "verify every signature with the public key"
 for b in $BINARIES; do
 	minisign -V -P "$PUBKEY" -m "$b" -x "$b.minisig" >/dev/null ||
-		die "the signature of $b does not verify with MINISIGN_PUBLIC_KEY.
+		die "the signature of $b does not verify with PORTAPIXEL_MINISIGN_PUBLIC_KEY.
  The secret key and the public variable are not a pair. Do not publish this run."
 	printf '    verified: %s\n' "$b"
 done

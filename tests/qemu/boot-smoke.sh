@@ -5,7 +5,9 @@
 #   1. the image boots to a login prompt (the boot chain works),
 #   2. the daemon answers on port 80 through a host forwarded port,
 #   3. /api/status returns something that looks like our status,
-#   4. /api/status reports player_state "running", so the cage session came up.
+#   4. /api/status reports player_state "running" and a now_playing item, so
+#      mpv runs and plays a file,
+#   5. mpv runs as the kiosk user.
 #
 # It does NOT prove that a picture is on the screen. Use tests/qemu/boot-dev.sh
 # for that: it keeps the guest up and takes a screenshot of the display.
@@ -99,7 +101,7 @@ if [ "$UEFI" = 1 ]; then
 	FW=uefi
 fi
 
-# cage needs a real DRM device, so the guest needs a graphics card that Linux has
+# mpv needs a real DRM device, so the guest needs a graphics card that Linux has
 # a KMS driver for. Alpine keeps the QEMU display devices in packages of their
 # own, so virtio-vga is often missing. Install it with
 #   apk add qemu-hw-display-virtio-vga
@@ -115,8 +117,8 @@ done
 if [ -n "$GPU" ]; then
 	say "graphics: $GPU"
 else
-	say "WARNING: this QEMU has no KMS graphics device, so cage cannot start and"
-	say "         the browser will not come up. apk add qemu-hw-display-virtio-vga"
+	say "WARNING: this QEMU has no KMS graphics device, so mpv cannot start and"
+	say "         the player will not come up. apk add qemu-hw-display-virtio-vga"
 fi
 
 say "boot $FW, serial expect, host port $PORT -> guest 80"
@@ -128,7 +130,11 @@ say "boot $FW, serial expect, host port $PORT -> guest 80"
 # above never runs and $WORK stays behind. With a .img.gz input that directory
 # holds the unpacked image, so each run leaked four gigabytes. Measured: four
 # work directories left on the test box, two of them 4.0 GB.
+#
+# EXPECT_VERSION is the eighth argument. Before, the script did not give it, so
+# --expect-version compared nothing.
 rc=0
 expect "$(dirname "$0")/boot-smoke.exp" \
-	"$WORK/disk.qcow2" "$PORT" "$MEM" "$SCALE" "$ACCEL" "$BIOS" "$GPU" || rc=$?
+	"$WORK/disk.qcow2" "$PORT" "$MEM" "$SCALE" "$ACCEL" "$BIOS" "$GPU" \
+	"$EXPECT_VERSION" || rc=$?
 exit "$rc"

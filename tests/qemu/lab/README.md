@@ -1,12 +1,13 @@
-# The two-machine lab
+# The lab
 
-This directory holds the scripts of a permanent test lab. The lab has two QEMU
+This directory holds the scripts of a permanent test lab. The lab has three QEMU
 virtual machines on the LAN of the owner:
 
 | VM | What it is | Disk | RAM | CPU |
 |---|---|---|---|---|
 | `pp-server` | Alpine 3.23 with the fleet server `portapixel-server` | 8 GB | 1 GB | 1 |
 | `pp-client` | A signage device from the real PortaPixel image | 16 GB | 2 GB | 2 |
+| `pp-zero` | A Raspberry Pi Zero 2 W proxy from the real x86_64 image | 16 GB, SD card speed | 512 MB | 4, with a duty cycle |
 
 Each VM has a tap device in the bridge `br0`. The LAN router gives each VM its
 own address with DHCP. So a person tests the two machines from a desktop, in the
@@ -25,6 +26,7 @@ same bridge, with a fixed MAC, so each DHCP lease stays the same:
 |---|---|
 | `pp-server` | `52:54:00:50:50:01` |
 | `pp-client` | `52:54:00:50:50:02` |
+| `pp-zero` | `52:54:00:50:50:03` |
 
 `netup.sh` makes the bridge. A change of the network over SSH can cut the
 connection that makes it, so the script has a dead-man timer: it applies the
@@ -75,6 +77,12 @@ goes away at the next start.
 | `status.sh` | Shows the VMs, their addresses and their answers. |
 | `shot.sh` | Writes a screenshot of the pp-client display to a PNG file. |
 | `pp-lab.start` | The OpenRC `local.d` script. It starts the lab after a boot. |
+| `zero.env` | The settings of pp-zero. The pp-zero scripts read it after `lab.env`. |
+| `make-zero-disk.sh` | Makes the base disk of pp-zero from a `.img.gz`, and a new overlay on it. |
+| `start-zero.sh` | Starts pp-zero, with VNC on the loopback (TCP 5902). |
+| `stop-zero.sh` | Stops pp-zero and its throttle. It stops no other QEMU process. |
+| `throttle-zero.sh` | Switches the CPU duty cycle of pp-zero on or off. |
+| `dutythrottle/` | The duty cycle program (Go). Build it one time on the host. |
 
 ## How to build the lab
 
@@ -115,10 +123,29 @@ Copy `pp-lab.start` to `/etc/local.d/pp-lab.start`, make it executable and run
 `rc-update add local default`. The script makes the bridge when it is missing
 and starts the two VMs.
 
+## pp-zero, the Pi Zero 2 W proxy
+
+pp-zero runs the real x86_64 image with the limits of a Zero 2 W: 512 MB of
+memory, the speed of an A1 microSD card, about 30 Mbit/s of network, and a CPU
+duty cycle. `dutythrottle` stops the whole QEMU process for 17 ms after each
+3 ms of run time, so the four CPUs get 15 % of their time. It is a proxy: it has
+no VideoCore, no hardware decode and no ARM code.
+
+```sh
+CGO_ENABLED=0 go build -o /root/ppwork/lab/dutythrottle ./tests/qemu/lab/dutythrottle
+sh make-zero-disk.sh /path/to/portapixel-VERSION-x86_64.img.gz
+sh start-zero.sh                  # or: start-zero.sh nothrottle
+sh throttle-zero.sh off           # full speed while it runs
+sh stop-zero.sh
+```
+
+`make-zero-disk.sh` with no image keeps the base and makes a new overlay, which
+is a new first boot.
+
 ## Limits
 
-- The PortaPixel image has no `acpid`, so the guest does not obey the ACPI power
-  button. `stop.sh` asks first and then stops QEMU after 30 s. To stop pp-client
-  gracefully, run `poweroff` in the guest first.
+- `stop.sh` and `stop-zero.sh` press the ACPI power button first. `acpid` in the
+  image shuts the guest down. After 30 s (40 s for pp-zero) the script stops
+  QEMU.
 - `status.sh` finds an address with a ping sweep of the LAN and the neighbour
   table. A VM that answers no ping keeps the address `unknown`.

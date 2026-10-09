@@ -7,9 +7,9 @@
 #
 # Why a copy with the .mjs extension: "node --check" reads a .js file as a
 # script, and a script permits a duplicate identifier at the top level. A module
-# does not. One duplicate identifier in player.js gave a black screen while
-# /api/status still looked good (CONTEXT.md section 4). The device loads every
-# file as a module, so the gate must read them the same way.
+# does not. One duplicate identifier in the old web player gave a black screen
+# while /api/status still looked good. The admin UIs load every file as a
+# module, so the gate must read them the same way.
 #
 # A device is often on a closed network. A page that asks a content network for a
 # stylesheet or a font shows nothing there, and the fault is hard to see in a
@@ -68,8 +68,8 @@ fi
 
 # ------------------------------------------------------------- 3. inline scripts
 # Nothing under web/ may hold a script inside the page, and nothing may hold an
-# event handler attribute. Each answer of the two admin UIs and of the player
-# carries Content-Security-Policy with script-src 'self', which blocks both. A
+# event handler attribute. Each answer of the two admin UIs carries
+# Content-Security-Policy with script-src 'self', which blocks both. A
 # page with an inline script then shows nothing and says why only in the console
 # of the browser. web/shared/gallery.html was such a page: it was in both
 # binaries, reachable at /shared/gallery.html, and dead. It is now

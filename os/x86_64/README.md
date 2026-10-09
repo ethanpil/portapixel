@@ -18,7 +18,16 @@ What each part does:
 - `console=tty1 console=ttyS0,115200`: kernel messages go to the screen and to
   the serial port. The serial port is last, so `/dev/console` is the serial
   port and the getty in `/etc/inittab` lands there. There is no getty on tty1:
-  the display belongs to the cage session (plan section 5).
+  the display belongs to the player (plan section 5).
+- `quiet vt.global_cursor_default=0 consoleblank=0 logo.nologo` keep the text
+  console off the screen. mpv draws on DRM/KMS directly. When mpv stops, for
+  example at a restart, the kernel shows the text console of tty1 again until
+  the next mpv starts. `quiet` keeps the kernel messages out of tty1 (errors
+  still show), `vt.global_cursor_default=0` removes the blinking cursor,
+  `consoleblank=0` stops the blank timer of the console, so the console never
+  switches the display off by itself, and `logo.nologo` removes the penguin
+  logo. The serial console is not changed: the boot messages of OpenRC go
+  there.
 
 The files `grub.cfg.in` (UEFI) and `syslinux.cfg.in` (BIOS) hold `@CMDLINE@`,
 which `build-image.sh` replaces. Both put the CPU microcode first in the initrd
@@ -29,8 +38,7 @@ chain: the kernel reads microcode before it unpacks the real initramfs.
 The `modules=` list above holds storage buses only. The display drivers,
 `virtio_gpu` included, are not there and do not need to be: `udev` and
 `hwdrivers` load them from the real root by PCI id, a second after the root
-mounts. cage then finds `/dev/dri/card0`.
+mounts. mpv then finds `/dev/dri/card*`.
 
 The QEMU smoke test therefore needs a real DRM device on the virtual machine
 (`-device virtio-vga`), not a module in the initramfs.
-

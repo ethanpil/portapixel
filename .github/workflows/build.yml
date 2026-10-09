@@ -27,7 +27,7 @@ on:
         type: boolean
         default: true
       prerelease:
-        description: "Mark the release a prerelease."
+        description: "Mark the release a prerelease. A tag vX.Y.Z-rc.N, -beta.N or -alpha.N is always one."
         type: boolean
         default: false
   push:
@@ -71,8 +71,8 @@ jobs:
           IN_ALPINE: ${{ inputs.alpine_release }}
           IN_DRAFT: ${{ inputs.draft }}
           IN_PRERELEASE: ${{ inputs.prerelease }}
-          HAVE_SECRET: ${{ secrets.MINISIGN_SECRET_KEY != '' }}
-          PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          HAVE_SECRET: ${{ secrets.PORTAPIXEL_MINISIGN_SECRET_KEY != '' }}
+          PUBLIC_KEY: ${{ vars.PORTAPIXEL_MINISIGN_PUBLIC_KEY }}
         run: |
           set -eu
           tag="$IN_TAG"
@@ -97,15 +97,31 @@ jobs:
           # accepts as a directory and in a URL.
           go run ./tests/ci/tagcheck "$tag" "$version"
 
+          # A pre-release tag (vX.Y.Z-rc.N, -beta.N or -alpha.N) is always a
+          # GitHub pre-release: it never gets the "latest" container tag, and the
+          # updater of a device never offers it, because the updater asks for
+          # the newest full release. A PUSHED pre-release tag is also not a
+          # draft, so it is public when the run passes. A dispatched run keeps
+          # its "draft" input. The release job still keeps every UNSIGNED
+          # release a draft, so a pre-release is public only after the signing
+          # gates passed. Any other tag keeps the rules above.
+          if printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+-(alpha|beta|rc)\.[0-9]+$'; then
+            prerelease=true
+            if [ "$GITHUB_EVENT_NAME" = push ]; then
+              draft=false
+            fi
+            echo "note: $tag is a pre-release tag, so this run makes a pre-release"
+          fi
+
           # The signing settings. A secret key with no public key would make a
           # release that no device can verify, and every device would refuse the
           # next update.
           signed=no
           if [ "$HAVE_SECRET" = true ]; then
             if [ -z "$PUBLIC_KEY" ]; then
-              echo "FAIL: the secret MINISIGN_SECRET_KEY is set and the variable"
-              echo "      MINISIGN_PUBLIC_KEY is empty. A device could not verify"
-              echo "      this release. Set both, or neither (D47)."
+              echo "FAIL: the secret PORTAPIXEL_MINISIGN_SECRET_KEY is set and the"
+              echo "      variable PORTAPIXEL_MINISIGN_PUBLIC_KEY is empty. A device could"
+              echo "      not verify this release. Set both, or neither (D47)."
               exit 1
             fi
             signed=yes
@@ -134,8 +150,9 @@ jobs:
     uses: ./.github/workflows/lint.yml
 
   # What this job proves: both commands build for both architectures with no C
-  # compiler, the web assets are inside the binary (selftest), and the binary
-  # reports exactly the version that the tag gave.
+  # compiler, the web assets and the transition script of the player are inside
+  # the binary (selftest), and the binary reports exactly the version that the
+  # tag gave.
   build:
     needs: settings
     runs-on: ubuntu-latest
@@ -165,7 +182,7 @@ jobs:
           GOOS: linux
           GOARCH: ${{ matrix.arch }}
           VERSION: ${{ needs.settings.outputs.version }}
-          PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          PUBLIC_KEY: ${{ vars.PORTAPIXEL_MINISIGN_PUBLIC_KEY }}
         run: |
           set -eu
           mkdir -p dist
@@ -219,7 +236,7 @@ jobs:
           done
           echo "ok: the health marker of this release is $VERSION.ok"
 
-      - name: the web assets are in the binary
+      - name: the web assets and the transition script are in the binary
         run: |
           set -eu
           ./dist/portapixeld-${{ matrix.arch }} selftest
@@ -259,9 +276,9 @@ jobs:
       # log at all is better.
       - name: write the key, make the sums, sign and verify
         env:
-          PP_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
-          PP_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
-          PP_MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+          PP_PUBLIC_KEY: ${{ vars.PORTAPIXEL_MINISIGN_PUBLIC_KEY }}
+          PP_SECRET_KEY: ${{ secrets.PORTAPIXEL_MINISIGN_SECRET_KEY }}
+          PP_MINISIGN_PASSWORD: ${{ secrets.PORTAPIXEL_MINISIGN_PASSWORD }}
         run: |
           set -eu
           # The trap, not a line at the end: a step that fails must also take the
@@ -344,9 +361,10 @@ jobs:
           if-no-files-found: error
 
   # What this job proves (blocking): the x86_64 image boots under SeaBIOS and
-  # under OVMF, the daemon answers /api/status on port 80, and the browser session
-  # comes up. A status that answers is not a picture, so browser_state must say
-  # running (CONTEXT.md section 4).
+  # under OVMF, the daemon answers /api/status on port 80, and mpv plays. A
+  # status that answers is not a picture, so player_state must say running,
+  # now_playing must name an item, and mpv must run as kiosk (CONTEXT.md
+  # section 4).
   smoke-x86:
     needs: [settings, images]
     runs-on: ubuntu-latest
@@ -407,10 +425,10 @@ jobs:
           echo "ok: the image in the guest says version $VERSION"
 
   # What this job proves (blocking, reduced): the aarch64 image holds a daemon
-  # that starts and passes selftest under qemu-user, the packages of the display
-  # stack are in it, the overlay is in place, and PPBOOT holds every file that the
-  # Raspberry Pi firmware needs. QEMU cannot boot the Pi firmware path, so a real
-  # Pi stays on the manual checklist.
+  # that starts and passes selftest under qemu-user, mpv starts, the packages of
+  # the player and the video decoder module of the Pi are in it, the overlay is in
+  # place, and PPBOOT holds every file that the Raspberry Pi firmware needs. QEMU
+  # cannot boot the Pi firmware path, so a real Pi stays on the manual checklist.
   smoke-arm:
     needs: [settings, images]
     runs-on: ubuntu-latest
@@ -690,7 +708,7 @@ jobs:
       - name: the checksums and the signatures of the files we publish
         env:
           SIGNED: ${{ needs.settings.outputs.signed }}
-          PP_PUBLIC_KEY: ${{ vars.MINISIGN_PUBLIC_KEY }}
+          PP_PUBLIC_KEY: ${{ vars.PORTAPIXEL_MINISIGN_PUBLIC_KEY }}
         run: |
           set -eu
           cd out/publish

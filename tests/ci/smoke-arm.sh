@@ -5,13 +5,16 @@
 # boot the image (plan section 17 item 5). It mounts the two partitions of the
 # image and proves what a boot needs:
 #
-#   1. the daemon binary in the image starts and passes "selftest" under
-#      qemu-user, so the embedded web assets and the templates are there;
+#   1. the daemon binary and mpv in the image start under qemu-user, and the
+#      daemon passes "selftest", so the embedded web assets and the templates
+#      are there;
 #   2. "portapixeld version" prints the release that CI built, and
 #      "portapixeld version --json" gives the form that the updater reads;
-#   3. the packages of the display stack are in the manifest (D50);
+#   3. the packages of the player are in the manifest (D50), and the kernel
+#      has the video decoder of the Pi with the alias that udev loads it by;
 #   4. the overlay files and the release layout are in place;
-#   5. PPBOOT holds every file that the Pi firmware needs.
+#   5. PPBOOT holds every file that the Pi firmware needs, and the kernel
+#      command line hides the text console.
 #
 # Run it as root. It needs losetup, mount and qemu-user binfmt for aarch64.
 #
@@ -86,7 +89,6 @@ for f in \
 	usr/libexec/portapixel/health-gate.sh \
 	usr/libexec/portapixel/firstboot.sh \
 	usr/libexec/portapixel/oplog.sh \
-	usr/share/icons/default/index.theme \
 	usr/share/portapixel/packages.manifest \
 	etc/fstab \
 	etc/inittab; do
@@ -99,17 +101,35 @@ grep -q 'LABEL=PPROOT' "$R/etc/fstab" || die "the fstab does not find the root b
 [ -L "$R/etc/runlevels/boot/swclock" ] ||
 	die "swclock is not enabled; a Pi has no real time clock (D40)"
 [ -L "$R/etc/runlevels/default/portapixeld" ] || die "portapixeld is not enabled"
+# mpv runs as kiosk (D43). It needs video for /dev/dri and /dev/video*, and
+# audio for /dev/snd.
+for g in video audio; do
+	awk -F: -v g="$g" '$1 == g { n = split($4, m, ","); for (i = 1; i <= n; i++) if (m[i] == "kiosk") ok = 1 }
+		END { exit !ok }' "$R/etc/group" || die "the kiosk user is not in the group $g"
+done
 
 # --------------------------------------------------------------- 4. the packages
-say "the packages of the display stack"
+say "the packages of the player"
 MANIFEST="$R/usr/share/portapixel/packages.manifest"
 [ -s "$MANIFEST" ] || die "the package manifest is empty (D50)"
 say "the manifest holds $(wc -l <"$MANIFEST" | tr -d ' ') packages"
-for p in chromium cage seatd wlr-randr alpine-base openrc busybox mesa-dri-gallium \
+for p in mpv mesa-dri-gallium mesa-gbm mesa-egl eudev alpine-base openrc busybox \
 	linux-rpi raspberrypi-bootloader chrony openssh-server exfatprogs; do
 	grep -q "^$p-[0-9]" "$MANIFEST" || die "the image has no $p package"
 	printf '    ok: %s\n' "$p"
 done
+
+# The H.264 decoder of a Pi 0 to Pi 4 is bcm2835-codec. vchiq is built into
+# linux-rpi and makes the device "vchiq:bcm2835-codec". udev then loads the
+# module by that alias, so the image needs no modules entry for it. A Pi cannot
+# boot in CI, so prove the two parts that the image holds.
+KDIR="$(find "$R/lib/modules" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+[ -n "$KDIR" ] || die "no kernel modules in the image"
+find "$KDIR" -name 'bcm2835-codec.ko*' | grep -q . ||
+	die "linux-rpi has no bcm2835-codec module: no hardware video decode on a Pi"
+grep -q '^alias vchiq:bcm2835-codec bcm2835_codec$' "$KDIR/modules.alias" ||
+	die "modules.alias has no vchiq:bcm2835-codec, so udev cannot load the decoder"
+say "the video decoder: bcm2835-codec and its alias are in $(basename "$KDIR")"
 
 # ------------------------------------------------------------- 5. the boot files
 say "the files on PPBOOT"
@@ -125,6 +145,11 @@ count() { find "$B" -maxdepth 1 -name "$1" | grep -c . || true; }
 [ -f "$B/overlays/vc4-kms-v3d.dtbo" ] || die "PPBOOT has no overlays/vc4-kms-v3d.dtbo"
 [ "$(count 'vmlinuz-*')" -gt 0 ] || die "PPBOOT has no kernel"
 [ "$(count 'initramfs-*')" -gt 0 ] || die "PPBOOT has no initramfs"
+# mpv draws on DRM/KMS directly, and between two starts of mpv the kernel shows
+# tty1. These options keep the text and the cursor off the screen.
+for w in quiet vt.global_cursor_default=0 consoleblank=0 logo.nologo; do
+	tr ' ' '\n' <"$B/cmdline.txt" | grep -qxF "$w" || die "cmdline.txt has no $w"
+done
 say "device trees: $(count 'bcm2*.dtb'), overlays: $(find "$B/overlays" -type f | grep -c . || true)"
 
 # -------------------------------------------------- 6. the binary under qemu-user
@@ -170,5 +195,14 @@ printf '%s\n' "$out"
 if printf '%s' "$out" | grep -q '^FAIL'; then
 	die "portapixeld selftest reported a fault in the aarch64 image"
 fi
+
+# mpv of the image starts: every library that it links is in the image, for
+# the processor of the image. It cannot open a display here, so ask only for
+# the version.
+out="$(chroot "$R" /usr/bin/mpv --no-config --version 2>&1)" || {
+	printf '%s\n' "$out"
+	die "mpv of the aarch64 image does not start under qemu-user"
+}
+say "mpv: $(printf '%s\n' "$out" | head -n 1)"
 
 say "PASS: the aarch64 image holds a daemon that runs, and every boot file"

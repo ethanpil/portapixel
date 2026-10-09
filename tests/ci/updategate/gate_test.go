@@ -87,7 +87,7 @@ func newSigner(t *testing.T) signer {
 
 // publicText is the key in the ONE LINE form, which is the base64 line of a
 // minisign.pub file with no comment line. -ldflags -X cannot carry a newline, so
-// the repository variable MINISIGN_PUBLIC_KEY holds this form too.
+// the repository variable PORTAPIXEL_MINISIGN_PUBLIC_KEY holds this form too.
 func (s signer) publicText(t *testing.T) string {
 	t.Helper()
 	return s.public.String()
@@ -579,7 +579,7 @@ func TestRefusals(t *testing.T) {
 // /etc/conf.d/portapixeld, which the init script passes to --run.
 func runDir(root string) string { return filepath.Join(root, "run") }
 
-// startDaemon starts the real daemon of a release with the browser off. It stops
+// startDaemon starts the real daemon of a release with the player off. It stops
 // the daemon and prints its log through t.Cleanup, so a round that fails leaves no
 // live process behind and still shows the log that explains the failure.
 //
