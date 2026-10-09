@@ -7,10 +7,12 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/ethanpil/portapixel/internal/config"
+	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/health"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
 	"github.com/ethanpil/portapixel/internal/device/identity"
@@ -894,5 +896,36 @@ func TestARenameAndAnUnpairDoNotLoseEachOther(t *testing.T) {
 		if got.Server.URL != "" || got.Server.Token != "" || got.Device.Name != name {
 			t.Fatalf("round %d lost a change: url %q, token %q, name %q", i, got.Server.URL, got.Server.Token, got.Device.Name)
 		}
+	}
+}
+
+// The player loop calls fallbackInfo, and the report reads the media mount. A
+// mount that hangs must not hold the loop: the caller gets the last answer after
+// the wait, and a second call does not start a second report.
+func TestSlowInfoDoesNotHoldTheCaller(t *testing.T) {
+	var c slowInfo
+	release := make(chan struct{})
+	var calls atomic.Int32
+	build := func() fallback.Info {
+		calls.Add(1)
+		<-release
+		return fallback.Info{Name: "Lobby"}
+	}
+
+	start := time.Now()
+	if got := c.get(build, 20*time.Millisecond); got.Name != "" {
+		t.Errorf("get gave %+v while the report hangs, want the empty answer", got)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Errorf("get waited %s", took)
+	}
+	c.get(build, 20*time.Millisecond)
+	if n := calls.Load(); n != 1 {
+		t.Errorf("%d reports started while the first hangs, want 1", n)
+	}
+
+	close(release)
+	if got := c.get(build, 10*time.Second); got.Name != "Lobby" {
+		t.Errorf("get gave %+v after the report ended, want its answer", got)
 	}
 }

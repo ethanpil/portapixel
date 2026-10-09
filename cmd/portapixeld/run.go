@@ -131,6 +131,8 @@ type daemon struct {
 	// interfaces, so it is cached: every request would otherwise ask the kernel
 	// for the interface list.
 	hostList []string
+	// fallbackData keeps the data of the fallback screen. See fallbackInfo.
+	fallbackData slowInfo
 	// clockOK is the last answer of the clock probe.
 	clockOK bool
 }
@@ -816,9 +818,56 @@ func (d *daemon) adminURL() string {
 // the page of the browser player showed. The player adds the clock and the
 // burn-in step, and draws the screen again when a fact changes.
 //
-// The report is the loopback one: the screen is the device itself, so it shows
-// the pairing code (D46).
+// The player loop calls this function, and the loop must never wait for the disk:
+// it also serves Suspend, the watchdog and the nightly restart. The report reads
+// the media mount, and a stick that fails can hold that call for a long time. So
+// the loop waits for fallbackWait at most, and then it gets the last answer.
 func (d *daemon) fallbackInfo() fallback.Info {
+	return d.fallbackData.get(d.buildFallbackInfo, fallbackWait)
+}
+
+// fallbackWait is the longest time that the player loop waits for the data of the
+// fallback screen. A normal call takes a few milliseconds.
+const fallbackWait = 2 * time.Second
+
+// slowInfo runs a function that can be slow in a goroutine of its own, and it
+// starts the function again only after the last call has ended.
+type slowInfo struct {
+	mu      sync.Mutex
+	running chan struct{} // closed when the call that runs now ends; nil if none runs
+	last    fallback.Info
+}
+
+// get gives the answer of build. When build needs more than wait, it gives the
+// answer of the last call that ended, and build goes on in the background.
+func (c *slowInfo) get(build func() fallback.Info, wait time.Duration) fallback.Info {
+	c.mu.Lock()
+	if c.running == nil {
+		done := make(chan struct{})
+		c.running = done
+		go func() {
+			info := build()
+			c.mu.Lock()
+			c.last, c.running = info, nil
+			c.mu.Unlock()
+			close(done)
+		}()
+	}
+	done := c.running
+	c.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(wait):
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.last
+}
+
+// buildFallbackInfo reads the report of the device. It is the loopback report:
+// the screen is the device itself, so it shows the pairing code (D46).
+func (d *daemon) buildFallbackInfo() fallback.Info {
 	st := d.status(true, true)
 	var lines []string
 	if !st.ClockSynced {
