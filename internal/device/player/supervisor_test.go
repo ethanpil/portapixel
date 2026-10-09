@@ -349,6 +349,27 @@ func TestFallbackScreen(t *testing.T) {
 	h.waitPlaying(0)
 }
 
+// The check of the fallback screen reads the data of the daemon, and a redraw
+// uses that data. A second read is a second report of the daemon, which reads
+// the disk and the network interfaces.
+func TestAFallbackRedrawReadsTheDataOneTime(t *testing.T) {
+	h := newHarness(t, library.PlayerManifest{}, nil)
+	waitFor(t, "a render", func() bool { return h.renderCount() > 0 })
+	h.settle()
+	h.mu.Lock()
+	reads, renders := h.infoReads, len(h.renders)
+	h.mu.Unlock()
+
+	h.advance(61 * time.Second) // a new minute: one check and one redraw
+	waitFor(t, "the redraw", func() bool { return h.renderCount() > renders })
+	h.mu.Lock()
+	got := h.infoReads - reads
+	h.mu.Unlock()
+	if got != 1 {
+		t.Errorf("the check and the redraw read the data %d times, want 1", got)
+	}
+}
+
 // If the daemon cannot draw the fallback picture, mpv has no file and sends no
 // event. The loop must try again by itself, or the screen stays black.
 func TestFallbackDrawFailureIsRetried(t *testing.T) {

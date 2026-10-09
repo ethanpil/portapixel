@@ -80,11 +80,13 @@ type harness struct {
 	manifest library.PlayerManifest
 	info     fallback.Info
 	renders  []fallback.Info
-	reboots  []string
-	nightly  string
-	covered  bool
-	display  DisplaySettings
-	motion   string
+	// infoReads counts the calls of Options.Fallback.
+	infoReads int
+	reboots   []string
+	nightly   string
+	covered   bool
+	display   DisplaySettings
+	motion    string
 }
 
 // newHarness starts a supervisor. opts may change the options before New.
@@ -125,7 +127,7 @@ func newHarness(t *testing.T, m library.PlayerManifest, opts func(*Options, *har
 		DRMRoot:      h.drm,
 		ModelPath:    filepath.Join(run, "no-model"),
 		Manifest:     func() library.PlayerManifest { h.mu.Lock(); defer h.mu.Unlock(); return h.manifest },
-		Fallback:     func() fallback.Info { h.mu.Lock(); defer h.mu.Unlock(); return h.info },
+		Fallback:     func() fallback.Info { h.mu.Lock(); defer h.mu.Unlock(); h.infoReads++; return h.info },
 		Render: func(info fallback.Info, w, h2 int) ([]byte, error) {
 			h.mu.Lock()
 			h.renders = append(h.renders, info)

@@ -1299,7 +1299,7 @@ func (s *Supervisor) clearList() {
 // showFallback shows the fallback screen (D18).
 func (s *Supervisor) showFallback(now time.Time, why string) {
 	s.fb = fallbackScreen{since: now}
-	if s.drawFallback(now) {
+	if s.drawFallback(now, s.fallbackInfo(now)) {
 		s.logRepeat("player.fallback", why, "the fallback screen shows: "+why)
 	}
 }
@@ -1310,8 +1310,11 @@ func (s *Supervisor) showFallback(now time.Time, why string) {
 // The picture holds the clock, so the loop draws it again at each new minute,
 // and when the data on it changes (serviceFallback). Its transition is a cut: a
 // new minute must not dip to black.
-func (s *Supervisor) drawFallback(now time.Time) bool {
-	info := s.fallbackInfo(now)
+//
+// info is the data of the picture. The caller reads it: the check of
+// serviceFallback has it already, and a second read is a second report of the
+// daemon.
+func (s *Supervisor) drawFallback(now time.Time, info fallback.Info) bool {
 	set := s.opt.Display()
 	w, h := displaySize(s.opt.DRMRoot, set.VideoMode, set.Rotation)
 	data, err := s.opt.Render(info, w, h)
@@ -1349,7 +1352,7 @@ func (s *Supervisor) fallbackInfo(now time.Time) fallback.Info {
 // again after a failure.
 func (s *Supervisor) serviceFallback(now time.Time) {
 	if s.fb.failed && now.Sub(s.fb.checked) >= fallbackCheck {
-		s.drawFallback(now)
+		s.drawFallback(now, s.fallbackInfo(now))
 	}
 	if s.list == nil || !s.list.fallback {
 		return
@@ -1363,7 +1366,7 @@ func (s *Supervisor) serviceFallback(now time.Time) {
 	}
 	s.fb.checked = now
 	if next := s.fallbackInfo(now); !sameInfo(next, s.fb.info) {
-		s.drawFallback(now)
+		s.drawFallback(now, next)
 	}
 }
 
