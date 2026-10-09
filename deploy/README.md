@@ -235,8 +235,9 @@ There are three ways, and all three end on the Screens page.
 
 1. **An enrollment token.** The Enrollment page makes an invite token and shows a
    `[server]` block. Paste the block into `portapixel.toml` on any number of cards
-   before the first boot. Each screen then registers itself under its own hardware
-   ID (D25).
+   before the first boot. The file has every key turned off by a `#`, so paste the
+   block at the end, or remove the `#` from its `[server]` lines. Do not do both.
+   Each screen then registers itself under its own hardware ID (D25).
 2. **A pairing code.** A screen with no token shows a six-character code on its
    fallback screen. Approve the code on the Screens page.
 3. **The pairing card on the screen itself.** Open the admin UI of the screen,

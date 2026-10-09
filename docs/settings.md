@@ -5,6 +5,10 @@ of the media partition. Edit it from the web UI, or by hand from any
 computer. This page lists every key: its default value, what it means, and
 when a change of it takes effect.
 
+The image ships `portapixel.toml` on the media partition with every key
+turned off by a `#`. Remove the `#` from a key and from its `[table]` line to
+set it. At the first boot the device writes the file again with all values.
+
 **Takes effect** has three values:
 
 - **live** — the daemon uses the new value at once.

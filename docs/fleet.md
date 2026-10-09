@@ -15,7 +15,10 @@ matter for a fleet.
 
 Make an enrollment token on the server's "Add screens" page. Put the token
 block that the page shows into `portapixel.toml`, in the `[server]` table,
-before the first boot of any number of cards. Each card then registers
+before the first boot of any number of cards. The file is on the card with
+every key turned off by a `#`. Paste the block at the end of the file, or
+remove the `#` from the `[server]` line and from its `url` and `token` lines.
+Do not do both: a table can be in the file only once. Each card then registers
 itself under its own hardware ID at its first boot, and gets its own device
 token back. All the cards can carry the same enrollment token and file,
 because each one becomes a distinct, separate screen.

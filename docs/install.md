@@ -51,8 +51,12 @@ Do this step only when the machine has no wired network and no monitor.
 1. Put the stick into a computer of any kind. Do not put it into the target
    machine yet.
 2. Open the partition named `PPMEDIA`. Every operating system can read it.
-3. Open `portapixel.toml` in a text editor.
-4. Set the `[network]` keys:
+3. Open `portapixel.toml` in a text editor. The image puts this file there. It
+   holds every setting, and a `#` at the start of each line turns the line off.
+4. To turn on a setting, remove the `#` at the start of its line. Also remove
+   the `#` from the `[table]` line above it. A key under a `[table]` line that
+   still has its `#` does not do what you want. Set the `[network]` keys like
+   this:
 
    ```toml
    [network]
@@ -63,6 +67,14 @@ Do this step only when the machine has no wired network and no monitor.
    ```
 
 5. Save the file and eject the stick properly.
+
+Keep the file name `portapixel.toml`. In Notepad, use Save and not Save As. If
+you must use Save As, set "Save as type" to "All files", or Notepad adds
+`.txt` to the name and the device does not find the file. To see the full name
+in Windows, turn on "File name extensions" in the View menu of Explorer.
+
+At the first boot, the device writes the file again with all the values. Your
+values stay, and the comments come back.
 
 `wifi_country` is the two-letter radio region of your country, for example
 `US` or `DE`. Leave it out and some WiFi radios show fewer channels, so a

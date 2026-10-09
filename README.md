@@ -60,8 +60,10 @@ as untested until a real device passes the checklist.
 ## Quick start
 
 1. Download a release image and write it to a USB stick of 8 GB or more.
-2. To set up WiFi before the first boot, open the `PPMEDIA` partition of the
-   stick on any computer and edit `portapixel.toml`. See `docs/install.md`.
+2. To set up WiFi before the first boot, open `portapixel.toml` on the `PPMEDIA`
+   partition of the stick, on any computer. Every setting is there, turned off
+   with a `#`. Remove the `#` from the lines that you want and from their
+   `[table]` line. See `docs/install.md`.
 3. Put the stick into the PC or the Raspberry Pi and turn the machine on.
 4. Connect the machine to a screen over HDMI.
 5. Find the address of the device. A device with nothing to play shows its

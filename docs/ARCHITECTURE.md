@@ -106,6 +106,13 @@ Files in the media root: `portapixel.toml`, `<playlist>/playlist.toml`, `_fleet/
 `_fleet/<playlist>/playlist.toml`, `_update/`. A directory name that starts with `_` is
 never a local playlist.
 
+The image ships `portapixel.toml` on PPMEDIA with every line commented out, so a person can
+set WiFi or the fleet server on any computer before the first boot. `config.Template()` makes
+it from `Render(Default())`, and `os/portapixel.toml` is its generated copy
+(`go run ./internal/config/cmd/gentemplate`). `os/build-image.sh` copies it to PPMEDIA. The
+daemon reads it as the defaults. At the first boot, `provision` finds the file, and
+`refreshConfigID` writes the full file with the real values and the device ID.
+
 Files in the state dir: `ops.log`, `portapixel.toml.lkg` (shadow config, D38),
 `state.json` (stored device ID, device token, server-assigned data, bad releases),
 `hashcache.json`, `.provisioned`, `.root-default-hash`.

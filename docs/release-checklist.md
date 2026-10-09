@@ -39,7 +39,9 @@ actually built: the player is mpv, directly on DRM/KMS. See
       `os/rpi/config.txt` stands above the first `dtoverlay` line. Before the
       fix, the line went to the `vc4-kms-v3d` overlay and never reached the
       jack.
-- [ ] WiFi connects from the values in `portapixel.toml`.
+- [ ] WiFi connects from the values in `portapixel.toml`. On a new image, open
+      the file on PPMEDIA before the first boot. Remove the `#` from the
+      `[network]` line and from the WiFi keys.
 - [ ] A static address, set in `portapixel.toml`, works.
 
 ## Playback
