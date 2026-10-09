@@ -104,9 +104,27 @@ func (l *launcher) newSink() *outputSink {
 	return sink
 }
 
-// stop ends mpv. It asks first and then insists. It returns when the process
-// has ended, so that the caller can give the display to somebody else.
+// stop ends mpv and each stray process of the kiosk account (see killStray). It
+// returns when they have ended, so that the caller can give the display to
+// somebody else.
 func (l *launcher) stop() {
+	l.stopOwn()
+	// A failed lookup of the account is not reported here: the next start
+	// reports it, and a stop runs at each look at the connectors in a display
+	// wait.
+	if n, err := killStray(l.cfg.KioskUser); n > 0 && l.log != nil {
+		text := fmt.Sprintf("%d processes of the kiosk account were still running, for example an mpv of a daemon that "+
+			"crashed; they are stopped", n)
+		if err != nil {
+			text += "; " + err.Error()
+		}
+		l.log.Log("player.stray", text)
+	}
+}
+
+// stopOwn ends the mpv that this launcher started. It asks first and then
+// insists. It returns when the process has ended.
+func (l *launcher) stopOwn() {
 	l.mu.Lock()
 	cmd, exited := l.cmd, l.exited
 	l.cmd = nil

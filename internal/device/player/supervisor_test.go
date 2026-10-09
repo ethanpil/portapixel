@@ -2,6 +2,7 @@ package player
 
 import (
 	"errors"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -378,6 +379,40 @@ func TestFallbackDrawFailureIsRetried(t *testing.T) {
 	waitFor(t, "the first picture", h.sup.Started)
 }
 
+// A draw of the fallback screen that fails leaves the content on the screen.
+// When the same content comes back before the draw works again, the retry of
+// the draw must not replace the content: it showed the fallback screen for
+// hours, with content in the manifest.
+func TestFallbackRetryDoesNotReplaceContentThatCameBack(t *testing.T) {
+	fail := false
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) {
+		o.Render = func(info fallback.Info, w, h2 int) ([]byte, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if fail {
+				return nil, errors.New("the render failed")
+			}
+			return []byte("PNG"), nil
+		}
+	})
+	h.waitPlaying(0)
+	h.mu.Lock()
+	fail = true
+	h.mu.Unlock()
+	h.setManifest(library.PlayerManifest{Fallback: true}) // a gap in the schedule
+	waitFor(t, "the failed draw", func() bool { return h.eventWith("player.fallback.fail", "the render failed") })
+	h.setManifest(threeItems()) // the schedule comes back to the same playlist
+	h.settle()
+	h.mu.Lock()
+	fail = false
+	h.mu.Unlock()
+	h.advance(fallbackCheck + time.Second) // the time of the retry
+	h.settle()
+	if d := h.dump(); len(d.List) != 3 || filepath.Base(d.List[0].Path) != "welcome.jpg" {
+		t.Fatalf("the content is gone from mpv: %+v", d.List)
+	}
+}
+
 // When no item can play, mpv goes idle. The fallback screen then shows, each
 // fault is in the ops log, and the player tries the list again later.
 func TestEveryItemFails(t *testing.T) {
@@ -421,6 +456,69 @@ func TestRestartAfterExit(t *testing.T) {
 	if !strings.HasSuffix(d.List[0].Path, "promo.mp4") || !strings.HasSuffix(d.List[2].Path, "welcome.jpg") {
 		t.Errorf("the new list does not start at the next item: %+v", d.List)
 	}
+}
+
+// A file that ends mpv while it opens has shown nothing, so the item on the
+// screen is the item before it. The new mpv must start after the file that mpv
+// opened, and leave that file out: mpv loops the list, and each pass would end
+// mpv again and count a step on the ladder. A playlist change gives the file a
+// new try.
+func TestAFileThatEndsMPVIsLeftOut(t *testing.T) {
+	m := playlist("lobby", "fade", 400,
+		library.ManifestItem{Name: "a.jpg"},
+		library.ManifestItem{Name: "b.jpg"},
+		library.ManifestItem{Name: "crash.mp4"},
+		library.ManifestItem{Name: "d.jpg"},
+	)
+	h := newHarness(t, m, nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+	h.settle()
+	h.ctl("fake-next")
+	h.waitPlaying(1)
+	h.settle()
+	h.call("fake-next") // crash.mp4 opens, and the fake ends
+
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	h.waitPlaying(3)
+	d := h.dump()
+	var names []string
+	for _, e := range d.List {
+		names = append(names, filepath.Base(e.Path))
+	}
+	if !slices.Equal(names, []string{"d.jpg", "a.jpg", "b.jpg"}) {
+		t.Fatalf("the new list is %v, want d.jpg, a.jpg, b.jpg", names)
+	}
+	// The transition of b.jpg goes into d.jpg, the item that now comes after it.
+	if got := d.List[2].Opts["script-opts"]; got != "pptr-kind=fade,pptr-ms=400" {
+		t.Errorf("b.jpg has the script options %q", got)
+	}
+	if !h.eventWith("player.item.crash", "crash.mp4") {
+		t.Errorf("no player.item.crash line:\n%s", h.events())
+	}
+
+	// Two passes of the list: no more exits.
+	for range 6 {
+		h.settle()
+		h.ctl("fake-next")
+	}
+	h.settle()
+	if n := h.countEvent("player.exit"); n != 1 || h.sup.State().Restarts != 1 || h.rebootCount() != 0 {
+		t.Fatalf("exits = %d, restarts = %d, reboots = %d:\n%s", n, h.sup.State().Restarts, h.rebootCount(), h.events())
+	}
+
+	// A new version of the playlist tries the file again.
+	m2 := playlist("lobby", "cut", 0,
+		library.ManifestItem{Name: "a.jpg"},
+		library.ManifestItem{Name: "b.jpg"},
+		library.ManifestItem{Name: "crash.mp4"},
+		library.ManifestItem{Name: "d.jpg"},
+	)
+	h.setManifest(m2)
+	waitFor(t, "the new list with the file", func() bool {
+		d, ok := h.tryDump()
+		return ok && len(d.List) == 4
+	})
 }
 
 // The resume point is for the first load after a restart. If a fallback screen
@@ -508,6 +606,52 @@ func TestRestartWhenImageOverruns(t *testing.T) {
 	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
 	if !h.eventWith("player.restart", "welcome.jpg stayed on the screen") {
 		t.Fatalf("no overrun line:\n%s", h.events())
+	}
+}
+
+// mpv plays an animated GIF as a video, for its own length, and it ignores
+// image-display-duration. An animation longer than its duration and the grace
+// is not stuck while its position moves; each such restart counted, and a long
+// GIF in a loop rebooted the device every hour. An animation that stops moving
+// is still restarted.
+func TestAnAnimatedImageIsNotStuckWhileItMoves(t *testing.T) {
+	m := playlist("lobby", "fade", 400,
+		library.ManifestItem{Name: "anim.gif"}, // the fake moves the position of a .gif
+		library.ManifestItem{Name: "b.jpg"},
+	)
+	h := newHarness(t, m, nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+	h.settle()
+	for range 30 { // 60 s, and the limit is 10 s and the grace of 30 s
+		h.advance(2 * time.Second)
+	}
+	if h.sup.State().Restarts != 0 {
+		t.Fatalf("an animation that moves was restarted:\n%s", h.events())
+	}
+
+	h.ctl("fake-stall")
+	h.advance(2 * time.Second)
+	h.advance(heartbeatTimeout)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "anim.gif stayed on the screen") {
+		t.Fatalf("no overrun line:\n%s", h.events())
+	}
+}
+
+// A duration of some billion seconds must not overflow the limit of the image
+// rule. The sum was less than zero, and the rule fired at each image.
+func TestImageLimitDoesNotOverflow(t *testing.T) {
+	if got := imageLimit(10, 30*time.Second); got != 40*time.Second {
+		t.Errorf("imageLimit(10, 30s) = %s", got)
+	}
+	for _, seconds := range []int{9223372036, 9999999999, math.MaxInt} {
+		if got := imageLimit(seconds, 30*time.Second); got != math.MaxInt64 {
+			t.Errorf("imageLimit(%d, 30s) = %s, want the largest duration", seconds, got)
+		}
+	}
+	if got := imageLimit(9223372000, 30*time.Second); got <= 0 {
+		t.Errorf("imageLimit(9223372000, 30s) = %s", got)
 	}
 }
 

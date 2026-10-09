@@ -238,12 +238,16 @@ func (f *fakeMPV) handle(c *fakeClient, name string, a []any, id int64, args []s
 
 // play starts the entry at pos, as mpv does after a load or at the end of a
 // file. A path with "broken" in it fails to load; when every entry fails, mpv
-// goes idle.
+// goes idle. A path with "crash" in it ends the process while it opens, as a
+// decoder that crashes does.
 func (f *fakeMPV) play(pos int) {
 	for tries := 0; tries < len(f.list); tries++ {
 		e := f.list[pos]
 		f.pos = pos
 		f.broadcast(map[string]any{"event": "start-file", "playlist_entry_id": e.ID})
+		if strings.Contains(e.Path, "crash") {
+			os.Exit(7)
+		}
 		if !strings.Contains(e.Path, "broken") {
 			f.timePos = 0
 			f.notify("hwdec-current")

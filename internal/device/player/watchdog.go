@@ -2,6 +2,7 @@ package player
 
 import (
 	"fmt"
+	"math"
 	"time"
 )
 
@@ -108,25 +109,46 @@ func (s *Supervisor) checkWatchdog(now time.Time) {
 			return
 		}
 	}
+	// An image item that moves is an animation: mpv plays a GIF, PNG or WebP
+	// with more than one frame as a video, for its own length, and it ignores
+	// image-display-duration. Such an item is not stuck while its position
+	// moves. A still image keeps its position, so the rule is the same for it.
 	if it, ok := s.current(); ok && it.Kind == kindImage && !s.list.single && it.Duration > 0 {
-		max := time.Duration(it.Duration)*time.Second + limit
-		if on := now.Sub(s.itemStart); on >= max {
+		on := now.Sub(s.itemStart)
+		if on >= imageLimit(it.Duration, limit) && now.Sub(s.lastMove) >= limit {
 			s.restart(fmt.Sprintf("the image %s stayed on the screen for %s; its duration is %ds",
 				it.Name, on.Round(time.Second), it.Duration), true, resumeNext)
 		}
 	}
 }
 
-// onTimePos takes an answer about the position of the video that plays. pos is
+// imageLimit gives the longest time that an image may stay: its duration and the
+// grace. A duration of some billion seconds is more than a time.Duration holds.
+// The sum was then less than zero, and the rule restarted mpv at each image.
+func imageLimit(seconds int, grace time.Duration) time.Duration {
+	if int64(seconds) >= int64((math.MaxInt64-grace)/time.Second) {
+		return math.MaxInt64
+	}
+	return time.Duration(seconds)*time.Second + grace
+}
+
+// onTimePos takes an answer about the position of the item that plays. pos is
 // false when mpv answered "property unavailable": a video that never shows a
-// frame has no position, and that is a stall too.
+// frame has no position, and that is a stall too. For an image item the answer
+// only records a move (see checkWatchdog). Its first position is not a move.
 func (s *Supervisor) onTimePos(value float64, pos bool, now time.Time) {
 	it, ok := s.current()
-	if !ok || it.Kind != kindVideo {
+	if !ok {
 		return
 	}
 	if pos && (!s.posKnown || value != s.lastPos) {
-		s.lastPos, s.posKnown, s.lastMove = value, true, now
+		if s.posKnown || it.Kind == kindVideo {
+			s.lastMove = now
+		}
+		s.lastPos, s.posKnown = value, true
+		return
+	}
+	if it.Kind != kindVideo {
 		return
 	}
 	set := s.opt.Watchdog()

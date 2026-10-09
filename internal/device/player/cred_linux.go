@@ -7,8 +7,11 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
+	"time"
 )
 
 // kioskGroups are the groups that mpv needs: video for /dev/dri/card* and audio
@@ -86,6 +89,93 @@ func lookupKiosk(name string) (uid, gid int, err error) {
 		return 0, 0, fmt.Errorf("the group id of %q is not a number: %w", name, err)
 	}
 	return uid, gid, nil
+}
+
+// killStray stops each process of the kiosk account and waits until they have
+// ended. It gives the number of processes that it stopped.
+//
+// The kiosk account runs mpv and nothing else (D43), so after a stop of our own
+// mpv each process of the account is a stray. A daemon that the kernel stopped
+// for lack of memory, or that a panic ended, leaves its mpv behind: mpv is in a
+// process group of its own, and supervise-daemon starts the daemon again with
+// no stop_post. That mpv holds the DRM master. A new mpv then cannot show a
+// picture, and the DPMS call of the screen power cannot switch the display.
+func killStray(kioskUser string) (int, error) {
+	if kioskUser == "" {
+		return 0, nil
+	}
+	uid, _, err := lookupKiosk(kioskUser)
+	if err != nil {
+		return 0, err
+	}
+	if !sweepable(uid) {
+		return 0, nil
+	}
+	pids := processesOf(uid)
+	for _, pid := range pids {
+		syscall.Kill(pid, syscall.SIGKILL)
+	}
+	// SIGKILL cannot be refused, so the wait is short. The kernel closes the
+	// DRM handle when the process ends, before a parent reaps it.
+	deadline := time.Now().Add(stopGrace)
+	for len(processesOf(uid)) > 0 {
+		if time.Now().After(deadline) {
+			return len(pids), fmt.Errorf("a process of %s did not end after SIGKILL", kioskUser)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return len(pids), nil
+}
+
+// sweepable reports if killStray may stop every process of an account. root and
+// the account of the daemon run more than mpv, and this daemon is one of their
+// processes, so a kiosk user with such a name is never swept.
+func sweepable(uid int) bool { return uid != 0 && uid != os.Getuid() }
+
+// processesOf gives the process IDs of the live processes of a user. A zombie
+// is not live: it holds no file any more.
+func processesOf(uid int) []int {
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var pids []int
+	for _, e := range entries {
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil {
+			continue
+		}
+		status, err := os.ReadFile(filepath.Join("/proc", e.Name(), "status"))
+		if err != nil {
+			continue // the process ended
+		}
+		if owner, live := statusOwner(string(status)); live && owner == uid {
+			pids = append(pids, pid)
+		}
+	}
+	return pids
+}
+
+// statusOwner reads /proc/<pid>/status. It gives the real user ID, and false
+// for a zombie or a text that it cannot read.
+func statusOwner(status string) (int, bool) {
+	uid, live := -1, true
+	for _, line := range strings.Split(status, "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(value)
+		switch {
+		case key == "State" && len(fields) > 0:
+			live = fields[0] != "Z" && fields[0] != "X"
+		case key == "Uid" && len(fields) > 0:
+			if n, err := strconv.Atoi(fields[0]); err == nil {
+				uid = n
+			}
+		}
+	}
+	return uid, live && uid >= 0
 }
 
 // terminate stops the whole process group. The minus sign in front of the

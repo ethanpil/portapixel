@@ -82,4 +82,28 @@ func TestDisplaySize(t *testing.T) {
 	if w, h := displaySize(t.TempDir(), "", 0); w != defaultWidth || h != defaultHeight {
 		t.Errorf("with no connector the size is %dx%d, want %dx%d", w, h, defaultWidth, defaultHeight)
 	}
+	// The fallback picture is drawn at this size, so a large mode must not cost
+	// gigabytes. A mode that config.Validate refuses still comes here from an
+	// older file or a test, so the limit is here too.
+	if w, h := displaySize(root, "99999x99999", 0); w != 2160 || h != 2160 {
+		t.Errorf("a huge mode gives %dx%d, want 2160x2160", w, h)
+	}
+}
+
+func TestRenderSize(t *testing.T) {
+	tests := []struct{ w, h, wantW, wantH int }{
+		{1920, 1080, 1920, 1080},
+		{3840, 2160, 3840, 2160},
+		{2160, 3840, 2160, 3840}, // a turned 4K screen
+		{7680, 4320, 3840, 2160}, // 8K: the same shape at 4K
+		{4320, 7680, 2160, 3840},
+		{1920, 158, 2916, 240}, // a bar display: fallback.Render needs 240 lines
+		{200, 100, 480, 240},
+		{8192, 1, 3840, 0}, // no shape fits both limits; the memory limit wins
+	}
+	for _, tt := range tests {
+		if w, h := renderSize(tt.w, tt.h); w != tt.wantW || h != tt.wantH {
+			t.Errorf("renderSize(%d, %d) = %dx%d, want %dx%d", tt.w, tt.h, w, h, tt.wantW, tt.wantH)
+		}
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"image/color"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/basicfont"
@@ -144,19 +145,37 @@ func spacedWidth(face font.Face, text string, spacing float64) int {
 }
 
 // fit cuts a text so that it fits in maxW pixels. It puts "…" at the cut.
+//
+// It measures each character one time to find the cut. The first version took
+// one character away at a time and measured the rest again. The warning line
+// has no length limit, so a warning of some thousand characters then held the
+// player loop for seconds at each new minute. Kerning can make the text a little
+// wider than the sum of its characters, so the last loop checks the result.
 func fit(face font.Face, text string, maxW int) string {
 	if width(face, text) <= maxW {
 		return text
 	}
-	runes := []rune(text)
-	for len(runes) > 0 {
-		runes = runes[:len(runes)-1]
-		cut := strings.TrimRight(string(runes), " ") + "…"
+	room := fixed.I(maxW) - font.MeasureString(face, "…")
+	var used fixed.Int26_6
+	end := 0
+	for i, r := range text {
+		used += font.MeasureString(face, string(r))
+		if used > room {
+			break
+		}
+		end = i + utf8.RuneLen(r)
+	}
+	for {
+		cut := strings.TrimRight(text[:end], " ") + "…"
 		if width(face, cut) <= maxW {
 			return cut
 		}
+		if end == 0 {
+			return ""
+		}
+		_, size := utf8.DecodeLastRuneInString(text[:end])
+		end -= size
 	}
-	return ""
 }
 
 // wrap breaks the words of a text into lines that fit in maxW pixels. A text

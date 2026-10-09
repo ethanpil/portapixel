@@ -3,6 +3,7 @@ package player
 import (
 	"bufio"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +18,17 @@ const DefaultDRMRoot = "/sys/class/drm"
 const (
 	defaultWidth  = 1920
 	defaultHeight = 1080
+)
+
+// The limits of the fallback picture. mpv scales the picture to the screen and
+// keeps its shape, so the picture need not have the size of the screen. A 4K
+// picture takes 33 MB to draw; a picture of 8K or more costs memory that a small
+// device does not have. fallback.Render refuses a picture under 320x240.
+const (
+	renderLong  = 3840 // the longest side
+	renderShort = 2160 // the shortest side
+	renderMinW  = 320
+	renderMinH  = 240
 )
 
 // glDrivers are the kernel drivers that have a hardware OpenGL driver in Mesa.
@@ -102,7 +114,7 @@ func DisplayConnected(drmRoot string) bool {
 // display.video_mode wins, because mpv uses it. Else the first mode of the first
 // connected connector, which is the mode that the display prefers and the mode
 // that mpv takes. Else 1920x1080. A rotation of 90 or 270 degrees turns the
-// screen, so the picture is tall.
+// screen, so the picture is tall. renderSize then keeps the size in limits.
 func displaySize(drmRoot, videoMode string, rotation int) (int, int) {
 	w, h, ok := parseMode(videoMode)
 	if !ok {
@@ -114,7 +126,24 @@ func displaySize(drmRoot, videoMode string, rotation int) (int, int) {
 	if rotation == 90 || rotation == 270 {
 		w, h = h, w
 	}
-	return w, h
+	return renderSize(w, h)
+}
+
+// renderSize keeps the shape of w x h and scales it into the limits of the
+// fallback picture. A very small or a very narrow screen, for example a bar
+// display of 1920x158, gets a larger picture: with no fallback picture the
+// health marker of an update never comes. A very large mode gets a smaller
+// picture. The upper limit is the last step, so it always applies: it protects
+// the memory of the device.
+func renderSize(w, h int) (int, int) {
+	fw, fh := float64(w), float64(h)
+	if up := max(renderMinW/fw, renderMinH/fh); up > 1 {
+		fw, fh = fw*up, fh*up
+	}
+	if down := min(renderLong/max(fw, fh), renderShort/min(fw, fh)); down < 1 {
+		fw, fh = fw*down, fh*down
+	}
+	return int(math.Round(fw)), int(math.Round(fh))
 }
 
 // connectorMode reads the first mode of the first connected connector.

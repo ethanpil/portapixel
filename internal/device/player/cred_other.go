@@ -30,6 +30,14 @@ func ownBy(path, kioskUser string) error {
 	return nil
 }
 
+// killStray has no work away from Linux: there is no kiosk account.
+func killStray(kioskUser string) (int, error) {
+	if kioskUser != "" {
+		return 0, errNoKiosk
+	}
+	return 0, nil
+}
+
 // terminate stops one process. There are no process groups here.
 func terminate(pid int, hard bool) error {
 	p, err := os.FindProcess(pid)
