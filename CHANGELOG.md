@@ -12,6 +12,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ### Changed
 
+- Offer 22 transitions: add fade-white, slide-in and slide-out in four directions, zoom-out and split (a2c927b). An item can name its own transition (4e4b5b2). New playlist option `ken_burns`, a slow zoom on images with gpu output (8f1a5c7, 0917424).
 - Offer eleven transitions again: cut, fade, crossfade, wipe and push in four directions (8c62018, 4c5e688). A crossfade from a video moves on x86 and on a Pi 5, with a guard (1325177, `playback.motion`). Fix 4 findings of the review (e605abf to 9437262).
 - Decode H.264 in hardware on a Raspberry Pi (90bfce7, 38fecb1). Hide the text console (61128f7, 3c0744b). Give a 512 MB Pi 128 MB of CMA (61128f7).
 - The release workflow uses the `PORTAPIXEL_MINISIGN_*` names, and a tag `vX.Y.Z-rc.N` publishes a signed pre-release (ec1d5b7). Fix 3 findings of the stage 3 review (caf3472 to a9f891e).
