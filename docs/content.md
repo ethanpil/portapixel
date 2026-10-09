@@ -48,7 +48,8 @@ A playlist can set its own transition, which replaces the device's default
 transition for that playlist only. An item can set its own `transition` and
 `transition_ms`: they are the transition into that item, from the item before
 it. An item with nothing set uses the playlist, and the playlist with nothing
-set uses the device. The choices are `cut`, `fade`, `fade-white`, `crossfade`,
+set uses the device. When the playlist is shuffled, an item keeps its own
+transition, but the item before it can be any other item. The choices are `cut`, `fade`, `fade-white`, `crossfade`,
 `wipe-*`, `push-*`, `slide-in-*`, `slide-out-*`, `zoom-out` and `split`, where
 `*` is `left`, `right`, `up` or `down`.
 
