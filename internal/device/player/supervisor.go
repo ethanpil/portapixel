@@ -702,6 +702,9 @@ func (s *Supervisor) handleExit(now time.Time) {
 		s.expectExit = true
 		reason := s.proc.exitReason()
 		s.log("player.exit", reason)
+		// No mpv runs until the next launch, which can wait for the backoff.
+		// The state said "running" for that time.
+		s.setState(StateStopped, reason)
 		s.drainOpens()
 		s.markCrashed()
 		s.resumeFrom = s.resumePoint(resumeNext)

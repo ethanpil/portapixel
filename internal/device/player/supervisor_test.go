@@ -597,6 +597,17 @@ func TestResumePointDoesNotOutliveAFallbackScreen(t *testing.T) {
 	h.waitPlaying(0)
 }
 
+// An mpv that ends before its first picture waits for the launch backoff, and
+// no mpv runs in that time. /api/status said "running" for it.
+func TestAnExitIsStoppedDuringTheBackoff(t *testing.T) {
+	h := newHarness(t, playlist("lobby", "fade", 400, library.ManifestItem{Name: "crash.mp4"}), nil)
+	waitFor(t, "the exit", func() bool { return h.countEvent("player.exit") == 1 })
+	waitFor(t, "the state stopped", func() bool { return h.sup.State().Player == StateStopped })
+	if h.sup.proc.alive() {
+		t.Fatal("mpv runs in the backoff")
+	}
+}
+
 // An mpv that does not answer its IPC (SIGSTOP, a dead lock) is restarted.
 func TestRestartWhenIPCIsSilent(t *testing.T) {
 	h := newHarness(t, videos(), nil)
