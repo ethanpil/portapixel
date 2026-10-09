@@ -88,6 +88,7 @@ func TestRoundTrip(t *testing.T) {
 					Title:      "Lobby loop",
 					Transition: "cut",
 					Shuffle:    &shuffle,
+					KenBurns:   true,
 					Items: []Item{
 						{SHA256: "aa", Duration: 15},
 						{SHA256: "bb", Mute: true, MaxDuration: 60, Transition: "split", TransitionMS: 900},

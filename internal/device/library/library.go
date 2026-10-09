@@ -66,6 +66,7 @@ type Playlist struct {
 	Title      string `json:"title"`
 	Transition string `json:"transition,omitempty"`
 	Shuffle    *bool  `json:"shuffle,omitempty"`
+	KenBurns   bool   `json:"ken_burns,omitempty"`
 	Items      []Item `json:"items"`
 	// Fleet is true for a playlist under _fleet. The local admin cannot edit it.
 	Fleet bool `json:"fleet"`
@@ -442,6 +443,7 @@ func (l *Library) readPlaylist(snap *Snapshot, name, dir string, fleet bool) {
 		Title:       p.Meta.Name,
 		Transition:  p.Meta.Transition,
 		Shuffle:     p.Meta.Shuffle,
+		KenBurns:    p.Meta.KenBurns,
 		Fleet:       fleet,
 		Unscheduled: snap.Paired && !fleet,
 		dir:         dir,

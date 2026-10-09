@@ -22,7 +22,10 @@ type ManifestPlaylist struct {
 	Transition   string
 	TransitionMS int
 	Shuffle      bool
-	Items        []ManifestItem
+	// KenBurns is the choice of the playlist. The player decides if the output
+	// can show it.
+	KenBurns bool
+	Items    []ManifestItem
 }
 
 // ManifestItem is one item that the player can show. Index is the position in
@@ -121,6 +124,7 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 			Transition:   transition,
 			TransitionMS: cfg.Playback.TransitionMS,
 			Shuffle:      shuffle,
+			KenBurns:     p.KenBurns,
 			Items:        items,
 		},
 	}

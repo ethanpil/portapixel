@@ -464,6 +464,47 @@ type manifestItem struct {
 	ms   int
 }
 
+// Ken Burns is a choice of the playlist. It goes to the table, and on to the
+// manifest of a device.
+func TestKenBurnsReachesTheManifest(t *testing.T) {
+	f := newFixture(t)
+	on, err := f.d.SavePlaylist(Playlist{Title: "photos", KenBurns: true,
+		Items: []PlaylistItem{{SHA256: testSHA, Name: "a.jpg"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p, err := f.d.Playlist(on); err != nil || !p.KenBurns {
+		t.Fatalf("the saved playlist has ken burns %v (%v), want on", p.KenBurns, err)
+	}
+	if p, err := f.d.Playlist(f.loop); err != nil || p.KenBurns {
+		t.Fatalf("a playlist that did not ask has ken burns %v (%v), want off", p.KenBurns, err)
+	}
+
+	dev := f.device(t, "px-kenburns1", f.lobby)
+	if err := f.d.SetDeviceOverrides(dev.ID, on, "", "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if dev, err = f.d.Device(dev.ID); err != nil {
+		t.Fatal(err)
+	}
+	m, err := f.d.Manifest(dev, opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, pl := range m.Playlists {
+		if pl.Name == "photos" {
+			found = true
+			if !pl.KenBurns {
+				t.Errorf("the manifest playlist %+v must have ken burns on", pl)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("the manifest has no playlist photos: %+v", m.Playlists)
+	}
+}
+
 func TestPlaylistNamesAreUniqueSlugs(t *testing.T) {
 	f := newFixture(t)
 	// "Lobby loop" is already there and its name is "lobby-loop".

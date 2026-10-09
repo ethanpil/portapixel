@@ -139,6 +139,27 @@ func TestItemTransitionsReachTheLibrary(t *testing.T) {
 	}
 }
 
+// TestKenBurnsReachesTheLibrary follows the choice of the playlist from the
+// manifest to the file that the device writes and to the playlist that the
+// library serves.
+func TestKenBurnsReachesTheLibrary(t *testing.T) {
+	f := newFakeServer(t)
+	ref := f.addObject("sign.jpg", "a picture")
+	m := lobbyManifest(ref)
+	m.Playlists[0].KenBurns = true
+	f.setManifest(m)
+
+	d := pairedDev(t, f)
+	d.s.Once(context.Background())
+
+	if text := d.readFleetPlaylist("lobby"); !strings.Contains(text, "ken_burns = true") {
+		t.Errorf("the fleet playlist is:\n%s", text)
+	}
+	if p, ok := d.lib.Snapshot().Find("lobby"); !ok || !p.KenBurns {
+		t.Errorf("the library serves %+v (%v), want ken burns on", p, ok)
+	}
+}
+
 // TestAnOldTransitionWordFromTheServerIsGood covers a server that a stage 1
 // build ran: it can still send crossfade and push-*. Those words are
 // transitions again, so the playlist must render and load with no fault.

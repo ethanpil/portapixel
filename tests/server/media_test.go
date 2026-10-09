@@ -267,6 +267,36 @@ func TestPlaylistValidationOverTheAPI(t *testing.T) {
 	}
 }
 
+// Ken Burns is a choice of the playlist. The editor sends the whole playlist at
+// each save, so a save with no ken_burns key turns it off.
+func TestPlaylistKenBurnsOverTheAPI(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	sha := f.uploadMedia("a.png", imageBytes(t, 10, 10))
+	items := []any{map[string]any{"sha256": sha, "name": "a.png", "duration": 10}}
+
+	res := f.mustOK(f.adminCall(http.MethodPost, "/api/admin/playlists", map[string]any{
+		"title": "Photos", "ken_burns": true, "items": items,
+	}), "make the playlist")
+	var p struct {
+		ID       int64 `json:"id"`
+		KenBurns bool  `json:"ken_burns"`
+	}
+	res.json(t, &p)
+	if !p.KenBurns {
+		t.Fatalf("the new playlist has ken burns off: %s", res.body)
+	}
+
+	res = f.mustOK(f.adminCall(http.MethodPut, "/api/admin/playlists/"+itoa(p.ID), map[string]any{
+		"title": "Photos", "items": items,
+	}), "save the playlist again")
+	p.KenBurns = true
+	res.json(t, &p)
+	if p.KenBurns {
+		t.Fatalf("a save with no ken_burns key left it on: %s", res.body)
+	}
+}
+
 func TestPlaylistSaveAndDeviceCount(t *testing.T) {
 	f := newFleet(t)
 	f.login()

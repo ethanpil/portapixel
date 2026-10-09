@@ -134,6 +134,7 @@ export function mount(main, ctx) {
         name: p.title,
         transition: p.transition || '',
         shuffle: p.shuffle === undefined ? null : p.shuffle,
+        ken_burns: !!p.ken_burns,
         items: p.items.map(forEditor),
       },
       capabilities: {
@@ -217,6 +218,7 @@ export function mount(main, ctx) {
       title,
       transition: edited.transition || '',
       shuffle: edited.shuffle === null ? null : !!edited.shuffle,
+      ken_burns: !!edited.ken_burns,
       items: edited.items.map(forServer).filter(Boolean),
     };
     let saved;
@@ -240,6 +242,7 @@ export function mount(main, ctx) {
       name: saved.title,
       transition: saved.transition || '',
       shuffle: saved.shuffle === undefined ? null : saved.shuffle,
+      ken_burns: !!saved.ken_burns,
       items: (saved.items || []).map(forEditor),
     };
   }
@@ -319,6 +322,7 @@ export function mount(main, ctx) {
         title: titleIn.value.trim() || p.title,
         transition: p.transition || '',
         shuffle: p.shuffle === undefined ? null : p.shuffle,
+        ken_burns: !!p.ken_burns,
         items: p.items.map(forEditor).map(forServer).filter(Boolean),
       });
       toast('Renamed.');

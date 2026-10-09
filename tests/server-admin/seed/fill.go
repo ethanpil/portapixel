@@ -170,32 +170,33 @@ type item map[string]any
 func makePlaylists(c *client, media map[string]string) (map[string]int64, error) {
 	// Each playlist has a different transition, so the editor shows a few of
 	// the words of config.Transitions. A few items name their own transition
-	// and their own length.
+	// and their own length, and one playlist asks for Ken Burns.
 	wanted := []struct {
 		title      string
 		transition string
+		kenBurns   bool
 		items      []item
 	}{
-		{"Lobby loop", "crossfade", []item{
+		{"Lobby loop", "crossfade", true, []item{
 			{"sha256": media["welcome-autumn.jpg"], "name": "welcome-autumn.jpg", "duration": 15},
 			{"sha256": media["lobby-hours.jpg"], "name": "lobby-hours.jpg", "duration": 12},
 			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false,
 				"transition": "slide-in-left", "transition_ms": 700},
 		}},
-		{"Safety loop", "fade", []item{
+		{"Safety loop", "fade", false, []item{
 			{"sha256": media["safety-notice-1.png"], "name": "safety-notice-1.png", "duration": 20},
 			{"sha256": media["safety-notice-2.png"], "name": "safety-notice-2.png", "duration": 20},
 			{"sha256": media["safety-brief-4k-hevc.mp4"], "name": "safety-brief-4k-hevc.mp4", "mute": true},
 		}},
-		{"Menu boards", "cut", []item{
+		{"Menu boards", "cut", false, []item{
 			{"sha256": media["menu-board.png"], "name": "menu-board.png", "duration": 30},
 		}},
-		{"Retail promo", "push-left", []item{
+		{"Retail promo", "push-left", false, []item{
 			{"sha256": media["retail-promo.jpg"], "name": "retail-promo.jpg", "duration": 10},
 			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false, "max_duration": 24,
 				"transition": "fade-white"},
 		}},
-		{"Room signs", "wipe-up", []item{
+		{"Room signs", "wipe-up", false, []item{
 			{"sha256": media["room-signs.jpg"], "name": "room-signs.jpg", "duration": 20},
 		}},
 	}
@@ -220,7 +221,7 @@ func makePlaylists(c *client, media map[string]string) (map[string]int64, error)
 		var saved struct {
 			ID int64 `json:"id"`
 		}
-		body := map[string]any{"title": w.title, "transition": w.transition, "items": w.items}
+		body := map[string]any{"title": w.title, "transition": w.transition, "ken_burns": w.kenBurns, "items": w.items}
 		if err := c.call("POST", "/api/admin/playlists", body, &saved); err != nil {
 			return nil, fmt.Errorf("playlist %s: %w", w.title, err)
 		}

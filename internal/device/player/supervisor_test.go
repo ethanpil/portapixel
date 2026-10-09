@@ -134,6 +134,72 @@ func TestItemTransitionsGoToTheEntryBefore(t *testing.T) {
 	check("pptr-kind=fade,pptr-ms=250", "pptr-kind=fade,pptr-ms=400", "pptr-kind=split,pptr-ms=900")
 }
 
+// Ken Burns is a choice of the playlist. On vo=gpu each image that shows for a
+// while gets pptr-kb, the seconds that it shows. A video gets none, a playlist
+// that did not ask gets none, and one image alone (it stays on the screen) gets
+// none.
+func TestKenBurnsGoesToTheImagesOnGPU(t *testing.T) {
+	onGPU := func(o *Options, h *harness) { h.display = DisplaySettings{VideoOutput: OutputGPU} }
+	m := threeItems() // welcome.jpg 15 s, promo.mp4, tour.mp4
+	m.Playlist.KenBurns = true
+	m.Playlist.Items[2].Name, m.Playlist.Items[2].Kind, m.Playlist.Items[2].Duration = "tour.jpg", kindImage, 6
+	h := newHarness(t, m, onGPU)
+	h.waitPlaying(0)
+	d := h.dump()
+	want := []string{
+		"pptr-kind=fade,pptr-ms=400,pptr-kb=15",
+		"pptr-kind=fade,pptr-ms=400",
+		"pptr-kind=fade,pptr-ms=400,pptr-kb=6",
+	}
+	for i, w := range want {
+		if got := d.List[i].Opts["script-opts"]; got != w {
+			t.Errorf("entry %d script-opts = %q, want %q", i, got, w)
+		}
+	}
+	if h.countEvent("player.kenburns.off") != 0 {
+		t.Errorf("the ops log says that Ken Burns is off:\n%s", h.events())
+	}
+
+	// One image alone has no end, so it gets no Ken Burns.
+	one := playlist("one", "fade", 400, library.ManifestItem{Name: "only.jpg"})
+	one.Playlist.KenBurns = true
+	h.setManifest(one)
+	waitFor(t, "the single image", func() bool { item, _ := h.playing(); return item == "only.jpg" })
+	if got := h.dump().List[0].Opts["script-opts"]; got != "pptr-kind=fade,pptr-ms=400" {
+		t.Errorf("one image has script-opts = %q, want no pptr-kb", got)
+	}
+}
+
+func TestNoKenBurnsWhenThePlaylistDoesNotAsk(t *testing.T) {
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) { h.display = DisplaySettings{VideoOutput: OutputGPU} })
+	h.waitPlaying(0)
+	for i, e := range h.dump().List {
+		if strings.Contains(e.Opts["script-opts"], "pptr-kb") {
+			t.Errorf("entry %d has %q", i, e.Opts["script-opts"])
+		}
+	}
+}
+
+// vo=drm scales the picture in software at each step of the zoom, so Ken Burns
+// is off there. The ops log says so one time, and every transition goes on.
+func TestKenBurnsIsOffOnDRM(t *testing.T) {
+	m := threeItems()
+	m.Playlist.KenBurns = true
+	h := newHarness(t, m, nil) // the fake driver is virtio_gpu: vo=drm
+	h.waitPlaying(0)
+	if st := h.sup.State(); st.VideoOutput != OutputDRM {
+		t.Fatalf("the output is %q, want drm", st.VideoOutput)
+	}
+	for i, e := range h.dump().List {
+		if e.Opts["script-opts"] != "pptr-kind=fade,pptr-ms=400" {
+			t.Errorf("entry %d script-opts = %q", i, e.Opts["script-opts"])
+		}
+	}
+	if n := h.countEvent("player.kenburns.off"); n != 1 {
+		t.Errorf("the ops log has %d lines about Ken Burns, want 1:\n%s", n, h.events())
+	}
+}
+
 // One image alone stays on the screen and one video alone loops in its file:
 // neither gets a transition into itself.
 func TestSingleItemsStay(t *testing.T) {

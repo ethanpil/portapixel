@@ -498,8 +498,9 @@ func TestPlaylistCRUDOverTheAPI(t *testing.T) {
 
 	// Save the playlist that names the file.
 	w = f.do(http.MethodPut, "/api/playlists/"+name, map[string]any{
-		"title": "Lobby Loop",
-		"items": []map[string]any{{"file": file, "duration": 12, "transition": "split", "transition_ms": 700}},
+		"title":     "Lobby Loop",
+		"ken_burns": true,
+		"items":     []map[string]any{{"file": file, "duration": 12, "transition": "split", "transition_ms": 700}},
 	})
 	if w.Code != http.StatusOK {
 		t.Fatalf("save gave %d: %s", w.Code, w.Body)
@@ -512,7 +513,7 @@ func TestPlaylistCRUDOverTheAPI(t *testing.T) {
 		t.Fatalf("playlists = %v", playlists)
 	}
 	first := playlists[0].(map[string]any)
-	if first["name"] != name || first["title"] != "Lobby Loop" {
+	if first["name"] != name || first["title"] != "Lobby Loop" || first["ken_burns"] != true {
 		t.Errorf("playlist = %v", first)
 	}
 	items := first["items"].([]any)

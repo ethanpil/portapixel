@@ -33,6 +33,11 @@ func Render(p Playlist) []byte {
 	} else {
 		b.WriteString("# transition = \"cut\"       # Replaces [playback].transition.\n")
 	}
+	if p.Meta.KenBurns {
+		writeLine(&b, "ken_burns", "true", "A slow zoom and pan on each image.")
+	} else {
+		b.WriteString("# ken_burns = true         # A slow zoom and pan on each image.\n")
+	}
 
 	for _, it := range p.Items {
 		b.WriteString("\n[[item]]\n")

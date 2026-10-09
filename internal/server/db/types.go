@@ -122,6 +122,7 @@ type Playlist struct {
 	Title      string         `json:"title"`
 	Transition string         `json:"transition"`
 	Shuffle    *bool          `json:"shuffle"`
+	KenBurns   bool           `json:"ken_burns"`
 	UpdatedAt  time.Time      `json:"updated_at"`
 	Items      []PlaylistItem `json:"items"`
 	// Devices counts the devices that get this playlist. The editor shows it.

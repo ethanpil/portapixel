@@ -554,6 +554,7 @@ func (s *Syncer) buildPlaylist(objects map[string]object, p manifest.Playlist) (
 		Name:       p.Title,
 		Transition: p.Transition,
 		Shuffle:    p.Shuffle,
+		KenBurns:   p.KenBurns,
 	}}
 	if out.Meta.Name == "" {
 		out.Meta.Name = p.Name

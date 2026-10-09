@@ -7,9 +7,11 @@
 --              cut | fade | fade-white | crossfade | wipe-* | push-* | slide-in-* |
 --              slide-out-* | zoom-out | split. The * is left, right, up or down.
 --   pptr-ms    the length of that transition in milliseconds
+--   pptr-kb    Ken Burns, for an image only: the seconds that the image shows
 --
 -- The script uses pptr-kind and pptr-ms of the item that ends. The daemon puts
 -- the transition of the next item there, so an item can name its own transition.
+-- It uses pptr-kb of the item that shows.
 --
 -- How it works. When item A ends, mpv runs the hook on_unload and waits for it.
 -- The hook takes a copy of the screen (screenshot-raw window) and shows it as
@@ -41,6 +43,15 @@
 --
 -- Only fade and fade-white change pixels (a pass of LuaJIT over the copy in the
 -- first half). Each other kind moves, crops or scales an overlay.
+--
+-- Ken Burns. An image with pptr-kb zooms and pans slowly while it shows. The
+-- timer sets video-zoom, video-pan-x and video-pan-y in steps. It starts when the
+-- transition into the image is over, so it does not use video-pan at the same
+-- time as push-* and slide-in-*. The zoom goes in or out. The drift goes to a
+-- random side, and it is small enough that the edge of the picture does not show.
+-- When the image ends, the script puts the copy on top and sets zoom and pan
+-- back to 0 under it. A cut after Ken Burns also holds the copy until the next
+-- item shows its first frame, or the next item would show with the zoom of A.
 --
 -- The moving crossfade. When portapixeld sets user-data/pptr/motion to "yes",
 -- a crossfade from a video A has motion on both sides. The hook on_preloaded of
@@ -83,6 +94,10 @@ local DEADMAN = 5    -- the time that B may take to show, in seconds
 local LEAD = 1       -- the part of A that plays before a moving crossfade, in seconds
 local LATE = 0.25    -- a moving crossfade that stops this much early did not end
 local LEFT = 0.1     -- an item that continues a mix needs this much of itself after it
+local KB_ZOOM = 0.16    -- Ken Burns: the zoom at the far end, as a power of 2 (1.12 times)
+local KB_DRIFT = 0.04   -- Ken Burns: the pan at the far end, as a part of the picture
+local KB_STEP = 0.1     -- Ken Burns: the time between two steps, in seconds
+local KB_MIN = 1        -- Ken Burns needs this many seconds at least
 
 local KINDS = {
     ["fade"] = true, ["fade-white"] = true, ["crossfade"] = true,
@@ -104,6 +119,7 @@ if not (has_ffi and has_bit) then
     return
 end
 
+math.randomseed(os.time() + math.floor(mp.get_time() * 1000))
 local band, bor, rshift, lshift = bit.band, bit.bor, bit.rshift, bit.lshift
 local OPAQUE = -16777216 -- 0xFF000000: alpha 255 in a premultiplied BGRA pixel
 
@@ -114,13 +130,78 @@ local J = nil        -- the item that continues a moving crossfade: {id, at}
 local F = nil        -- a moving crossfade that did not reach its end, until end-file
 local broken = false -- a moving crossfade failed; this mpv makes no more of them
 local moved = 0      -- the count of moving crossfades, for user-data/pptr/moved
+local kbwait = nil   -- Ken Burns of the item on the screen, until its transition is over
+local kb = nil       -- Ken Burns that runs: {t0, span, timer, z0, z1, x0, x1, y0, y1}
+local kbview = false -- Ken Burns changed zoom or pan, and they are not back at 0
+local kbseen = false -- the item on the screen did its first playback-restart
 
 local function addr(ptr)
     return string.format("&%d", tonumber(ffi.cast("uintptr_t", ptr)))
 end
 
+-- kb_view_reset puts zoom and pan back to 0 after Ken Burns.
+local function kb_view_reset()
+    if not kbview then return end
+    kbview = false
+    mp.set_property_number("video-zoom", 0)
+    mp.set_property_number("video-pan-x", 0)
+    mp.set_property_number("video-pan-y", 0)
+end
+
+-- kb_stop stops Ken Burns. The view stays as it is until kb_view_reset.
+local function kb_stop()
+    kbwait = nil
+    if kb then
+        kb.timer:kill()
+        kb = nil
+    end
+end
+
+-- kb_step sets the view for the time now. At the end, the view stays as it is.
+local function kb_step()
+    local ok, err = pcall(function()
+        local t = (mp.get_time() - kb.t0) / kb.span
+        if t >= 1 then
+            t = 1
+            kb.timer:kill()
+        end
+        mp.set_property_number("video-zoom", kb.z0 + (kb.z1 - kb.z0) * t)
+        mp.set_property_number("video-pan-x", kb.x0 + (kb.x1 - kb.x0) * t)
+        mp.set_property_number("video-pan-y", kb.y0 + (kb.y1 - kb.y0) * t)
+    end)
+    if not ok then
+        kb_stop()
+        kb_view_reset()
+        fault("ken burns: error: " .. tostring(err))
+    end
+end
+
+-- kb_begin starts Ken Burns for the rest of the time of the image. It is
+-- called when the transition into the image is over.
+local function kb_begin()
+    local w = kbwait
+    kbwait = nil
+    if not w then return end
+    local left = w.total - (mp.get_time() - w.t0)
+    if left < KB_MIN then return end
+    -- The path goes in or out. The drift is small, so the zoomed picture
+    -- always covers the screen: the overhang at the far end is 5 % of the
+    -- picture on each side, and the drift is 4 % at most.
+    local function side() return math.random() < 0.5 and -1 or 1 end
+    local dx = (0.4 + 0.6 * math.random()) * KB_DRIFT * side()
+    local dy = (0.4 + 0.6 * math.random()) * KB_DRIFT * side()
+    local zoom_in = math.random() < 0.5
+    kb = { t0 = mp.get_time(), span = left,
+        z0 = zoom_in and 0 or KB_ZOOM, z1 = zoom_in and KB_ZOOM or 0,
+        x0 = zoom_in and 0 or dx, x1 = zoom_in and dx or 0,
+        y0 = zoom_in and 0 or dy, y1 = zoom_in and dy or 0 }
+    kbview = true
+    kb.timer = mp.add_periodic_timer(KB_STEP, kb_step)
+    kb_step()
+end
+
 -- finish removes the overlay and ends the transition. why is nil when the
--- transition ended normally.
+-- transition ended normally. Ken Burns of the item on the screen starts here.
 local function finish(why)
     if deadman then deadman:kill(); deadman = nil end
     if not S then return end
@@ -137,6 +218,7 @@ local function finish(why)
     -- collection: the device can have 512 MB.
     collectgarbage()
     if why then fault(kind .. ": " .. why .. "; the transition is a cut") end
+    kb_begin()
 end
 
 -- show puts a part of a picture on the screen: w x h pixels from the byte
@@ -472,6 +554,7 @@ end
 
 -- cover puts the copy of the screen on top before mpv unloads item A.
 local function cover()
+    kb_stop()
     local kind = settle() or mp.get_opt("pptr-kind") or "cut"
     if S then
         if not S.t0 then
@@ -482,7 +565,12 @@ local function cover()
         finish() -- the item was shorter than its transition
     end
     local ms = tonumber(mp.get_opt("pptr-ms") or "") or 0
-    if kind == "cut" or ms <= 0 then return end
+    if kind == "cut" or ms <= 0 then
+        -- A cut after Ken Burns still needs the copy. B would show its first
+        -- frame with the zoom of A, and the zoom goes back to 0 under the copy.
+        if not kbview then return end
+        kind = "join"
+    end
     if kind ~= "join" and not KINDS[kind] then
         fault(kind .. ": this kind is not known; the transition is a cut")
         return
@@ -540,6 +628,9 @@ end)
 
 mp.add_hook("on_unload", 50, function()
     local ok, err = pcall(cover)
+    -- The copy is on top now, or the item ends with a cut. The next item must
+    -- not start with the zoom and the pan of this one.
+    pcall(kb_view_reset)
     if ok then return end
     if S then
         finish("error: " .. tostring(err))
@@ -573,11 +664,28 @@ mp.register_event("end-file", function(e)
     end
 end)
 
+-- kb_arm is called at the first picture of an image that has pptr-kb. Ken
+-- Burns waits for the end of the transition into the image.
+local function kb_arm()
+    if kbseen then return end
+    kbseen = true
+    local total = tonumber(mp.get_opt("pptr-kb") or "")
+    if not total or total < KB_MIN then return end
+    local v = video(false)
+    if not v or not v.image then return end
+    kbwait = { t0 = mp.get_time(), total = total }
+    if not S then kb_begin() end
+end
+
+mp.register_event("start-file", function() kbseen = false end)
+
 mp.register_event("playback-restart", function()
     if S and not S.t0 then
         local ok, err = pcall(start)
         if not ok then finish("error: " .. tostring(err)) end
     end
+    local ok, err = pcall(kb_arm)
+    if not ok then fault("ken burns: error: " .. tostring(err)) end
     if P and not P.shown then
         -- A shows its first frame. Count the dropped frames of the mix only.
         P.shown = true

@@ -5,7 +5,7 @@
    only difference.
 
    The playlist it edits:
-     {name, title, transition, shuffle,
+     {name, title, transition, shuffle, ken_burns,
       items: [{file|sha256, name, kind, duration, mute, max_duration,
                transition, transition_ms, thumb}]}
    An item's transition and transition_ms are the transition INTO that item.
@@ -103,10 +103,21 @@ export function mountPlaylistEditor(el, opts = {}) {
     onChange: () => { pl.shuffle = shuffleBox.checked; touch(); },
   });
 
+  /* Ken Burns is a choice of the playlist and has no device setting, so a plain
+     box is enough. */
+  const kenBox = h('input', {
+    type: 'checkbox', checked: pl.ken_burns === true, disabled: ro,
+    onChange: () => { pl.ken_burns = kenBox.checked; touch(); },
+  });
+
   const head = h('div', { class: 'pp-pe__head' },
     nameInput,
     h('div', { class: 'pp-pe__opt' }, h('span', { text: 'Between items' }), transSelect),
-    h('label', { class: 'pp-check' }, shuffleBox, h('span', { text: 'Shuffle' })));
+    h('label', { class: 'pp-check' }, shuffleBox, h('span', { text: 'Shuffle' })),
+    h('label', {
+      class: 'pp-check',
+      title: 'A slow zoom and pan on each image while it shows. A screen with no graphics driver, for example a virtual machine, shows the images still.',
+    }, kenBox, h('span', { text: 'Slow zoom on images' })));
 
   const itemsSlot = h('div');
   const summary = h('div', { class: 'pp-pe__summary' });
@@ -556,6 +567,7 @@ export function mountPlaylistEditor(el, opts = {}) {
     transSelect.value = pl.transition || '';
     shuffleBox.checked = pl.shuffle === true;
     shuffleBox.indeterminate = pl.shuffle === null || pl.shuffle === undefined;
+    kenBox.checked = pl.ken_burns === true;
   }
 
   function getPlaylist() { return JSON.parse(snapshot(pl)); }
@@ -596,6 +608,7 @@ function adopt(p) {
     // opening a playlist and saving it must not pin the device values into it.
     transition: s.transition || '',
     shuffle: s.shuffle === null || s.shuffle === undefined ? null : !!s.shuffle,
+    ken_burns: s.ken_burns === true,
     items: (s.items || []).map(normalizeItem),
   };
 }
@@ -631,6 +644,7 @@ function snapshot(pl) {
     name: pl.name, title: pl.title,
     transition: pl.transition || undefined,
     shuffle: pl.shuffle === null || pl.shuffle === undefined ? undefined : pl.shuffle,
+    ken_burns: pl.ken_burns === true ? true : undefined,
     items: pl.items.map(snapshotItem),
   });
 }

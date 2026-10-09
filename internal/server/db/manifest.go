@@ -133,6 +133,7 @@ func (d *DB) Manifest(dev Device, opt ManifestOptions) (manifest.Manifest, error
 			Title:      p.Title,
 			Transition: p.Transition,
 			Shuffle:    p.Shuffle,
+			KenBurns:   p.KenBurns,
 			Items:      make([]manifest.Item, 0, len(p.Items)),
 		}
 		for _, it := range p.Items {

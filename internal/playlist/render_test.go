@@ -55,6 +55,13 @@ func TestRenderRoundTrip(t *testing.T) {
 			p:    Playlist{Meta: Meta{Name: "東京 café"}, Items: []Item{{File: "a.jpg"}}},
 		},
 		{
+			name: "ken burns",
+			p: Playlist{
+				Meta:  Meta{Name: "Photos", KenBurns: true},
+				Items: []Item{{File: "a.jpg", Duration: 20}, {File: "b.mp4"}},
+			},
+		},
+		{
 			name: "items with their own transitions",
 			p: Playlist{
 				Meta: Meta{Transition: "fade"},
@@ -98,6 +105,7 @@ func TestRenderHoldsTheStockComments(t *testing.T) {
 		"[playlist]",
 		"# shuffle = true",
 		`# transition = "cut"`,
+		"# ken_burns = true",
 		"[[item]]",
 	} {
 		if !strings.Contains(out, want) {
@@ -108,16 +116,16 @@ func TestRenderHoldsTheStockComments(t *testing.T) {
 
 func TestRenderCommentsGoAwayWhenAKeyIsSet(t *testing.T) {
 	p := Playlist{
-		Meta:  Meta{Name: "a", Shuffle: boolPtr(true), Transition: "cut"},
+		Meta:  Meta{Name: "a", Shuffle: boolPtr(true), Transition: "cut", KenBurns: true},
 		Items: []Item{{File: "a.mp4", MaxDuration: 30}},
 	}
 	out := string(Render(p))
-	for _, bad := range []string{"# shuffle", "# transition", "# max_duration"} {
+	for _, bad := range []string{"# shuffle", "# transition", "# max_duration", "# ken_burns"} {
 		if strings.Contains(out, bad) {
 			t.Errorf("the output must not hold %q when the key has a value:\n%s", bad, out)
 		}
 	}
-	for _, want := range []string{"shuffle = true", `transition = "cut"`, "max_duration = 30"} {
+	for _, want := range []string{"shuffle = true", `transition = "cut"`, "max_duration = 30", "ken_burns = true"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("the output must hold %q:\n%s", want, out)
 		}

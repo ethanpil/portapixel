@@ -256,3 +256,25 @@ test('a read-only editor shows the transition of an item only when the item has 
   assert.equal(select.disabled, true);
   assert.equal(select.value, 'cut');
 });
+
+test('Ken Burns is a box of the playlist, and the choice goes to the saved playlist', () => {
+  const { el, editor } = mount({ ...twoItems(), ken_burns: true });
+  const box = findAll(el, (n) => String(n.attrs.title || '').startsWith('A slow zoom'))[0].children[0];
+  assert.equal(box.checked, true);
+  assert.equal(editor.getPlaylist().ken_burns, true);
+  assert.equal(editor.isDirty(), false);
+
+  box.checked = false;
+  box.listeners.change();
+  assert.equal(editor.isDirty(), true);
+  assert.ok(!editor.getPlaylist().ken_burns);
+
+  // A playlist that does not ask starts with the box off and clean.
+  const plain = mount(twoItems());
+  const plainBox = findAll(plain.el, (n) => String(n.attrs.title || '').startsWith('A slow zoom'))[0].children[0];
+  assert.equal(plainBox.checked, false);
+  plainBox.checked = true;
+  plainBox.listeners.change();
+  assert.equal(plain.editor.getPlaylist().ken_burns, true);
+  assert.equal(plain.editor.isDirty(), true);
+});

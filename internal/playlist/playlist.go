@@ -27,6 +27,9 @@ type Meta struct {
 	// portapixel.toml. A nil or empty value means "use the device value".
 	Shuffle    *bool  `toml:"shuffle,omitempty" json:"shuffle,omitempty"`
 	Transition string `toml:"transition,omitempty" json:"transition,omitempty"`
+	// KenBurns turns on a slow zoom and pan on each image of the playlist while
+	// it shows. The device has no setting for it: it is a choice of the playlist.
+	KenBurns bool `toml:"ken_burns,omitempty" json:"ken_burns,omitempty"`
 }
 
 // Item is one [[item]] table: one image or video file.

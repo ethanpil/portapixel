@@ -706,6 +706,33 @@ transition_ms = 250
 	}
 }
 
+// Ken Burns is a choice of the playlist file. The manifest passes it on, and a
+// playlist that did not ask for it stays off.
+func TestBuildManifestKeepsKenBurns(t *testing.T) {
+	f := newFixture(t)
+	f.dir(t, "on", `[playlist]
+ken_burns = true
+[[item]]
+file = "a.jpg"
+`, "a.jpg")
+	f.dir(t, "off", `[[item]]
+file = "a.jpg"
+`, "a.jpg")
+	snap := f.lib.Rescan()
+	for name, want := range map[string]bool{"on": true, "off": false} {
+		p, ok := snap.Find(name)
+		if !ok {
+			t.Fatalf("the playlist %s is not in the snapshot", name)
+		}
+		if p.KenBurns != want {
+			t.Errorf("the library has ken_burns = %v for %s, want %v", p.KenBurns, name, want)
+		}
+		if m := BuildManifest(&p, config.Default(), 1); m.Playlist == nil || m.Playlist.KenBurns != want {
+			t.Errorf("the manifest has %+v for %s, want ken burns %v", m.Playlist, name, want)
+		}
+	}
+}
+
 func TestBuildManifestFallback(t *testing.T) {
 	cfg := config.Default()
 	if m := BuildManifest(nil, cfg, 1); !m.Fallback || m.Playlist != nil {

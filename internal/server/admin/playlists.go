@@ -58,6 +58,7 @@ func (d Deps) savePlaylist(w http.ResponseWriter, r *http.Request, id int64) {
 		Title      string            `json:"title"`
 		Transition string            `json:"transition"`
 		Shuffle    *bool             `json:"shuffle"`
+		KenBurns   bool              `json:"ken_burns"`
 		Items      []db.PlaylistItem `json:"items"`
 	}
 	if !httpjson.Read(w, r, &body) {
@@ -65,7 +66,7 @@ func (d Deps) savePlaylist(w http.ResponseWriter, r *http.Request, id int64) {
 	}
 	newID, err := d.DB.SavePlaylist(db.Playlist{
 		ID: id, Name: body.Name, Title: body.Title,
-		Transition: body.Transition, Shuffle: body.Shuffle, Items: body.Items,
+		Transition: body.Transition, Shuffle: body.Shuffle, KenBurns: body.KenBurns, Items: body.Items,
 	})
 	if err != nil {
 		fail(w, err)

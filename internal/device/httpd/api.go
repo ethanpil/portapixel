@@ -158,13 +158,14 @@ func (d Deps) putPlaylist(w http.ResponseWriter, r *http.Request) {
 		Title      string          `json:"title"`
 		Transition string          `json:"transition"`
 		Shuffle    *bool           `json:"shuffle"`
+		KenBurns   bool            `json:"ken_burns"`
 		Items      []playlist.Item `json:"items"`
 	}
 	if !readJSON(w, r, &body) {
 		return
 	}
 	p := playlist.Playlist{
-		Meta:  playlist.Meta{Name: body.Title, Transition: body.Transition, Shuffle: body.Shuffle},
+		Meta:  playlist.Meta{Name: body.Title, Transition: body.Transition, Shuffle: body.Shuffle, KenBurns: body.KenBurns},
 		Items: body.Items,
 	}
 	if err := d.Library.SavePlaylist(r.PathValue("name"), p); err != nil {

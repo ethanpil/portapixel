@@ -180,6 +180,7 @@ export function mount(main, ctx) {
         name: p.title,
         transition: p.transition || '',
         shuffle: p.shuffle === undefined ? null : p.shuffle,
+        ken_burns: !!p.ken_burns,
         items: p.items.map(forEditor),
       },
       readOnly,
@@ -258,6 +259,7 @@ export function mount(main, ctx) {
     const body = {
       title: (edited.name || '').trim() || p.title,
       transition: edited.transition || '',
+      ken_burns: !!edited.ken_burns,
       items: edited.items.filter((it) => it.file).map(forDevice),
     };
     if (edited.shuffle === true || edited.shuffle === false) body.shuffle = edited.shuffle;

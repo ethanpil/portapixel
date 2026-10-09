@@ -47,6 +47,7 @@ type Playlist struct {
 	Title      string `json:"title"`
 	Transition string `json:"transition,omitempty"` // a word of config.Transitions; empty = the device setting
 	Shuffle    *bool  `json:"shuffle,omitempty"`
+	KenBurns   bool   `json:"ken_burns,omitempty"` // a slow zoom and pan on each image
 	Items      []Item `json:"items"`
 }
 

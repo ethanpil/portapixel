@@ -31,7 +31,7 @@ func (e Errors) Error() string {
 
 // Playlists gives every playlist with its items.
 func (d *DB) Playlists() ([]Playlist, error) {
-	rows, err := d.r.Query(`SELECT id, name, title, transition, shuffle, updated_at
+	rows, err := d.r.Query(`SELECT id, name, title, transition, shuffle, ken_burns, updated_at
 		FROM playlists ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -79,7 +79,7 @@ func (d *DB) Playlist(id int64) (Playlist, error) {
 // callers only. An error in an admin-only count must also never stop a manifest:
 // then one bad number would take the whole fleet off the air.
 func (d *DB) PlaylistNoCount(id int64) (Playlist, error) {
-	row := d.r.QueryRow(`SELECT id, name, title, transition, shuffle, updated_at
+	row := d.r.QueryRow(`SELECT id, name, title, transition, shuffle, ken_burns, updated_at
 		FROM playlists WHERE id = ?`, id)
 	p, err := scanPlaylist(row)
 	if errors.Is(err, sql.ErrNoRows) {
@@ -96,11 +96,13 @@ func scanPlaylist(s interface{ Scan(...any) error }) (Playlist, error) {
 	var (
 		p         Playlist
 		shuffle   int
+		kenBurns  int
 		updatedAt string
 	)
-	if err := s.Scan(&p.ID, &p.Name, &p.Title, &p.Transition, &shuffle, &updatedAt); err != nil {
+	if err := s.Scan(&p.ID, &p.Name, &p.Title, &p.Transition, &shuffle, &kenBurns, &updatedAt); err != nil {
 		return Playlist{}, err
 	}
+	p.KenBurns = kenBurns != 0
 	if shuffle >= 0 {
 		v := shuffle != 0
 		p.Shuffle = &v
@@ -203,6 +205,10 @@ func (d *DB) SavePlaylist(p Playlist) (int64, error) {
 	if title == "" {
 		title = name
 	}
+	kenBurns := 0
+	if p.KenBurns {
+		kenBurns = 1
+	}
 
 	tx, err := d.w.Begin()
 	if err != nil {
@@ -222,8 +228,8 @@ func (d *DB) SavePlaylist(p Playlist) (int64, error) {
 	id := p.ID
 	stamp := d.stamp(d.now())
 	if id == 0 {
-		res, err := tx.Exec(`INSERT INTO playlists (name, title, transition, shuffle, updated_at)
-			VALUES (?, ?, ?, ?, ?)`, name, title, p.Transition, shuffle, stamp)
+		res, err := tx.Exec(`INSERT INTO playlists (name, title, transition, shuffle, ken_burns, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?)`, name, title, p.Transition, shuffle, kenBurns, stamp)
 		if err != nil {
 			return 0, err
 		}
@@ -232,7 +238,8 @@ func (d *DB) SavePlaylist(p Playlist) (int64, error) {
 		}
 	} else {
 		res, err := tx.Exec(`UPDATE playlists SET name = ?, title = ?, transition = ?,
-			shuffle = ?, updated_at = ? WHERE id = ?`, name, title, p.Transition, shuffle, stamp, id)
+			shuffle = ?, ken_burns = ?, updated_at = ? WHERE id = ?`,
+			name, title, p.Transition, shuffle, kenBurns, stamp, id)
 		if err != nil {
 			return 0, err
 		}
@@ -275,7 +282,7 @@ func (d *DB) SavePlaylist(p Playlist) (int64, error) {
 func (d *DB) validatePlaylist(p Playlist) Errors {
 	var errs Errors
 	local := playlist.Playlist{
-		Meta:  playlist.Meta{Name: p.Title, Transition: p.Transition, Shuffle: p.Shuffle},
+		Meta:  playlist.Meta{Name: p.Title, Transition: p.Transition, Shuffle: p.Shuffle, KenBurns: p.KenBurns},
 		Items: make([]playlist.Item, len(p.Items)),
 	}
 	for i, it := range p.Items {

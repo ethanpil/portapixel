@@ -1056,6 +1056,15 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	}
 	s.fb.failed = false // the content takes the place of the fallback screen
 	s.newList(&loaded{playlist: p, offset: start, single: n == 1})
+	// Ken Burns runs on vo=gpu only. On vo=drm, mpv scales the picture in
+	// software at each step of the zoom. That took a quarter of a fast core at 10
+	// steps in a second in the lab, and a Pi Zero 2 W has far less. The copy of the
+	// screen for the next transition also does not show the zoom there.
+	kenBurns := p.KenBurns && s.output == OutputGPU
+	if p.KenBurns && !kenBurns {
+		s.logRepeat("player.kenburns.off", p.Name, p.Name+": Ken Burns is off, because the video output is "+
+			s.output+" and not "+OutputGPU)
+	}
 	// mpv loads the first file of a replace at once and the others behind it. The
 	// list starts at the resume item, and mpv loops it, so the order of the loop
 	// stays the order of the playlist.
@@ -1066,7 +1075,7 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 			mode = "replace"
 		}
 		next := p.Items[(idx+1)%n]
-		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p.Items[idx], next, n == 1, s.model)) {
+		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p.Items[idx], next, kenBurns, n == 1, s.model)) {
 			// A write that fails waited for its time limit. The next ones would wait
 			// as long each. The silence rule restarts mpv.
 			break
@@ -1082,8 +1091,15 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 // next is the item after this one in the list. The script works when this item
 // ends, so it takes the transition INTO the next item from the options of this
 // item. The list loops, so the last item gets the transition into the first.
-func fileOptions(it, next library.ManifestItem, single bool, model string) map[string]string {
-	opts := map[string]string{"script-opts": scriptOpts(next.Transition, next.TransitionMS)}
+//
+// kenBurns says that the playlist asks for it and that the output can show it.
+// The script then zooms and pans the image while it shows, for the duration.
+func fileOptions(it, next library.ManifestItem, kenBurns, single bool, model string) map[string]string {
+	kb := 0
+	if kenBurns && it.Kind == kindImage && !single {
+		kb = it.Duration
+	}
+	opts := map[string]string{"script-opts": scriptOpts(next.Transition, next.TransitionMS, kb)}
 	switch it.Kind {
 	case kindImage:
 		// One image alone stays on the screen. Nothing needs to change, and a
@@ -1113,9 +1129,14 @@ func fileOptions(it, next library.ManifestItem, single bool, model string) map[s
 }
 
 // scriptOpts gives the options of transitions.lua. The script is the only user
-// of script-opts, because a per-file value replaces the whole list.
-func scriptOpts(kind string, ms int) string {
-	return "pptr-kind=" + kind + ",pptr-ms=" + strconv.Itoa(ms)
+// of script-opts, because a per-file value replaces the whole list. kb is the
+// time in seconds that an image shows with Ken Burns, or 0 for no Ken Burns.
+func scriptOpts(kind string, ms, kb int) string {
+	opts := "pptr-kind=" + kind + ",pptr-ms=" + strconv.Itoa(ms)
+	if kb > 0 {
+		opts += ",pptr-kb=" + strconv.Itoa(kb)
+	}
+	return opts
 }
 
 // newList starts a new list generation. The answers to the requests of the old
@@ -1178,7 +1199,7 @@ func (s *Supervisor) drawFallback(now time.Time) bool {
 	s.newList(&loaded{fallback: true})
 	s.request(now, reqLoad, -1, "loadfile", s.opt.Command.FallbackPath(), "replace", -1, map[string]string{
 		"image-display-duration": "inf",
-		"script-opts":            scriptOpts("cut", 0),
+		"script-opts":            scriptOpts("cut", 0, 0),
 	})
 	return true
 }

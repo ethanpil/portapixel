@@ -247,6 +247,55 @@ func TestMigrationThreeAddsTheItemTransition(t *testing.T) {
 	}
 }
 
+// TestMigrationFourAddsKenBurns opens a file at schema version 3. A playlist that
+// the file holds stays off, and a playlist that is saved after the open keeps the
+// choice.
+func TestMigrationFourAddsKenBurns(t *testing.T) {
+	sha := strings.Repeat("a", 64)
+	path := fileAtVersion(t, 3,
+		`INSERT INTO media (sha256, orig_name, size, uploaded_at) VALUES ('`+sha+`', 'a.jpg', 3, '2026-10-01T00:00:00Z')`,
+		`INSERT INTO playlists (id, name, transition, updated_at) VALUES (1, 'one', 'fade', '')`,
+		`INSERT INTO playlist_items (playlist_id, position, media_sha, name, transition, transition_ms)
+			VALUES (1, 0, '`+sha+`', 'a.jpg', 'split', 700)`)
+
+	d, err := Open(path)
+	if err != nil {
+		t.Fatalf("the migration failed: %v", err)
+	}
+	defer d.Close()
+
+	var version int
+	if err := d.r.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 4 {
+		t.Fatalf("the schema version is %d (%v), want 4", version, err)
+	}
+	columns, err := d.columnsOf("playlists")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !columns["ken_burns"] {
+		t.Error("playlists has no column ken_burns")
+	}
+	p, err := d.PlaylistNoCount(1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.KenBurns {
+		t.Error("an old playlist must stay off")
+	}
+	// The item of version 3 is still there.
+	if len(p.Items) != 1 || p.Items[0].Transition != "split" || p.Items[0].TransitionMS != 700 {
+		t.Fatalf("the items are %+v, want the item of version 3", p.Items)
+	}
+
+	p.KenBurns = true
+	if _, err := d.SavePlaylist(p); err != nil {
+		t.Fatal(err)
+	}
+	if p, err = d.PlaylistNoCount(1); err != nil || !p.KenBurns {
+		t.Fatalf("the saved playlist has ken burns %v (%v), want on", p.KenBurns, err)
+	}
+}
+
 func TestIntegrityCheckSaysOK(t *testing.T) {
 	if got, err := open(t).IntegrityCheck(); err != nil || got != "ok" {
 		t.Fatalf("integrity check gave %q, %v", got, err)

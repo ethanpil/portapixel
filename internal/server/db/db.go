@@ -52,6 +52,12 @@ ALTER TABLE playlist_items ADD COLUMN transition TEXT NOT NULL DEFAULT '';
 ALTER TABLE playlist_items ADD COLUMN transition_ms INTEGER NOT NULL DEFAULT 0;`)
 		return err
 	},
+	// Schema version 4: a playlist can ask for a slow zoom and pan on its images
+	// (Ken Burns). 0 is off, so each old row keeps its behaviour.
+	func(tx *tx) error {
+		_, err := tx.Exec(`ALTER TABLE playlists ADD COLUMN ken_burns INTEGER NOT NULL DEFAULT 0`)
+		return err
+	},
 }
 
 // DB is the database of the fleet server.
