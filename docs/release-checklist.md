@@ -169,8 +169,10 @@ on real hardware.
 - [ ] The card that `audio.output` selects. `internal/device/audio` reads
       `/proc/asound/cards` and matches a name pattern: `hdmi` takes the first
       card whose text holds HDMI, `usb` the first that holds USB, and `analog`
-      the first that holds neither. No real sound card has answered that match
-      yet. Set each of the four values on each architecture, and listen.
+      the first that holds neither. `auto` is the first HDMI card, else card 0.
+      A Pi with `dtparam=audio=on` can make the jack card 0. No real sound card
+      has answered that match yet. Set each of the four values on each
+      architecture, and listen. On a Pi, restart a few times with `auto`.
 - [ ] WiFi, end to end, on both architectures.
 - [ ] The aarch64 image, on every named Raspberry Pi model. No model has
       started this image yet.

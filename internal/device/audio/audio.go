@@ -44,9 +44,9 @@ const (
 // header is the first line of the file that this package writes.
 //
 // It is also the permission to remove that file. The output "auto" leaves no
-// file, and a person can have written an /etc/asound.conf of their own. A device
-// must never delete such a file, so only a file that starts with this line goes
-// away.
+// file when card 0 is the right card, and a person can have written an
+// /etc/asound.conf of their own. A device must never delete such a file, so only
+// a file that starts with this line goes away.
 const header = "# PortaPixel writes this file from [audio] in portapixel.toml.\n"
 
 // Runner runs one program and gives its output. The daemon gives a runner that
@@ -133,12 +133,22 @@ func (a *Applier) Error() string {
 }
 
 // applyOutput writes the ALSA file that names the default card.
+//
+// "auto" is the first HDMI card, else card 0, which is the default of ALSA. A
+// Raspberry Pi with dtparam=audio=on also has the headphone jack as a card, and
+// the order of the cards is not fixed: card 0 can be the jack. So "auto" writes
+// the file only for an HDMI card that is not card 0. A file that a person wrote
+// stays with "auto": a device must never delete the work of a person.
 func (a *Applier) applyOutput(output string) {
-	if output == "" || output == OutputAuto {
+	if output == "" {
+		output = OutputAuto
+	}
+	index, ok := selectCard(parseCards(readFile(a.opt.CardsFile)), output)
+	current := readFile(a.opt.ConfPath)
+	if output == OutputAuto && (!ok || index == 0 || (current != "" && !strings.HasPrefix(current, header))) {
 		a.removeConf()
 		return
 	}
-	index, ok := selectCard(parseCards(readFile(a.opt.CardsFile)), output)
 	if !ok {
 		a.log("audio.output.nocard", "no sound card matches "+output+"; ALSA keeps its own default")
 		return
@@ -147,6 +157,11 @@ func (a *Applier) applyOutput(output string) {
 		"# A save of the settings writes it again. Your own lines do not come back.\n" +
 		"defaults.pcm.card " + strconv.Itoa(index) + "\n" +
 		"defaults.ctl.card " + strconv.Itoa(index) + "\n"
+	if current == data {
+		// The daemon applies the table at each start and each save. The same
+		// file again is a write to the flash card for nothing.
+		return
+	}
 	if err := fsutil.WriteFileAtomic(a.opt.ConfPath, []byte(data), 0o644); err != nil {
 		a.log("audio.output.fail", err.Error())
 		return
@@ -275,7 +290,7 @@ func selectCard(cards []card, output string) (int, bool) {
 	for _, c := range cards {
 		hdmi, usb := holds(c.text, "hdmi"), holds(c.text, "usb")
 		switch output {
-		case OutputHDMI:
+		case OutputHDMI, OutputAuto:
 			if hdmi {
 				return c.index, true
 			}

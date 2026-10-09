@@ -32,6 +32,21 @@ const piCards = ` 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0
                       bcm2835 Headphones
 `
 
+// The card list of a Raspberry Pi on a boot where the kernel made the headphone
+// jack card 0. dtparam=audio=on adds the jack, and the order is not fixed.
+const piJackFirst = ` 0 [Headphones     ]: bcm2835_headpho - bcm2835 Headphones
+                      bcm2835 Headphones
+ 1 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi-0
+                      vc4-hdmi-0
+ 2 [vc4hdmi1       ]: vc4-hdmi - vc4-hdmi-1
+                      vc4-hdmi-1
+`
+
+// The card list of a board with the headphone jack only.
+const jackOnly = ` 0 [Headphones     ]: bcm2835_headpho - bcm2835 Headphones
+                      bcm2835 Headphones
+`
+
 // call is one program call that the fake runner took.
 type call struct {
 	name string
@@ -131,6 +146,9 @@ func TestOutputSelectsTheCard(t *testing.T) {
 		{name: "Pi, hdmi takes the first HDMI card", cards: piCards, output: OutputHDMI, want: 0},
 		{name: "Pi, analog is the headphone jack", cards: piCards, output: OutputAnalog, want: 2},
 		{name: "Pi has no USB card", cards: piCards, output: OutputUSB, want: -1},
+		{name: "Pi, auto with HDMI as card 0 writes no file", cards: piCards, output: OutputAuto, want: -1},
+		{name: "Pi, auto with the jack as card 0 takes HDMI", cards: piJackFirst, output: OutputAuto, want: 1},
+		{name: "auto with no HDMI card writes no file", cards: jackOnly, output: OutputAuto, want: -1},
 		{name: "no card list at all", cards: "", output: OutputHDMI, want: -1},
 	}
 
@@ -182,6 +200,27 @@ func TestAutoRemovesOnlyOurFile(t *testing.T) {
 	f.a.Apply(config.Audio{Output: OutputAuto, Volume: 50})
 	if text := f.confText(t); text != own {
 		t.Fatalf("the file of the person is %q", text)
+	}
+
+	// Also when "auto" would name an HDMI card that is not card 0.
+	g := newFixture(t, piJackFirst)
+	if err := os.WriteFile(g.conf, []byte(own), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	g.a.Apply(config.Audio{Output: OutputAuto, Volume: 50})
+	if text := g.confText(t); text != own {
+		t.Fatalf("auto wrote over the file of the person: %q", text)
+	}
+}
+
+// The daemon applies [audio] at each start and each save. The same file again is
+// not written and not logged: it is a write to the flash card for nothing.
+func TestTheSameOutputIsNotWrittenAgain(t *testing.T) {
+	f := newFixture(t, piJackFirst)
+	f.a.Apply(config.Audio{Output: OutputAuto, Volume: 50})
+	f.a.Apply(config.Audio{Output: OutputAuto, Volume: 50})
+	if n := strings.Count(f.events(), "audio.output "); n != 1 {
+		t.Fatalf("%d audio.output lines, want 1:\n%s", n, f.events())
 	}
 }
 
