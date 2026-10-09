@@ -467,6 +467,15 @@ or with the ops log.
   `osd-dimensions` and makes the bars black. Ken Burns runs on `gpu` only for
   the same reason. On `drm` a zoom is also a software scale of the whole picture
   at each step. It took 131 % of a core on the Zero 2 W proxy.
+- On vo=drm, `screenshot-raw window` scales the frame to the window in the
+  format of the frame, and mpv does not check the result (player/screenshot.c).
+  For a palette PNG (`pal8`) whose size is not the size of the window, the copy
+  is all 0, the alpha too. A transition then started from black, with no fault.
+  The bit depth is not the cause: an 8-bit palette PNG of 1280x720 failed, and a
+  4-bit one of 1280x800 worked (lab7 fix). `screenshot-raw video` gives the right
+  pixels at the size of the frame.
+- On vo=drm, `screenshot-raw window` also draws the OSD into the copy. A copy of
+  the next item under the cover of the old item must use `video`.
 - Stacked overlays blend wrongly on vo=drm: the colours wash out and pink and
   blue specks show. Overlays that sit side by side and do not touch are right.
   So `fade` puts one black square in the place of the copy, and `split` uses two

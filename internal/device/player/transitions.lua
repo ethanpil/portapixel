@@ -551,14 +551,16 @@ local function settle()
     return nil
 end
 
--- reshape gives the copy of the screen in the shape of the picture, or nil
--- when the copy is right already. vo=drm has no screenshot of its own: mpv
--- scales the video frame to the size of the window and does not keep its
--- aspect (player/screenshot.c). On a 16:10 screen a 16:9 picture then fills
--- the bars, and the shape jumps when the copy shows. The function scales the
--- copy back into the video rectangle (osd-dimensions) and makes the bars
--- opaque black. vo=gpu gives a copy of the window that is right.
-local function reshape(src8, W, H)
+-- reshape gives the copy of the screen in the shape of the picture and the size
+-- of the window, or nil when the copy is right already. src8 holds sw x sh
+-- pixels: a copy of the window, or the frame at its own size (see grab).
+-- vo=drm has no screenshot of its own: mpv scales the video frame to the size
+-- of the window and does not keep its aspect (player/screenshot.c). On a 16:10
+-- screen a 16:9 picture then fills the bars, and the shape jumps when the copy
+-- shows. The function scales the copy into the video rectangle
+-- (osd-dimensions) and makes the bars opaque black. vo=gpu gives a copy of the
+-- window that is right.
+local function reshape(src8, sw, sh)
     if mp.get_property("current-vo") ~= "drm" then return nil end
     local d = mp.get_property_native("osd-dimensions")
     -- A margin below 0 means that the picture is moved or zoomed. A push that
@@ -566,24 +568,115 @@ local function reshape(src8, W, H)
     -- yet. Such margins are not the video rectangle, and the loops below write
     -- with them. The copy then stays as it is.
     if d.ml < 0 or d.mr < 0 or d.mt < 0 or d.mb < 0 then return nil end
+    local W, H = d.w, d.h
     local x0, y0 = d.ml, d.mt
     local vw, vh = W - d.ml - d.mr, H - d.mt - d.mb
-    if vw < 1 or vh < 1 or (vw == W and vh == H) then return nil end
+    if vw < 1 or vh < 1 or (vw == W and vh == H and sw == W and sh == H) then return nil end
     local src = ffi.cast("const int32_t *", src8)
     local dst = ffi.new("int32_t[?]", W * H)
     for i = 0, W * H - 1 do dst[i] = OPAQUE end
     local map = ffi.new("int32_t[?]", vw)
-    for x = 0, vw - 1 do map[x] = math.floor(x * W / vw) end
+    for x = 0, vw - 1 do map[x] = math.floor(x * sw / vw) end
     for y = 0, vh - 1 do
-        local row = src + math.floor(y * H / vh) * W
+        local row = src + math.floor(y * sh / vh) * sw
         local out = dst + (y0 + y) * W + x0
-        if vw == W then
-            ffi.copy(out, row, W * 4)
+        if vw == sw then
+            ffi.copy(out, row, vw * 4)
         else
             for x = 0, vw - 1 do out[x] = bor(row[map[x]], OPAQUE) end
         end
     end
-    return dst
+    return dst, W, H
+end
+
+-- capture runs screenshot-raw in a mode of mpv ("window" or "video"), or gives
+-- nil.
+local function capture(mode)
+    local r = mp.command_native({ "screenshot-raw", mode, "bgra" })
+    if type(r) ~= "table" or not r.data or r.w < 1 or r.h < 1 or r.stride < r.w * 4 then
+        return nil
+    end
+    return r
+end
+
+-- empty says that a copy holds no picture: five sample pixels are 0 in all
+-- four bytes, the alpha too. A copy of a picture on vo=drm is opaque.
+local function empty(r)
+    local b = ffi.cast("const uint8_t *", r.data)
+    for _, f in ipairs({ { 0.5, 0.5 }, { 0.25, 0.25 }, { 0.75, 0.25 }, { 0.25, 0.75 }, { 0.75, 0.75 } }) do
+        local o = math.floor(r.h * f[2]) * r.stride + math.floor(r.w * f[1]) * 4
+        if b[o] ~= 0 or b[o + 1] ~= 0 or b[o + 2] ~= 0 or b[o + 3] ~= 0 then return false end
+    end
+    return true
+end
+
+-- framecopy copies the frame at its own size ("video"), or gives nil. A frame
+-- with more than FRAMES times the pixels of the screen is refused: a photo of 12
+-- megapixels gives a copy of 48 MB, and the device can have 512 MB.
+local FRAMES = 4
+local function framecopy()
+    local d = mp.get_property_native("osd-dimensions")
+    local w, h = mp.get_property_number("width", 0), mp.get_property_number("height", 0)
+    if w * h > FRAMES * d.w * d.h then return nil end
+    local r = capture("video")
+    if r and empty(r) then return nil end
+    return r
+end
+
+-- hold makes buf the buffer of the copy c. The buffer before it can go.
+local function hold(c, buf)
+    c.buf = buf
+    c.base = ffi.cast("const uint8_t *", buf)
+end
+
+-- grab takes a copy of the screen for a transition. It gives a table with w, h
+-- and base (opaque BGRA pixels, rows of w * 4 bytes), or nil when the copy
+-- failed.
+--
+-- On vo=drm, mpv makes the copy of the window from the frame. It scales the
+-- frame to the window in the format of the frame, and does not check the
+-- result. For a picture with a palette (a PNG with 1 to 8 bits) the result was
+-- empty when the picture and the window have different sizes, and the
+-- transition started from black (lab7). The frame at its own size is right, and
+-- reshape scales it.
+local function grab()
+    local r = capture("window")
+    local frame = false
+    if r and mp.get_property("current-vo") == "drm" and empty(r) then
+        r, frame = framecopy(), true
+    end
+    if not r then return nil end
+    local c = { w = r.w, h = r.h }
+    hold(c, r.data)
+    if r.stride ~= r.w * 4 then
+        -- mpv makes each row of the copy longer when w * 4 is not a multiple
+        -- of its alignment, for example on a screen of 1366 x 768. The steps
+        -- need rows with no gap, so the rows go into a buffer of their own.
+        -- Before this, each transition on such a screen was a cut.
+        local packed = ffi.new("uint8_t[?]", r.w * r.h * 4)
+        for y = 0, r.h - 1 do
+            ffi.copy(packed + y * r.w * 4, c.base + y * r.stride, r.w * 4)
+        end
+        hold(c, packed)
+    end
+    if c.base[3] ~= 255 then
+        -- The copy must be opaque, or B shows through it while it loads.
+        local own = ffi.new("int32_t[?]", c.w * c.h)
+        local src = ffi.cast("const int32_t *", c.base)
+        for i = 0, c.w * c.h - 1 do own[i] = bor(src[i], OPAQUE) end
+        hold(c, own)
+    end
+    local shaped, W, H = reshape(c.base, c.w, c.h)
+    if shaped then
+        hold(c, shaped)
+        c.w, c.h = W, H
+    elseif frame then
+        -- reshape did not scale the frame. It is a copy of the screen only when
+        -- it has the size of the window.
+        local d = mp.get_property_native("osd-dimensions")
+        if c.w ~= d.w or c.h ~= d.h then return nil end
+    end
+    return c
 end
 
 -- cover puts the copy of the screen on top before mpv unloads item A.
@@ -610,38 +703,12 @@ local function cover()
         return
     end
     kind = turned(kind)
-    local r = mp.command_native({ "screenshot-raw", "window", "bgra" })
-    if type(r) ~= "table" or not r.data or r.w < 1 or r.h < 1 or r.stride < r.w * 4 then
+    local c = grab()
+    if not c then
         fault(kind .. ": the copy of the screen failed; the transition is a cut")
         return
     end
-    S = { kind = kind, ms = ms, w = r.w, h = r.h, stride = r.w * 4, data = r.data }
-    S.base = ffi.cast("const uint8_t *", S.data)
-    if r.stride ~= r.w * 4 then
-        -- mpv makes each row of the copy longer when w * 4 is not a multiple
-        -- of its alignment, for example on a screen of 1366 x 768. The steps
-        -- below need rows with no gap, so the rows go into a buffer of their
-        -- own. Before this, each transition on such a screen was a cut.
-        local packed = ffi.new("uint8_t[?]", r.w * r.h * 4)
-        for y = 0, r.h - 1 do
-            ffi.copy(packed + y * r.w * 4, S.base + y * r.stride, r.w * 4)
-        end
-        S.packed = packed
-        S.base = ffi.cast("const uint8_t *", packed)
-    end
-    if S.base[3] ~= 255 then
-        -- The copy must be opaque, or B shows through it while it loads.
-        local own = ffi.new("int32_t[?]", S.w * S.h)
-        local src = ffi.cast("const int32_t *", S.base)
-        for i = 0, S.w * S.h - 1 do own[i] = bor(src[i], OPAQUE) end
-        S.own = own
-        S.base = ffi.cast("const uint8_t *", own)
-    end
-    local shaped = reshape(S.base, S.w, S.h)
-    if shaped then
-        S.own = shaped
-        S.base = ffi.cast("const uint8_t *", shaped)
-    end
+    S = { kind = kind, ms = ms, w = c.w, h = c.h, stride = c.w * 4, copy = c, base = c.base }
     local shown
     if kind == "split" then shown = doors(0) else shown = show(S.base, 0, 0, 0, S.w, S.h) end
     if not shown then
