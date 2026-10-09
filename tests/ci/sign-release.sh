@@ -64,14 +64,13 @@ for b in $BINARIES; do
 	# -H makes a PREHASHED signature. internal/sigverify refuses a legacy
 	# signature, because a check of one would have to hold the whole binary in
 	# the memory of a device with 512 MB.
-	if [ -n "${PP_MINISIGN_PASSWORD:-}" ]; then
-		printf '%s\n' "$PP_MINISIGN_PASSWORD" |
-			minisign -S -H -s "$KEYFILE" -m "$b" >/dev/null ||
-			die "minisign could not sign $b"
-	else
-		minisign -S -H -s "$KEYFILE" -m "$b" </dev/null >/dev/null ||
-			die "minisign could not sign $b"
-	fi
+	#
+	# The password always goes on stdin, also when it is empty. A key made with
+	# "minisign -G" and an empty password is still encrypted, and minisign asks
+	# for its password. A key made with -W has no password and reads no stdin.
+	printf '%s\n' "${PP_MINISIGN_PASSWORD:-}" |
+		minisign -S -H -s "$KEYFILE" -m "$b" >/dev/null ||
+		die "minisign could not sign $b"
 	[ -f "$b.minisig" ] || die "no $b.minisig"
 	printf '    signed: %s\n' "$b"
 done
