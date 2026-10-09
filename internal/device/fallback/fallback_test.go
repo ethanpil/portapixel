@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skip2/go-qrcode"
+	"golang.org/x/image/font"
 )
 
 // fullInfo has every field set.
@@ -124,6 +125,41 @@ func TestRenderWithLongFields(t *testing.T) {
 	safe := image.Rect(1280*5/100-12, 720*5/100-12, 1280-1280*5/100+12, 720-720*5/100+12)
 	if !box.In(safe) {
 		t.Errorf("the picture reaches %v, outside the safe area %v", box, safe)
+	}
+}
+
+// fit gives the longest start of the text that fits, with the cut mark. It
+// measures each character once: the warning has no length limit, and a fit that
+// measured the whole rest at each step took seconds for some thousand
+// characters, inside the player loop.
+func TestFitCutsALongTextInOnePass(t *testing.T) {
+	set, err := loadFonts()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := &faceCache{faces: map[faceKey]font.Face{}}
+	defer cache.close()
+	face := cache.get(set.regular, 19)
+
+	if got := fit(face, "short", 500); got != "short" {
+		t.Errorf("a text that fits changed to %q", got)
+	}
+	if got := fit(face, "too wide", 1); got != "" {
+		t.Errorf("a width with no room gives %q, want nothing", got)
+	}
+
+	text := strings.Repeat("item[12].transition: must be one of cut, fade, crossfade. ", 2000)
+	start := time.Now()
+	got := fit(face, text, 1700)
+	if took := time.Since(start); took > 2*time.Second {
+		t.Errorf("fit of %d bytes took %s", len(text), took)
+	}
+	if width(face, got) > 1700 {
+		t.Errorf("the cut text is %d px wide, the room is 1700", width(face, got))
+	}
+	body, ok := strings.CutSuffix(got, "…")
+	if !ok || !strings.HasPrefix(text, body) || len(body) < 100 {
+		t.Fatalf("the result %q is not a long start of the text with the cut mark", got)
 	}
 }
 
