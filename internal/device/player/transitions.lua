@@ -444,12 +444,21 @@ mp.add_hook("on_unload", 50, function()
     end
 end)
 
+-- The filter graph writes each of its faults with the prefix "lavfi" (mpv
+-- filters/f_lavfi.c). That is the sign that an item ended because of the graph,
+-- and not because of the file: a file can also end early, or fail to decode.
+mp.enable_messages("error")
+mp.register_event("log-message", function(e)
+    local p = P or F
+    if p and e.prefix == "lavfi" then p.lavfi = true end
+end)
+
 mp.register_event("end-file", function(e)
     local f = F
     F = nil
-    if not f or (e.reason ~= "eof" and e.reason ~= "error") then return end
-    -- The item ended on its own before the end of its mix: the filter graph
-    -- failed. A graph that fails in its setup makes mpv refuse the item.
+    if not f or not f.lavfi or (e.reason ~= "eof" and e.reason ~= "error") then return end
+    -- The item ended on its own before the end of its mix, and the filter graph
+    -- wrote a fault. A graph that fails in its setup makes mpv refuse the item.
     broken = true
     report(0, 0, true)
     fault(string.format("crossfade: the moving crossfade failed at %.1f s of %.1f s; " ..
