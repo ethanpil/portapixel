@@ -185,7 +185,10 @@ func (l *Lister) fetch(ctx context.Context) ([]GitHubRelease, error) {
 			continue
 		}
 		rel := GitHubRelease{
-			Version:     r.TagName,
+			// The tag is "v1.5.0" and a device reports "1.5.0". The manifest gate and
+			// the Versions page compare the two, so the server keeps the form of the
+			// device, the same rule that the updater and the tag check of CI use.
+			Version:     version.Normalize(r.TagName),
 			Notes:       r.Body,
 			PublishedAt: r.PublishedAt,
 			Assets:      map[string]string{},
