@@ -7,7 +7,7 @@
 
 import {
   h, fill, toast, banner, modal, confirmDialog, progress, spinner,
-  fmtBytes, card, pageHead, errorText, cell,
+  fmtBytes, card, pageHead, errorText, cell, badge,
 } from '/shared/ui.js';
 import { api, upload } from '/shared/api.js';
 import { fmtDate } from '../util.js';
@@ -134,7 +134,7 @@ export function mount(main, ctx) {
     const inner = h('div', { class: 'pp-table__inner' });
     inner.append(h('div', { class: 'pp-table__head' },
       cell({ width: '96px' }, 'Approved'),
-      cell({ width: '86px' }, 'Version'),
+      cell({ width: '110px' }, 'Version'),
       cell({ width: '120px' }, 'Released'),
       cell({ width: '150px' }, 'On this server'),
       cell({ grow: true }, 'What changed')));
@@ -187,7 +187,9 @@ export function mount(main, ctx) {
     const row = h('div', { class: `pp-table__row${rel.approved ? ' sv-approved' : ''}` },
       cell({ width: '96px' }, h('label', { class: 'pp-check' }, radio,
         h('span', { class: 'pp-small', text: rel.approved ? 'in use' : '' }))),
-      cell({ width: '86px' }, h('span', { class: 'pp-mono', text: rel.version })),
+      cell({ width: '110px', wrap: true }, h('span', null,
+        h('span', { class: 'pp-mono', text: rel.version }),
+        rel.prerelease ? h('div', { style: { 'margin-top': '4px' } }, badge('pre-release', 'warn')) : null)),
       cell({ width: '120px' }, h('span', { class: 'pp-small pp-muted', text: fmtDate(rel.published_at) })),
       cell({ width: '150px' }, h('span', null, state, actions)),
       cell({ grow: true, wrap: true }, h('span', { class: 'pp-small', text: rel.notes || 'No notes came with this release.' })));
@@ -218,6 +220,11 @@ export function mount(main, ctx) {
     const ok = await confirmDialog({
       title: `Approve ${rel.version}?`,
       body: h('div', null,
+        rel.prerelease ? h('div', { style: { 'margin-bottom': '8px' } }, banner({
+          kind: 'warn',
+          title: `${rel.version} is a pre-release`,
+          body: 'GitHub marks it as not final. It can have faults that a final release does not. Approve it only to test it.',
+        })) : null,
         h('div', null, `Every screen that checks in installs ${rel.version} on its own, ${fleet ? `all ${fleet} of them` : 'once there are screens'}.`),
         h('div', { style: { 'margin-top': '8px' } },
           'The server copies the release and checks its signature first. A screen that cannot come up on it puts itself back on the version that it had.'),
