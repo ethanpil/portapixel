@@ -183,8 +183,9 @@ checked with a screenshot of the virtual display or with the ops log.
 - With UEFI, the firmware framebuffer takes `/dev/dri/card0` and the GPU is `card1`. Do
   not write `card0` into code.
 - QEMU needs the package `qemu-hw-display-virtio-vga` to give the guest a DRM device.
-- The x86_64 root filesystem is 1558 MB with Chromium and the seven demo videos, 43 %
-  of the 3.5 GB PPROOT (lab4 build, 41332bf). It was 1488 MB with the old slides.
+- The x86_64 root filesystem is 1062 MB with mpv and the seven demo videos, 29 % of
+  the 3.5 GB PPROOT, in 282 packages (lab5 build, 3c0744b). The `.img.gz` is
+  1035 MiB. With Chromium it was 1558 MB, 334 packages and 1297 MiB (lab4).
 - The aarch64 build needs qemu-user binfmt on the build host (plan section 17). Without
   it the apk triggers fail with `Exec format error`. GitHub Actions has it. The test
   container does not.
