@@ -4,6 +4,10 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## [Unreleased]
 
+### Added
+
+- A new image holds `portapixel.toml` on PPMEDIA with every setting commented out, so a person can set the server or WiFi before the first boot (6fae7d9 to d637ef6, c0c046c). The status warns of a key that the device does not know, for example a key whose `[table]` line is still commented (0daf6ee, ee81b83).
+
 ## [0.5.0-rc.1] - 2026-10-09
 
 The first pre-release. The device player is mpv. It is for tests on real hardware.
