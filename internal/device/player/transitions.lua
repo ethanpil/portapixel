@@ -47,8 +47,9 @@
 -- Ken Burns. An image with pptr-kb zooms and pans slowly while it shows. The
 -- timer sets video-zoom, video-pan-x and video-pan-y in steps. It starts when the
 -- transition into the image is over, so it does not use video-pan at the same
--- time as push-* and slide-in-*. The zoom goes in or out. The drift goes to a
--- random side, and it is small enough that the edge of the picture does not show.
+-- time as push-* and slide-in-*. The zoom goes in, from the plain picture, so
+-- nothing jumps when the transition ends. The drift goes to a random side, and
+-- it is small enough that the edge of the picture does not show.
 -- When the image ends, the script puts the copy on top and sets zoom and pan
 -- back to 0 under it. A cut after Ken Burns also holds the copy until the next
 -- item shows its first frame, or the next item would show with the zoom of A.
@@ -131,7 +132,7 @@ local F = nil        -- a moving crossfade that did not reach its end, until end
 local broken = false -- a moving crossfade failed; this mpv makes no more of them
 local moved = 0      -- the count of moving crossfades, for user-data/pptr/moved
 local kbwait = nil   -- Ken Burns of the item on the screen, until its transition is over
-local kb = nil       -- Ken Burns that runs: {t0, span, timer, z0, z1, x0, x1, y0, y1}
+local kb = nil       -- Ken Burns that runs: {t0, span, timer, dx, dy}
 local kbview = false -- Ken Burns changed zoom or pan, and they are not back at 0
 local kbseen = false -- the item on the screen did its first playback-restart
 
@@ -165,9 +166,9 @@ local function kb_step()
             t = 1
             kb.timer:kill()
         end
-        mp.set_property_number("video-zoom", kb.z0 + (kb.z1 - kb.z0) * t)
-        mp.set_property_number("video-pan-x", kb.x0 + (kb.x1 - kb.x0) * t)
-        mp.set_property_number("video-pan-y", kb.y0 + (kb.y1 - kb.y0) * t)
+        mp.set_property_number("video-zoom", KB_ZOOM * t)
+        mp.set_property_number("video-pan-x", kb.dx * t)
+        mp.set_property_number("video-pan-y", kb.dy * t)
     end)
     if not ok then
         kb_stop()
@@ -184,17 +185,16 @@ local function kb_begin()
     if not w then return end
     local left = w.total - (mp.get_time() - w.t0)
     if left < KB_MIN then return end
-    -- The path goes in or out. The drift is small, so the zoomed picture
-    -- always covers the screen: the overhang at the far end is 5 % of the
-    -- picture on each side, and the drift is 4 % at most.
+    -- The path starts at the plain picture, because that is how the image
+    -- showed until now. A path that starts zoomed would jump when the
+    -- transition ends. The zoom goes in, and the drift goes to a random side.
+    -- The drift is small, so the zoomed picture always covers the screen: the
+    -- overhang at the far end is 5 % of the picture on each side, and the
+    -- drift is 4 % at most.
     local function side() return math.random() < 0.5 and -1 or 1 end
-    local dx = (0.4 + 0.6 * math.random()) * KB_DRIFT * side()
-    local dy = (0.4 + 0.6 * math.random()) * KB_DRIFT * side()
-    local zoom_in = math.random() < 0.5
     kb = { t0 = mp.get_time(), span = left,
-        z0 = zoom_in and 0 or KB_ZOOM, z1 = zoom_in and KB_ZOOM or 0,
-        x0 = zoom_in and 0 or dx, x1 = zoom_in and dx or 0,
-        y0 = zoom_in and 0 or dy, y1 = zoom_in and dy or 0 }
+        dx = (0.4 + 0.6 * math.random()) * KB_DRIFT * side(),
+        dy = (0.4 + 0.6 * math.random()) * KB_DRIFT * side() }
     kbview = true
     kb.timer = mp.add_periodic_timer(KB_STEP, kb_step)
     kb_step()

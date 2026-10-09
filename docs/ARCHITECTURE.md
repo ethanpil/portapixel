@@ -645,8 +645,9 @@ next item that does not show in 5 s. With no LuaJIT FFI, each transition is a cu
 Ken Burns. An image with `pptr-kb` zooms and pans slowly while it shows. After the transition
 into the image is over (so it never uses `video-pan` together with a push or a slide-in), a
 timer sets `video-zoom`, `video-pan-x` and `video-pan-y` every 100 ms from the clock, over the
-rest of the time of the image. The zoom goes in or out between 1 and 1.12, and the drift goes to a
-random side and is 4 % of the picture at most, so the edge of the picture does not show. When
+rest of the time of the image. The zoom goes in from 1 to 1.12. It starts at the plain picture,
+which is what the transition showed, so nothing jumps when the transition ends. The drift goes to
+a random side and is 4 % of the picture at most, so the edge of the picture does not show. When
 the image ends, the script puts the copy of the screen on top and sets zoom and pan back to 0
 under it. A cut after Ken Burns holds the copy until the next item shows its first frame (the
 kind `join`), or the next item would show with the zoom of the old one.
