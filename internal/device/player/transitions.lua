@@ -348,6 +348,11 @@ end
 local function reshape(src8, W, H)
     if mp.get_property("current-vo") ~= "drm" then return nil end
     local d = mp.get_property_native("osd-dimensions")
+    -- A margin below 0 means that the picture is moved or zoomed. A push that
+    -- ended a moment ago does this: mpv has not drawn the picture at its place
+    -- yet. Such margins are not the video rectangle, and the loops below write
+    -- with them. The copy then stays as it is.
+    if d.ml < 0 or d.mr < 0 or d.mt < 0 or d.mb < 0 then return nil end
     local x0, y0 = d.ml, d.mt
     local vw, vh = W - d.ml - d.mr, H - d.mt - d.mb
     if vw < 1 or vh < 1 or (vw == W and vh == H) then return nil end
