@@ -41,6 +41,9 @@
 --   split      the copy of A is two halves. They move apart from the centre,
 --              each one in its own overlay. The two overlays do not overlap.
 --
+-- A direction word is the direction that a person sees, also on a turned
+-- screen (see TURN).
+--
 -- Only fade and fade-white change pixels (a pass of LuaJIT over the copy in the
 -- first half). Each other kind moves, crops or scales an overlay.
 --
@@ -108,6 +111,27 @@ local KINDS = {
     ["slide-out-left"] = true, ["slide-out-right"] = true, ["slide-out-up"] = true, ["slide-out-down"] = true,
     ["zoom-out"] = true, ["split"] = true,
 }
+
+-- TURN maps a direction that a person sees to a direction of the window. The
+-- overlays and video-pan work on the window, and --video-rotate (the
+-- display.rotation of portapixeld) turns the picture in the window clockwise.
+-- With 90, the top of the picture is at the right side of the window, so
+-- "left" for a person is "up" in the window. split opens across the window.
+local TURN = {
+    [90] = { left = "up", up = "right", right = "down", down = "left" },
+    [180] = { left = "right", right = "left", up = "down", down = "up" },
+    [270] = { left = "down", down = "right", right = "up", up = "left" },
+}
+
+-- turned gives a kind in the directions of the window.
+local function turned(kind)
+    local map = TURN[mp.get_property_number("video-rotate", 0)]
+    local head, word = kind:match("^(.*%-)(%a+)$")
+    if map and head and map[word] then
+        return head .. map[word]
+    end
+    return kind
+end
 
 -- fault tells portapixeld about a fault. The transition is then a cut.
 local function fault(text)
@@ -456,10 +480,14 @@ local function prepare()
     local w, h = shape(a)
     local fps = a["demux-fps"]
     if not w or not fps or fps <= 0 then return end
-    local length = span()
-    -- An item that goes on from a moving crossfade starts later than 0.
+    -- An item that goes on from a moving crossfade starts later than 0. mpv
+    -- starts the track that video-add adds at that time too, and not at 0. The
+    -- mix would then show B from that time, opaque at once, and B would play
+    -- that part two times. Such an item ends with the copy of the screen.
     local begin = tonumber(mp.get_property("start") or "") or 0
-    if not length or length - begin < d + LEAD then return end
+    if begin > 0 then return end
+    local length = span()
+    if not length or length < d + LEAD then return end
 
     local next = (pos + 1) % count
     local path = mp.get_property("playlist/" .. next .. "/filename")
@@ -575,13 +603,26 @@ local function cover()
         fault(kind .. ": this kind is not known; the transition is a cut")
         return
     end
+    kind = turned(kind)
     local r = mp.command_native({ "screenshot-raw", "window", "bgra" })
-    if type(r) ~= "table" or not r.data or r.w < 1 or r.h < 1 or r.stride ~= r.w * 4 then
+    if type(r) ~= "table" or not r.data or r.w < 1 or r.h < 1 or r.stride < r.w * 4 then
         fault(kind .. ": the copy of the screen failed; the transition is a cut")
         return
     end
-    S = { kind = kind, ms = ms, w = r.w, h = r.h, stride = r.stride, data = r.data }
+    S = { kind = kind, ms = ms, w = r.w, h = r.h, stride = r.w * 4, data = r.data }
     S.base = ffi.cast("const uint8_t *", S.data)
+    if r.stride ~= r.w * 4 then
+        -- mpv makes each row of the copy longer when w * 4 is not a multiple
+        -- of its alignment, for example on a screen of 1366 x 768. The steps
+        -- below need rows with no gap, so the rows go into a buffer of their
+        -- own. Before this, each transition on such a screen was a cut.
+        local packed = ffi.new("uint8_t[?]", r.w * r.h * 4)
+        for y = 0, r.h - 1 do
+            ffi.copy(packed + y * r.w * 4, S.base + y * r.stride, r.w * 4)
+        end
+        S.packed = packed
+        S.base = ffi.cast("const uint8_t *", packed)
+    end
     if S.base[3] ~= 255 then
         -- The copy must be opaque, or B shows through it while it loads.
         local own = ffi.new("int32_t[?]", S.w * S.h)

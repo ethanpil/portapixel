@@ -220,6 +220,43 @@ func TestScriptKnowsEveryTransition(t *testing.T) {
 	}
 }
 
+// The directions of a transition are the directions that a person sees. The
+// overlays and video-pan of the script work on the window, and --video-rotate
+// turns the picture in the window clockwise. So the TURN table of the script
+// must turn each direction clockwise by the rotation, in the axes of a screen
+// (y goes down). A table that turns the wrong way pushes a picture up when the
+// person expects down.
+func TestScriptTurnsTheDirectionsWithTheRotation(t *testing.T) {
+	s := string(TransitionScript())
+	vec := map[string][2]int{"left": {-1, 0}, "right": {1, 0}, "up": {0, -1}, "down": {0, 1}}
+	row := regexp.MustCompile(`\[(\d+)\] = \{([^}]*)\}`)
+	pair := regexp.MustCompile(`(\w+) = "(\w+)"`)
+	found := 0
+	for _, m := range row.FindAllStringSubmatch(s, -1) {
+		turns := map[string]int{"90": 1, "180": 2, "270": 3}[m[1]]
+		if turns == 0 {
+			continue
+		}
+		found++
+		pairs := pair.FindAllStringSubmatch(m[2], -1)
+		if len(pairs) != 4 {
+			t.Errorf("the rotation %s maps %d directions, want 4", m[1], len(pairs))
+		}
+		for _, p := range pairs {
+			v := vec[p[1]]
+			for range turns {
+				v = [2]int{-v[1], v[0]} // clockwise on a screen
+			}
+			if v != vec[p[2]] {
+				t.Errorf("the rotation %s maps %s to %s; a clockwise turn gives %v", m[1], p[1], p[2], v)
+			}
+		}
+	}
+	if found != 3 {
+		t.Errorf("the script has %d rows of rotations, want 3 (90, 180, 270)", found)
+	}
+}
+
 func TestLadder(t *testing.T) {
 	at := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	set := DefaultWatchdog()
