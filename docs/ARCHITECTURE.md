@@ -722,10 +722,12 @@ mpv makes that copy in the format of the frame and does not check the result. Fo
 with a palette (`pal8`, a PNG of 1 to 8 bits) whose size is not the size of the window, the
 copy is empty: all four bytes are 0, the alpha too. The script then takes the frame at its own
 size (`screenshot-raw video bgra`) and scales it itself. It refuses a frame with more than 4
-times the pixels of the screen, and that transition is a cut. An item that shows no frame (it
-did not load) keeps the copy of the last good frame for the next item. A row of the copy can
-be longer than 4 bytes times the width: mpv aligns the rows (1366 x 768 gives 5504 bytes and
-not 5464). The script copies the rows into a buffer with no gap.
+times the pixels of the screen, and that transition is a cut. A picture with a clear background
+(alpha 0) gives an empty frame copy too. That copy is right, and the script makes it opaque. An
+item that shows no frame (it did not load) keeps the copy of the last good frame for the next
+item. A row of the copy can be longer than 4 bytes times the width: mpv aligns the rows
+(1366 x 768 gives 5504 bytes and not 5464). The script copies the rows into a buffer with no
+gap.
 
 A direction word is the direction that a person sees, also on a turned screen. The overlays
 and `video-pan` work on the window, and `--video-rotate` turns the picture in the window

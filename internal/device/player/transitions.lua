@@ -606,8 +606,10 @@ local function capture(mode)
     return r
 end
 
--- empty says that a copy holds no picture: five sample pixels are 0 in all
--- four bytes, the alpha too. A copy of a picture on vo=drm is opaque.
+-- empty says that a copy may hold no picture: five sample pixels are 0 in all
+-- four bytes, the alpha too. The copy of an opaque picture has alpha 255, so it
+-- is never empty. A picture with a clear background can be empty. The frame
+-- copy of such a picture is empty too, and it is right (grab makes it opaque).
 local function empty(r)
     local b = ffi.cast("const uint8_t *", r.data)
     for _, f in ipairs({ { 0.5, 0.5 }, { 0.25, 0.25 }, { 0.75, 0.25 }, { 0.25, 0.75 }, { 0.75, 0.75 } }) do
@@ -625,9 +627,7 @@ local function framecopy()
     local d = mp.get_property_native("osd-dimensions")
     local w, h = mp.get_property_number("width", 0), mp.get_property_number("height", 0)
     if w * h > FRAMES * d.w * d.h then return nil end
-    local r = capture("video")
-    if r and empty(r) then return nil end
-    return r
+    return capture("video")
 end
 
 -- hold makes buf the buffer of the copy c. The buffer before it can go.
