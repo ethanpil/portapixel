@@ -19,6 +19,7 @@ func TestArgs(t *testing.T) {
 	for _, want := range []string{
 		"--no-config", "--profile=fast", "--idle=yes", "--force-window=yes", "--keep-open=yes",
 		"--loop-playlist=inf", "--prefetch-playlist=yes", "--hwdec=auto-safe", "--ao=alsa", "--vo=drm",
+		"--gpu-shader-cache=no",
 		"--input-ipc-server=" + filepath.Join("/run/portapixel", "player", "mpv.sock"),
 		"--script=" + filepath.Join("/run/portapixel", "transitions.lua"),
 	} {
@@ -54,7 +55,8 @@ func TestBuild(t *testing.T) {
 		t.Errorf("program = %q, want mpv", cmd.Path)
 	}
 	// The device command gets a minimal environment with HOME on the tmpfs.
-	if !slices.Contains(cmd.Env, "HOME="+filepath.Join("/run/pp", "player")) || len(cmd.Env) != 2 {
+	if !slices.Contains(cmd.Env, "HOME="+filepath.Join("/run/pp", "player")) ||
+		!slices.Contains(cmd.Env, "MESA_SHADER_CACHE_DISABLE=true") || len(cmd.Env) != 3 {
 		t.Errorf("env = %q", cmd.Env)
 	}
 

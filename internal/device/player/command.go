@@ -152,6 +152,7 @@ func (c CommandConfig) LogPath() string { return filepath.Join(c.RunDir, LogName
 //	--ao=alsa                          D11: direct ALSA. /etc/asound.conf names
 //	                                   the card (internal/device/audio).
 //	--msg-level=all=warn               player.log holds the faults only
+//	--gpu-shader-cache=no              see below
 //	--vo=gpu --gpu-context=drm | --vo=drm
 //	--video-rotate, --drm-mode         display.rotation and display.video_mode
 //
@@ -164,8 +165,17 @@ func (c CommandConfig) LogPath() string { return filepath.Join(c.RunDir, LogName
 // h264_v4l2m2m of FFmpeg, which gives the frames back in memory. That form
 // works with vo=drm, vo=gpu and the filters of the moving crossfade. A Pi 5 has
 // no H.264 decoder, and a file that the decoder does not take plays in software:
-// mpv falls back by itself when the hardware decoder fails. Every other board
-// uses auto-safe (vaapi on an Intel or AMD PC).
+// mpv falls back by itself when the hardware decoder fails. Every Pi gets this
+// value, a Pi 4 and a Pi 5 too: their HEVC decoder needs the V4L2 request API
+// (the drm and drm-copy entries of auto-safe), and the FFmpeg of Alpine aarch64
+// does not have it (stage 3 found this). Every other board uses auto-safe
+// (vaapi on an Intel or AMD PC).
+//
+// The shader caches stay off. HOME of mpv is in the run directory, a small
+// tmpfs that the daemon also uses, and the caches of libplacebo
+// (--gpu-shader-cache) and Mesa (MESA_SHADER_CACHE_DISABLE, see Build) would
+// grow there. mpv compiles its few OpenGL shaders again at each start, which is
+// fast on vo=gpu.
 func (c CommandConfig) Args(l Launch) []string {
 	args := []string{
 		"--no-config",
@@ -189,6 +199,7 @@ func (c CommandConfig) Args(l Launch) []string {
 		"--hwdec=" + Hwdec(l.Model),
 		"--ao=alsa",
 		"--msg-level=all=warn",
+		"--gpu-shader-cache=no",
 	}
 	if l.Output == OutputGPU {
 		args = append(args, "--vo=gpu", "--gpu-context=drm")
@@ -226,11 +237,13 @@ func (c CommandConfig) Build(l Launch) (*exec.Cmd, error) {
 	if !override {
 		// A minimal environment. The kiosk account has no login shell, so it gets
 		// no profile and no PATH of its own. HOME is on the tmpfs: mpv must never
-		// write to the flash. An override is a development command, which needs
-		// the environment of the desktop (DISPLAY or WAYLAND_DISPLAY).
+		// write to the flash. Mesa writes no shader cache into it (see Args). An
+		// override is a development command, which needs the environment of the
+		// desktop (DISPLAY or WAYLAND_DISPLAY).
 		cmd.Env = []string{
 			"PATH=/usr/local/bin:/usr/bin:/bin",
 			"HOME=" + filepath.Join(c.RunDir, SocketDirName),
+			"MESA_SHADER_CACHE_DISABLE=true",
 		}
 	}
 	if err := applyCredential(cmd, c.KioskUser); err != nil {
