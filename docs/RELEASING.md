@@ -74,6 +74,24 @@ gh release edit v0.1.0 --draft=false
 A tag push (`git tag v0.1.0 && git push origin v0.1.0`) starts the same pipeline
 with `alpine_release` 3.23.2 and `draft` true.
 
+### A pre-release
+
+A tag with a pre-release suffix, `vX.Y.Z-rc.N`, `vX.Y.Z-beta.N` or
+`vX.Y.Z-alpha.N`, makes a GitHub **pre-release**:
+
+```sh
+git tag v0.5.0-rc.1 && git push origin v0.5.0-rc.1
+```
+
+A pushed pre-release tag is NOT a draft. When every gate passes and the release
+is signed, the pre-release is public at the end of the run, with no step by
+hand. An unsigned run stays a draft, the same as every unsigned release
+(section 3). A pre-release never gets the `latest` tag of the server container
+image, and no device gets it as an update: the updater asks for the newest full
+release. A dispatched run with a pre-release tag is always a pre-release too,
+and its `draft` input still decides the draft. Any other tag, for example
+`v0.5.0` or `v0.5.0-lab5`, keeps the rules above.
+
 ### The inputs
 
 | Input | Default | What it means |
@@ -81,7 +99,7 @@ with `alpine_release` 3.23.2 and `draft` true.
 | `release_tag` | `v0.0.0-dev` | the tag, and with it `VERSION`. It must start with `v` and a number. |
 | `alpine_release` | `3.23.2` | an EXACT Alpine release. Never a branch: a branch moves and two builds of one release would differ (D50). |
 | `draft` | `true` | a draft release is not public. Keep it true until you read the release. |
-| `prerelease` | `false` | a prerelease is public and is not offered to a device, because the updater asks for the newest full release. |
+| `prerelease` | `false` | a prerelease is public and is not offered to a device, because the updater asks for the newest full release. A pre-release tag is always one. |
 
 `draft` and `prerelease` also decide the `latest` tag of the server container
 image: only a release that is neither gets it.
@@ -101,20 +119,28 @@ refuse every later release, and only a person with a USB stick can fix that
 Run these commands yourself. Do not give the secret key to anybody, and do not
 put it in a file inside the repository (`.gitignore` already refuses `*.key`).
 
+The three names:
+
+| Name | Kind | What it holds |
+|---|---|---|
+| `PORTAPIXEL_MINISIGN_SECRET_KEY` | repository secret | the minisign secret key file |
+| `PORTAPIXEL_MINISIGN_PUBLIC_KEY` | repository variable | the base64 line of the public key |
+| `PORTAPIXEL_MINISIGN_PASSWORD` | repository secret, optional | the password of the secret key. The key of the owner has no password, so this secret is not set. |
+
 ```sh
-# 1. Make the key pair. Choose a strong password when it asks.
+# 1. Make the key pair. minisign asks for a password; a key with no password
+#    needs no third secret.
 minisign -G -p minisign.pub -s minisign.key
 
 # 2. The secret key goes in a repository SECRET.
-gh secret set MINISIGN_SECRET_KEY < minisign.key
+gh secret set PORTAPIXEL_MINISIGN_SECRET_KEY < minisign.key
 
-# 3. The password goes in a second secret. Leave this out for a key with no
-#    password.
-gh secret set MINISIGN_PASSWORD
+# 3. Only for a key WITH a password: the password goes in a second secret.
+gh secret set PORTAPIXEL_MINISIGN_PASSWORD
 
 # 4. The public key goes in a repository VARIABLE. Give the BASE64 LINE only,
 #    without the "untrusted comment" line: -ldflags -X cannot carry a newline.
-gh variable set MINISIGN_PUBLIC_KEY --body "$(tail -n 1 minisign.pub)"
+gh variable set PORTAPIXEL_MINISIGN_PUBLIC_KEY --body "$(tail -n 1 minisign.pub)"
 
 # 5. Put minisign.pub and minisign.key in your password manager, then remove
 #    them from this machine.
@@ -130,8 +156,8 @@ gh variable list
 
 The pipeline holds these rules:
 
-- A secret key with an empty `MINISIGN_PUBLIC_KEY` **fails** the run. Such a
-  release would carry signatures that no device could check.
+- A secret key with an empty `PORTAPIXEL_MINISIGN_PUBLIC_KEY` **fails** the
+  run. Such a release would carry signatures that no device could check.
 - Every signature that CI makes is verified with the public key **before**
   anything is published. A key pair that does not match stops the run.
 - The secret key is written to a file under `/dev/shm` with `umask 077` and is
@@ -148,11 +174,11 @@ The pipeline holds these rules:
 |---|---|
 | `settings` | the tag gives one version, `internal/updater` reads the same value, and the signing settings agree |
 | `lint` | shellcheck and busybox ash read every shipped script, `gofmt`, `go vet`, `go mod tidy`, `go test -race`, the cross-compile of both commands, and that no web file asks another host for a file |
-| `build` (amd64, arm64) | both commands build with no C compiler, the web assets are inside the binary (`selftest`), and the binary prints the version of the tag |
+| `build` (amd64, arm64) | both commands build with no C compiler, the web assets and the transition script of the player are inside the binary (`selftest`), and the binary prints the version of the tag |
 | `sign` | one `SHA256SUMS` in the format that the updater parses, and a signature for each binary that verifies with the public key |
 | `images` (x86_64, aarch64) | `os/build-image.sh` makes a bootable image from the exact Alpine release, PPROOT leaves room for a second release, the initramfs finds USB, SD, eMMC, NVMe and SATA (D53), and the package manifest is there (D50) |
-| `smoke-x86` (bios, uefi) | the x86_64 image boots under SeaBIOS and under OVMF, `/api/status` answers on port 80, and the browser session comes up |
-| `smoke-arm` | the aarch64 image holds a daemon that starts and passes `selftest` under qemu-user, the display packages are in it, the overlay is in place, and PPBOOT holds every Pi firmware file |
+| `smoke-x86` (bios, uefi) | the x86_64 image boots under SeaBIOS and under OVMF, `/api/status` answers on port 80, `player_state` is `running`, `now_playing` names an item, and mpv runs as `kiosk` |
+| `smoke-arm` | the aarch64 image holds a daemon that starts and passes `selftest` under qemu-user, mpv starts, the player packages and the Pi video decoder module (`bcm2835-codec` with its udev alias) are in it, the overlay is in place, the kernel command line hides the console, and PPBOOT holds every Pi firmware file |
 | `smoke-update` | the A/B update path with the real binary and the real health gate: a signed release is installed and swapped, the daemon writes `<VERSION>.ok`, twenty starts of the gate and the daemon together all pass in either order, a release with no marker is rolled back and marked bad, and an unsigned release, a release with another key, a legacy signature and a changed binary are all refused before the flip |
 | `server` | the server route tests pass, the Docker image builds for both architectures, it goes to GHCR, and it runs and answers |
 | `smoke-vanilla-install` | `os/install.sh` puts PortaPixel on a stock Alpine box, live, as root, and the box answers after a reboot (D51). It is NOT blocking: it boots two virtual machines and it is the longest job |
@@ -214,10 +240,10 @@ gh run view <run-id> --log-failed
 |---|---|
 | `lint` | The shell job runs in a real Alpine container, so a fault there is a fault of the script and not of your machine. `go test -race` runs on Linux; the development machine is Windows and has no C compiler. |
 | `build` | A version that does not match the tag stops the job with both values in the message. |
-| `sign` | "the signature does not verify with MINISIGN_PUBLIC_KEY" means the secret and the variable are not a pair. Do not publish that run. |
+| `sign` | "the signature does not verify with PORTAPIXEL_MINISIGN_PUBLIC_KEY" means the secret and the variable are not a pair. Do not publish that run. |
 | `images` | A size gate that fails wants a package out of `os/packages.list` or a bigger `P2_MB`. A missing module means the `mkinitfs` feature list in `os/install.sh` (D53). A missing Pi boot file means `linux-rpi` moved its files again. |
-| `smoke-x86` | "no login prompt" is the boot chain. "/api/status did not answer" is the daemon; the log holds the serial output. "browser_state never running" is the browser: read `/var/cache/kiosk/browser.log` on the guest with `tests/qemu/boot-dev.sh`. |
-| `smoke-arm` | This job mounts the image. A missing file is named. It cannot boot the image: only a real Pi proves a Pi boot. |
+| `smoke-x86` | "no login prompt" is the boot chain. "/api/status did not answer" is the daemon; the log holds the serial output. "the daemon did not start mpv", "never reported player_state running" or "named no now_playing item" is the player: read `/run/portapixel/player.log` and the ops log on the guest with `tests/qemu/boot-dev.sh`. |
+| `smoke-arm` | This job mounts the image. A missing file is named. It cannot boot the image: only a real Pi proves a Pi boot, and only a real Pi proves the hardware video decoder. |
 | `smoke-update` | This gate uses its own key pair, so it fails for a code reason and never for a key reason. |
 | `server` | The Docker image is built by `deploy/Dockerfile`. A container that does not answer prints its own log in the job. |
 | `smoke-vanilla-install` | It is not blocking. A fault is a fault of `os/install.sh` in on-box mode. It boots two virtual machines, so read the serial output from the start. |
