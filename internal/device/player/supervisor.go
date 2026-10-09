@@ -549,13 +549,13 @@ func (s *Supervisor) mark(flag *bool) {
 // change restarts mpv, and the new mpv loads the manifest when it connects.
 func (s *Supervisor) takeChanges() {
 	s.mu.Lock()
-	playlist, display := s.playlistDue, s.displayDue
+	list, display := s.playlistDue, s.displayDue
 	s.playlistDue, s.displayDue = false, false
 	s.mu.Unlock()
 	if display {
 		s.restart("the display settings changed", false, resumeSame)
 	}
-	if playlist {
+	if list {
 		s.playlistChanged(s.opt.Now())
 	}
 }
@@ -687,8 +687,8 @@ func (s *Supervisor) handleExit(now time.Time) {
 		reason := s.proc.exitReason()
 		s.log("player.exit", reason)
 		// No mpv runs until the next launch, which can wait for the backoff.
-		// The state said "running" for that time. The reason is in the line
-		// above.
+		// The state said "running" for that time. The reason is in the
+		// player.exit line.
 		s.setState(StateStopped)
 		s.drainOpens()
 		s.markCrashed()
