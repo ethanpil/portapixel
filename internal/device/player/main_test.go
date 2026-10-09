@@ -84,6 +84,7 @@ type harness struct {
 	nightly  string
 	covered  bool
 	display  DisplaySettings
+	motion   string
 }
 
 // newHarness starts a supervisor. opts may change the options before New.
@@ -111,6 +112,7 @@ func newHarness(t *testing.T, m library.PlayerManifest, opts func(*Options, *har
 		manifest: m,
 		info:     fallback.Info{Name: "Lobby", DeviceID: "px-1234abcd", URL: "http://lobby.local/"},
 		display:  DisplaySettings{VideoOutput: OutputAuto},
+		motion:   MotionOn,
 	}
 	writeFile(t, filepath.Join(h.drm, "card0", "device", "uevent"), "DRIVER=virtio_gpu\n")
 	o := Options{
@@ -137,6 +139,7 @@ func newHarness(t *testing.T, m library.PlayerManifest, opts func(*Options, *har
 			h.mu.Unlock()
 		},
 		NightlyRestart:  func() string { h.mu.Lock(); defer h.mu.Unlock(); return h.nightly },
+		Motion:          func() string { h.mu.Lock(); defer h.mu.Unlock(); return h.motion },
 		ScreenOffCovers: func(time.Time) bool { h.mu.Lock(); defer h.mu.Unlock(); return h.covered },
 	}
 	if opts != nil {
@@ -228,10 +231,11 @@ func (h *harness) call(args ...any) (json.RawMessage, error) {
 
 // dump is the state of the fake.
 type dump struct {
-	Args  []string    `json:"args"`
-	List  []fakeEntry `json:"list"`
-	Loads int         `json:"loads"`
-	Pos   int         `json:"pos"`
+	Args  []string       `json:"args"`
+	List  []fakeEntry    `json:"list"`
+	Loads int            `json:"loads"`
+	Pos   int            `json:"pos"`
+	Props map[string]any `json:"props"`
 }
 
 func (h *harness) dump() dump {

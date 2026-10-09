@@ -166,6 +166,7 @@ func TestTransitionScript(t *testing.T) {
 	for _, want := range []string{
 		`mp.add_hook("on_unload"`, `"playback-restart"`, "user-data/pptr/fault", "screenshot-raw",
 		`["fade"]`, `["crossfade"]`, `["wipe-left"]`, `["push-down"]`, "DEADMAN = 5",
+		`mp.add_hook("on_preloaded"`, "video-add", "user-data/pptr/motion", "user-data/pptr/moved",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("the script does not hold %q", want)

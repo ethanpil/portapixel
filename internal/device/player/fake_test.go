@@ -28,7 +28,11 @@ import (
 //	fake-exit <code>    end the process
 //	fake-drops <vo> <decoder>  set the two dropped frame counters
 //	fake-fault <text>   set user-data/pptr/fault, as transitions.lua does
-//	fake-dump           give the arguments, the playlist and the load count
+//	fake-dump           give the arguments, the playlist, the load count and
+//	                    the values that set_property set
+//
+// set_property keeps the value and tells the observers, so a test can also set
+// user-data/pptr/moved as transitions.lua does.
 const fakeFlag = "--pp-fake-mpv"
 
 // fakeLife is how long the fake lives at most. A test that fails must not leave
@@ -66,6 +70,8 @@ type fakeMPV struct {
 	hang    bool
 	vo, dec int
 	fault   any
+	// props holds the values of set_property, for example user-data/pptr/motion.
+	props map[string]any
 }
 
 // runFakeMPV is the main function of the fake. It gives the exit code.
@@ -88,7 +94,7 @@ func runFakeMPV(args []string) int {
 		time.Sleep(fakeLife)
 		os.Exit(4)
 	}()
-	f := &fakeMPV{pos: -1}
+	f := &fakeMPV{pos: -1, props: map[string]any{}}
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -208,8 +214,13 @@ func (f *fakeMPV) handle(c *fakeClient, name string, a []any, id int64, args []s
 		f.fault = a[0]
 		reply(nil, "success")
 		f.notify("user-data/pptr/fault")
+	case "set_property":
+		prop, _ := a[0].(string)
+		f.props[prop] = a[1]
+		reply(nil, "success")
+		f.notify(prop)
 	case "fake-dump":
-		reply(map[string]any{"args": args, "list": f.list, "loads": f.loads, "pos": f.pos}, "success")
+		reply(map[string]any{"args": args, "list": f.list, "loads": f.loads, "pos": f.pos, "props": f.props}, "success")
 	case "quit":
 		reply(nil, "success")
 		os.Exit(0)
@@ -268,7 +279,7 @@ func (f *fakeMPV) value(prop string) any {
 	case "user-data/pptr/fault":
 		return f.fault
 	}
-	return nil
+	return f.props[prop]
 }
 
 func isImagePath(p string) bool {

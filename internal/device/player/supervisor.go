@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
+	"runtime"
 	"runtime/debug"
 	"slices"
 	"strconv"
@@ -88,6 +89,7 @@ const (
 	obsIdle  = 1 // idle-active: mpv has no file
 	obsHwdec = 2 // hwdec-current: the decoder of the video
 	obsFault = 3 // user-data/pptr/fault: a fault of transitions.lua
+	obsMoved = 4 // user-data/pptr/moved: the result of a moving crossfade
 )
 
 // ErrBusy says that the command queue of the player is full. A caller that
@@ -146,6 +148,9 @@ type Options struct {
 	Reboot func(reason string)
 	// NightlyRestart gives the time of the daily restart as "HH:MM", or "".
 	NightlyRestart func() string
+	// Motion gives playback.motion: "auto", "on" or "off". A nil function
+	// gives "auto".
+	Motion func() string
 	// Watchdog gives the live thresholds of the ladder (D30). A nil function uses
 	// DefaultWatchdog.
 	Watchdog func() WatchdogSettings
@@ -287,6 +292,9 @@ type Supervisor struct {
 	lastDisplay bool
 	waitDelay   time.Duration
 	waitLogged  bool
+	// motionOff says that the guard switched the moving crossfade off. It stays
+	// off until the daemon stops, also through a restart of mpv.
+	motionOff bool
 	// pendingRestart holds the reason of a restart that arrived while the screen
 	// was off. The resume starts a new mpv, which is that restart.
 	pendingRestart string
@@ -341,6 +349,9 @@ func New(opt Options) *Supervisor {
 	}
 	if opt.Watchdog == nil {
 		opt.Watchdog = DefaultWatchdog
+	}
+	if opt.Motion == nil {
+		opt.Motion = func() string { return MotionAuto }
 	}
 	if opt.ModelPath == "" {
 		opt.ModelPath = ModelPath
@@ -710,8 +721,39 @@ func (s *Supervisor) connect(now time.Time) {
 	s.request(now, reqOther, 0, "observe_property", obsIdle, "idle-active")
 	s.request(now, reqOther, 0, "observe_property", obsHwdec, "hwdec-current")
 	s.request(now, reqOther, 0, "observe_property", obsFault, "user-data/pptr/fault")
+	s.request(now, reqOther, 0, "observe_property", obsMoved, "user-data/pptr/moved")
+	s.sendMotion(now)
 	s.setState(StateRunning, "")
 	s.loadContent(now)
+}
+
+// sendMotion tells transitions.lua if it may make a moving crossfade: the
+// value of playback.motion for this board, unless the guard switched it off.
+// mpv answers the requests in order, so the value is there before the first
+// file of the list starts.
+func (s *Supervisor) sendMotion(now time.Time) {
+	value := "no"
+	if !s.motionOff && ResolveMotion(s.opt.Motion(), runtime.GOARCH, s.model) {
+		value = "yes"
+	}
+	s.request(now, reqOther, 0, "set_property", "user-data/pptr/motion", value)
+}
+
+// onMoved takes the result of a moving crossfade. The guard switches the
+// moving crossfade off for the rest of the boot when the device is too slow
+// for it: the crossfade then keeps the last frame of the video still.
+func (s *Supervisor) onMoved(data json.RawMessage, now time.Time) {
+	m, ok := parseMoved(data)
+	if !ok || s.motionOff {
+		return
+	}
+	reason := tooSlow(m)
+	if reason == "" {
+		return
+	}
+	s.motionOff = true
+	s.log("player.motion.off", reason+"; the crossfade keeps the last frame of a video still until the daemon starts again")
+	s.sendMotion(now)
 }
 
 // request sends one command to mpv and records it, so that the answer goes to
@@ -861,6 +903,8 @@ func (s *Supervisor) onProperty(m message, now time.Time) {
 		if json.Unmarshal(m.Data, &v) == nil && v != "" {
 			s.note("player.transition.fault", v, now)
 		}
+	case obsMoved:
+		s.onMoved(m.Data, now)
 	}
 }
 
@@ -962,6 +1006,8 @@ func (s *Supervisor) playlistChanged(now time.Time) {
 	if s.ipc == nil {
 		return // the connect loads the manifest
 	}
+	// A playback setting can be playback.motion.
+	s.sendMotion(now)
 	m := s.opt.Manifest()
 	content := !m.Fallback && m.Playlist != nil && len(m.Playlist.Items) > 0
 	switch {
