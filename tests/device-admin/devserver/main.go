@@ -31,9 +31,9 @@ import (
 	"strings"
 )
 
-// proxied are the URL spaces that belong to the daemon: the JSON API, the media
-// files and the player. Everything else is a file of the admin UI.
-var proxied = []string{"/api/", "/media/", "/player"}
+// proxied are the URL spaces that belong to the daemon: the JSON API and the media
+// files. Everything else is a file of the admin UI.
+var proxied = []string{"/api/", "/media/"}
 
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8099", "the address to serve on")
@@ -77,8 +77,7 @@ func main() {
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(target)
-	// The install-to-disk stream and the player stream never end, so nothing may
-	// be held in a buffer.
+	// The install-to-disk stream never ends, so nothing may be held in a buffer.
 	proxy.FlushInterval = -1
 
 	adminFiles := noStore(http.FileServer(http.Dir(admin)))
@@ -114,7 +113,7 @@ func main() {
 		adminFiles.ServeHTTP(w, r)
 	})
 
-	log.Printf("devserver: %s serves %s and sends /api, /media and /player to %s", *addr, admin, target)
+	log.Printf("devserver: %s serves %s and sends /api and /media to %s", *addr, admin, target)
 	log.Fatal(http.ListenAndServe(*addr, mux))
 }
 
