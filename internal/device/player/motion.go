@@ -3,7 +3,6 @@ package player
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 )
 
 // The words of playback.motion.
@@ -25,9 +24,7 @@ func ResolveMotion(setting, arch, model string) bool {
 	case MotionOff:
 		return false
 	}
-	return arch == "amd64" ||
-		strings.HasPrefix(model, "Raspberry Pi 5") ||
-		strings.HasPrefix(model, "Raspberry Pi Compute Module 5")
+	return arch == "amd64" || isPi5(model)
 }
 
 // moved is the report of one moving crossfade, from user-data/pptr/moved

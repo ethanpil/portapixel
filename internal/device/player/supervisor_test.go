@@ -52,7 +52,7 @@ func TestPlaylistLoadsWithFileOptions(t *testing.T) {
 	if promo["mute"] != "yes" || promo["end"] != "30" || promo["loop-file"] != "" {
 		t.Errorf("muted video with a cap: options = %v", promo)
 	}
-	if tour["mute"] != "no" || tour["end"] != "" {
+	if tour["mute"] != "no" || tour["end"] != "" || tour["vd-lavc-o"] != "" {
 		t.Errorf("video options = %v", tour)
 	}
 
@@ -77,15 +77,27 @@ func TestPlaylistLoadsWithFileOptions(t *testing.T) {
 }
 
 // The supervisor reads the board model one time and gives it to the command
-// line: a Raspberry Pi gets the hardware decoder of the SoC.
+// line: a Raspberry Pi gets the hardware decoder of the SoC. The video items, and
+// only they, get the smaller buffer count of that decoder.
 func TestTheBoardModelChoosesTheDecoder(t *testing.T) {
-	h := newHarness(t, videos(), func(o *Options, h *harness) {
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) {
 		o.ModelPath = filepath.Join(h.run, "model")
 		writeFile(t, o.ModelPath, "Raspberry Pi Zero 2 W Rev 1.0\x00")
 	})
 	h.waitPlaying(0)
-	if args := h.dump().Args; !slices.Contains(args, "--hwdec=v4l2m2m-copy") {
-		t.Errorf("the arguments %q do not hold --hwdec=v4l2m2m-copy", args)
+	d := h.dump()
+	if !slices.Contains(d.Args, "--hwdec=v4l2m2m-copy") {
+		t.Errorf("the arguments %q do not hold --hwdec=v4l2m2m-copy", d.Args)
+	}
+	for _, a := range d.Args {
+		if strings.HasPrefix(a, "--vd-lavc-o") {
+			t.Errorf("the command line holds %q; it must be on the video items only", a)
+		}
+	}
+	for i, want := range []string{"", "num_capture_buffers=8", "num_capture_buffers=8"} {
+		if got := d.List[i].Opts["vd-lavc-o"]; got != want {
+			t.Errorf("entry %d (%s) vd-lavc-o = %q, want %q", i, d.List[i].Path, got, want)
+		}
 	}
 }
 

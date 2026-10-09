@@ -80,12 +80,35 @@ func BoardModel(path string) string {
 // IsRaspberryPi reports if a board name from BoardModel is a Raspberry Pi.
 func IsRaspberryPi(model string) bool { return strings.HasPrefix(model, "Raspberry Pi") }
 
+// isPi5 reports a Raspberry Pi 5 or Compute Module 5. It has no H.264
+// decoder, and it is fast enough for the moving crossfade.
+func isPi5(model string) bool {
+	return strings.HasPrefix(model, "Raspberry Pi 5") || strings.HasPrefix(model, "Raspberry Pi Compute Module 5")
+}
+
 // Hwdec gives the value of --hwdec for a board. See Args.
 func Hwdec(model string) string {
 	if IsRaspberryPi(model) {
 		return "v4l2m2m-copy"
 	}
 	return "auto-safe"
+}
+
+// DecoderOptions gives the decoder options (vd-lavc-o) of a video item on a
+// board, or "". The H.264 decoder of a Pi Zero 2 W, 3 and 4 (h264_v4l2m2m)
+// takes its capture buffers from the CMA area: 20 by default, about 3.1 MB each
+// at 1080p, and its 16 input buffers take about 1.5 MB each. A 512 MB Pi has a
+// CMA area of 128 MB (dtparam=cma-128), and the GPU needs it too. 8 capture
+// buffers save about 37 MB at 1080p. A Pi 5 has no such decoder.
+//
+// The option goes on the video items only, not on the command line: mpv gives
+// vd-lavc-o to each decoder, and a decoder that does not know the option (an
+// image, or a video that plays in software) writes an error line.
+func DecoderOptions(model string) string {
+	if IsRaspberryPi(model) && !isPi5(model) {
+		return "num_capture_buffers=8"
+	}
+	return ""
 }
 
 // Disabled reports if the player is switched off.
