@@ -726,6 +726,7 @@ func TestASlideshowVideoIsNotAStall(t *testing.T) {
 		rate []any
 	}{
 		{"estimated-vf-fps", []any{1.0 / 35, 0, 105, 3}},
+		{"container-fps", []any{0, 1.0 / 35, 105, 3}},
 		{"duration and frame count", []any{0, 0, 105, 3}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -751,6 +752,33 @@ func TestASlideshowVideoIsNotAStall(t *testing.T) {
 	}
 }
 
+// A video that has no frame rate in mpv, or one that the file names wrong,
+// still stalls at the timeout. The measured rate (estimated-vf-fps) of a
+// normal video wins over the rate that the header names.
+func TestAStalledVideoWithNoUsableRateRestartsAtTheTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		rate []any
+	}{
+		{"no rate at all", []any{0, 0, 0, 0}},
+		{"a header that names one frame in 1 h", []any{25, 1.0 / 3600, 3600, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, videos(), nil)
+			h.waitPlaying(0)
+			first := h.sup.proc.pid()
+			h.ctl(append([]any{"fake-rate"}, tc.rate...)...)
+			h.ctl("fake-stall")
+			h.advance(2 * time.Second)
+			h.advance(heartbeatTimeout)
+			waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+			if !h.eventWith("player.restart", "did not move") {
+				t.Fatalf("no stall line:\n%s", h.events())
+			}
+		})
+	}
+}
+
 func TestFrameInterval(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -762,11 +790,39 @@ func TestFrameInterval(t *testing.T) {
 		{"container next", frameRate{container: 0.5, duration: 60, frames: 1}, 2 * time.Second},
 		{"duration by frames last", frameRate{duration: 105, frames: 3}, 35 * time.Second},
 		{"no frame count", frameRate{duration: 105}, 0},
+		{"no duration", frameRate{frames: 3}, 0},
 		{"the cap", frameRate{estimated: 1e-9}, maxFrameWait},
 		{"far past the cap", frameRate{duration: 1e300, frames: 1e-300}, maxFrameWait},
+		{"a rate below 0 is no rate", frameRate{estimated: -25, container: 0.5}, 2 * time.Second},
+		{"a rate that is not a number is no rate", frameRate{estimated: math.NaN(), container: math.NaN(), duration: 105, frames: 3}, 35 * time.Second},
+		{"a duration below 0 is no interval", frameRate{duration: -105, frames: 3}, 0},
+		{"a frame count below 0 is no interval", frameRate{duration: 105, frames: -3}, 0},
+		{"an endless rate is no interval", frameRate{estimated: math.Inf(1)}, 0},
 	} {
 		if got := tc.rate.interval(); got != tc.want {
 			t.Errorf("%s: interval = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
+// The limit is the timeout, or two frame intervals when that is longer. The
+// interval stops at maxFrameWait, so the limit stops at two of them.
+func TestStallLimit(t *testing.T) {
+	var s Supervisor
+	for _, tc := range []struct {
+		name string
+		rate frameRate
+		want time.Duration
+	}{
+		{"a normal video", frameRate{estimated: 29.97, container: 29.97}, heartbeatTimeout},
+		{"no rate", frameRate{}, heartbeatTimeout},
+		{"two intervals are less than the timeout", frameRate{estimated: 1.0 / 10}, heartbeatTimeout},
+		{"two intervals", frameRate{estimated: 1.0 / 32}, 64 * time.Second},
+		{"the cap", frameRate{estimated: 1e-9}, 2 * maxFrameWait},
+	} {
+		s.rate = tc.rate
+		if got := s.stallLimit(heartbeatTimeout); got != tc.want {
+			t.Errorf("%s: limit = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }
