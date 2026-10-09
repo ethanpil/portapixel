@@ -379,6 +379,40 @@ func TestFallbackDrawFailureIsRetried(t *testing.T) {
 	waitFor(t, "the first picture", h.sup.Started)
 }
 
+// A draw of the fallback screen that fails leaves the content on the screen.
+// When the same content comes back before the draw works again, the retry of
+// the draw must not replace the content: it showed the fallback screen for
+// hours, with content in the manifest.
+func TestFallbackRetryDoesNotReplaceContentThatCameBack(t *testing.T) {
+	fail := false
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) {
+		o.Render = func(info fallback.Info, w, h2 int) ([]byte, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if fail {
+				return nil, errors.New("the render failed")
+			}
+			return []byte("PNG"), nil
+		}
+	})
+	h.waitPlaying(0)
+	h.mu.Lock()
+	fail = true
+	h.mu.Unlock()
+	h.setManifest(library.PlayerManifest{Fallback: true}) // a gap in the schedule
+	waitFor(t, "the failed draw", func() bool { return h.eventWith("player.fallback.fail", "the render failed") })
+	h.setManifest(threeItems()) // the schedule comes back to the same playlist
+	h.settle()
+	h.mu.Lock()
+	fail = false
+	h.mu.Unlock()
+	h.advance(fallbackCheck + time.Second) // the time of the retry
+	h.settle()
+	if d := h.dump(); len(d.List) != 3 || filepath.Base(d.List[0].Path) != "welcome.jpg" {
+		t.Fatalf("the content is gone from mpv: %+v", d.List)
+	}
+}
+
 // When no item can play, mpv goes idle. The fallback screen then shows, each
 // fault is in the ops log, and the player tries the list again later.
 func TestEveryItemFails(t *testing.T) {

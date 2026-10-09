@@ -1102,7 +1102,13 @@ func (s *Supervisor) playlistChanged(now time.Time) {
 	case !content && s.list != nil && s.list.fallback && s.failedAt.IsZero():
 		return // the fallback screen shows already
 	case content && s.list != nil && !s.list.fallback && reflect.DeepEqual(*m.Playlist, *s.list.playlist):
-		return // this list plays already
+		// This list plays already. A draw of the fallback screen that failed in
+		// the meantime left the list as it was; its retry must not replace the
+		// content later. A list with no item that could play keeps the retry.
+		if s.failedAt.IsZero() {
+			s.fb.failed = false
+		}
+		return
 	}
 	s.loadManifest(m, now)
 }
