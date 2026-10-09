@@ -12,6 +12,9 @@
 # mkinitfs, cpio, gzip. x86_64 also needs syslinux and grub with grub-efi.
 # The loader packages stay on the build host. They never enter the image
 # (plan section 6).
+#
+# The kernel of the build host needs the exfat driver. The script mounts PPMEDIA
+# to put portapixel.toml on it. A container uses the kernel of its host.
 set -eu
 
 ARCH=""
@@ -66,6 +69,9 @@ esac
 for t in sgdisk losetup mkfs.vfat mkfs.ext4 mkfs.exfat apk mkinitfs cpio gzip; do
 	command -v "$t" >/dev/null 2>&1 || die "the build host needs $t"
 done
+# Before the disk is cut. A missing file would fail the build after the partitions.
+[ -f "$SRC/portapixel.toml" ] ||
+	die "no $SRC/portapixel.toml. Write it with: go run ./internal/config/cmd/gentemplate"
 if [ "$ARCH" = x86_64 ]; then
 	for t in syslinux grub-install; do
 		command -v "$t" >/dev/null 2>&1 || die "the build host needs $t (syslinux, grub-efi)"
@@ -190,11 +196,10 @@ mkfs.exfat -L PPMEDIA "$P3" >/dev/null
 #
 # os/portapixel.toml is generated: go run ./internal/config/cmd/gentemplate
 say "put portapixel.toml on PPMEDIA"
-[ -f "$SRC/portapixel.toml" ] ||
-	die "no $SRC/portapixel.toml. Write it with: go run ./internal/config/cmd/gentemplate"
 MEDIAMNT="$(mktemp -d)"
-# The host kernel needs the exfat driver. A CI container uses the kernel of its
-# host, so it cannot load the module itself, and "|| :" lets the mount decide.
+# The kernel of the build host needs the exfat driver. A container cannot load a
+# module from its own file system, but the kernel of the host loads the module
+# when the mount asks for it. So "|| :" lets the mount decide.
 modprobe exfat 2>/dev/null || :
 mount -t exfat "$P3" "$MEDIAMNT" ||
 	die "cannot mount $P3 as exFAT. Does the kernel of the build host have the exfat driver?"
