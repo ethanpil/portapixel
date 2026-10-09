@@ -40,29 +40,25 @@
 # /etc/init.d/chronyd, so "rc-update add chronyd" fails. Every service we enable
 # therefore has its "-openrc" package listed next to the main package.
 #
-# THE DISPLAY STACK IS CHROMIUM AND CAGE, not cog and WPE WebKit. The plan asked
-# for cog plus wpewebkit. Neither package exists in Alpine 3.23 main or
-# community, and neither is in edge main, community or testing either (checked
-# on 2026-09-18). Only libwpe and libwpebackend-fdo are packaged, which is not
-# enough to run anything. The owner chose Chromium in a cage session instead.
-# cage is the ONLY compositor allowed here: never weston, sway or labwc.
+# THE PLAYER IS mpv, directly on DRM/KMS. There is no compositor, no seat
+# daemon, no X server and no Wayland session. The daemon starts mpv as the
+# kiosk user and controls it over a unix socket. The owner chose mpv on
+# 2026-10-08, in place of Chromium in a cage session.
 
 # ---------------------------------------------------------------- base system
 alpine-base                # busybox, OpenRC, /etc skeleton. The Alpine base (D1).
 busybox-openrc             # syslog and crond init scripts. syslog logs to RAM (D35).
-busybox-suid               # su, passwd and login. The daemon starts the browser as the kiosk user.
 openssh-server             # SSH is on by default (D23). It also brings ssh-keygen for the host keys.
 openssh-server-common-openrc  # the sshd init script. The main package holds no init script.
 chrony                     # real time sync. A Pi has no RTC (D40).
 chrony-openrc              # the chronyd init script.
 tzdata                     # IANA zone data for [device].timezone (D40).
 ca-certificates            # TLS trust for the fleet server and GitHub release checks.
-dbus                       # Chromium and the accessibility layer look for a bus. Without one they log errors on every start.
-dbus-openrc                # the dbus init script.
 
 # ------------------------------------------------------------ device handling
-# eudev, not mdev: we need stable /dev/dri and /dev/input nodes plus input
-# hotplug, which libinput inside cage needs (plan section 7).
+# eudev, not mdev: we need stable /dev/dri, /dev/snd and /dev/video* nodes with
+# the video and audio groups, and udev loads each driver by its modalias. The
+# Raspberry Pi video decoder (bcm2835-codec) loads that way (plan section 7).
 # LANDMINE: alpine-base pulls busybox-mdev-openrc, so both mdev and udev init
 # scripts are on disk. install.sh enables udev only. Never enable both.
 eudev                      # udev implementation without systemd.
@@ -79,31 +75,23 @@ sfdisk                     # partition table dump and restore. Backup path for t
 partx                      # tell the kernel about the new p3 without a reboot (D36). Its own package.
 parted                     # partprobe. Second way to re-read the partition table.
 @image mkinitfs            # build the initramfs. The feature list gives medium independence (D53). Only the --root branch builds one.
-zram-init                  # compressed RAM swap for the low tier (plan section 4). No flash wear.
-zram-init-openrc           # the zram-init init script. The first boot enables it under 1 GiB of memory.
+zram-init                  # compressed RAM swap for a machine with less than 1 GiB of memory (plan section 4). No flash wear.
+zram-init-openrc           # the zram-init init script. Its conf.d gives a size only under 1 GiB of memory.
 
-# --------------------------------------------------------------- the browser
-# The daemon starts:  cage -s -- chromium --kiosk --ozone-platform=wayland ...
-# and drives it over the DevTools protocol on a localhost port. There is no
-# chromedriver: the DevTools port is the control path.
-# The Ozone Wayland backend is compiled in: the binary carries
-# ui/ozone/platform/wayland/* and libwayland is linked inside it, which is why
-# libwayland-client is not in its dependency list (checked 2026-09-18).
-chromium                   # the browser. It brings its own ffmpeg, GTK and NSS.
-cage                       # single window Wayland kiosk compositor on DRM/KMS through wlroots. The only compositor allowed.
-seatd                      # the seat daemon. cage takes DRM master through libseat as the unprivileged kiosk user.
-seatd-openrc               # the seatd init script.
-wlr-randr                  # set the output mode and the rotation inside the cage session (D10, D49).
-# chromium-chromedriver is deliberately NOT installed. The daemon uses the
-# DevTools protocol. Do not re-add it without an explicit ask.
-# The GStreamer packages are gone with WPE WebKit: Chromium decodes with its
-# own pipeline and the system ffmpeg libraries, which come in as dependencies.
+# ---------------------------------------------------------------- the player
+# The daemon starts:  mpv --idle=yes --vo=gpu --gpu-context=drm ...  (or
+# --vo=drm) as the kiosk user, and drives it over JSON IPC on a unix socket.
+# mpv 0.40 OR LATER: an older mpv does not know --load-commands and
+# --load-positioning, and refuses to start. Alpine 3.23 has 0.40.0.
+# mpv brings FFmpeg, libplacebo, libass and LuaJIT as dependencies. LuaJIT runs
+# the transition script that the daemon gives with --script.
+mpv                        # the player: video and images on DRM/KMS with no compositor (D3).
 
 # --------------------------------------------------------------- graphics core
 mesa-dri-gallium           # the broad Mesa driver set. "Maximal drivers" goal (plan section 4).
-mesa-gbm                   # GBM buffer allocation. wlroots scans out through it.
-mesa-egl                   # EGL on DRM/KMS. cage renders with it. No X server anywhere (D3).
-mesa-gles                  # GLES2. Chromium composites through it.
+mesa-gbm                   # GBM buffer allocation. mpv --vo=gpu --gpu-context=drm scans out through it.
+mesa-egl                   # EGL on DRM/KMS for mpv --vo=gpu. No X server anywhere (D3).
+mesa-gles                  # the GLES libraries. mpv --vo=gpu renders with OpenGL or GLES through EGL.
 libdrm                     # KMS ioctls for the mode set and for DPMS.
 
 # --------------------------------------------------------------------- sound
@@ -118,12 +106,8 @@ wpa_supplicant-openrc      # the wpa_supplicant init script.
 ifupdown-ng                # /etc/network/interfaces for DHCP and static addresses (D20).
 wireless-regdb             # regulatory database. Without it some cards refuse the 5 GHz channels.
 
-# ------------------------------------------------------------------------ fonts
-# Base plus CJK plus emoji only. The full Noto set is several hundred megabytes
-# and the fallback screen does not need Linear B (plan section 7).
-font-noto                  # Latin, Greek, Cyrillic and the common symbol blocks.
-font-noto-cjk              # Chinese, Japanese and Korean text on live web pages.
-font-noto-emoji            # emoji, which real web pages use everywhere.
+# There is no font package. The daemon draws the fallback screen as a PNG with
+# fonts that are inside the binary. mpv has no on-screen controller (--osc=no).
 
 # ------------------------------------------------------------------------- misc
 curl                       # field debug convenience. The documented rescan hook uses it.
