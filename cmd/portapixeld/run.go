@@ -1440,17 +1440,17 @@ func configMTime(mediaRoot string) time.Time {
 // the person looks at the screen and waits.
 func (d *daemon) command(name string) error {
 	switch name {
-	case "reboot":
+	case syncer.CmdReboot:
 		go d.reboot("the admin asked for a reboot")
-	case "restart-player":
+	case syncer.CmdRestartPlayer:
 		return d.sup.Restart("the admin asked for a player restart")
-	case "screen-on":
+	case syncer.CmdScreenOn:
 		// The power controller owns the order and the manual override: the command
 		// holds until the next edge of the screen schedule (D31).
 		return d.screen.Set(true, "the admin asked for the screen on")
-	case "screen-off":
+	case syncer.CmdScreenOff:
 		return d.screen.Set(false, "the admin asked for the screen off")
-	case "rescan":
+	case syncer.CmdRescan:
 		d.rescan()
 	default:
 		return fmt.Errorf("%q is not a command that this device knows", name)
