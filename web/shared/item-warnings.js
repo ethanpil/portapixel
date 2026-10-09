@@ -17,12 +17,14 @@ function nameOf(item) {
   return String(item.name || item.file || '');
 }
 
-/* The extension, with no length limit. Go takes everything after the last full
-   stop, so a bound here would call a file good that the player skips. */
+/* The extension, the same as path.Ext in Go: everything after the last full
+   stop of the last path element, with no length limit. A "#" or a "?" is part of
+   a file name, so it is part of the extension too. */
 function extOf(item) {
-  const n = nameOf(item).split(/[?#]/)[0];
-  const m = /\.([A-Za-z0-9]+)$/.exec(n);
-  return m ? m[1].toLowerCase() : '';
+  const n = nameOf(item);
+  const base = n.slice(n.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot < 0 ? '' : base.slice(dot + 1).toLowerCase();
 }
 
 /* The lead-in of each warning. A file that the player cannot read and an image

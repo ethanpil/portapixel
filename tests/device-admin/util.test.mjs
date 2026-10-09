@@ -1,11 +1,13 @@
 // node --test tests/device-admin
 //
-// The helpers of web/device-admin/util.js that decide an address. They import
-// nothing, so node reads the file that ships.
+// The helpers of web/device-admin/util.js that decide an address, and the
+// extension rule of web/shared/item-warnings.js. They import nothing, so node
+// reads the files that ship.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { localMedia, frameURL, playingItem, nameToSave } from '../../web/device-admin/util.js';
+import { warningsFor, PREFIX } from '../../web/shared/item-warnings.js';
 
 // A paired device plays fleet objects from /media/_fleet/media/<object>. The first
 // guard took only /media/<playlist>/<file>, so every fleet item showed the
@@ -90,4 +92,18 @@ test('nameToSave keeps a rename that arrived while the page was open', () => {
   assert.equal(nameToSave('Back office', 'Lobby', 'Front desk'), 'Back office');
   assert.equal(nameToSave('Lobby', 'Lobby', 'Lobby'), 'Lobby');
   assert.equal(nameToSave('Lobby', 'Lobby', undefined), 'Lobby');
+});
+
+// The extension rule of the warnings is the rule of Go: playlist.Kind takes
+// path.Ext of the whole name. A "#" or a "?" in a file name is part of the
+// name. The first version cut the name there, a rule for the old web page
+// items, and it called a file that plays "skipped".
+test('warningsFor reads the extension after the last full stop, as Go does', () => {
+  const skipped = (name) => warningsFor({ kind: 'image', name }).some((w) => w.prefix === PREFIX.skipped);
+  for (const good of ['Menu #2.jpg', 'Promo #1 final.mp4', 'what?.png', 'a.b.webp', 'CLIP.MKV', 'media/a.jpg']) {
+    assert.equal(skipped(good), false, good);
+  }
+  for (const bad of ['notes.txt', 'menu.svg', 'noext', 'a.jpg#x', 'a.jpg?v=2', 'photo.jpg ', 'v1.2/noext']) {
+    assert.equal(skipped(bad), true, bad);
+  }
 });
