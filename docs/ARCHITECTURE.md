@@ -739,11 +739,20 @@ for a person is "up" in the window. `split` still opens across the window.
 | `fade-white` | The same, through white. |
 | `crossfade` | The copy goes clear over the next item. With motion, both items move (below). |
 | `wipe-left`, `-right`, `-up`, `-down` | The copy gets smaller; its edge moves in the direction of the word. |
-| `push-left`, `-right`, `-up`, `-down` | The copy moves out in the direction of the word, and `video-pan-x` or `video-pan-y` moves the next item in behind it. The script moves the next item first. |
-| `slide-in-left`, `-right`, `-up`, `-down` | The next item moves in over the copy, which stays where it is. The copy gets the crop of the wipe, and `video-pan` moves the next item as in the push. |
+| `push-left`, `-right`, `-up`, `-down` | The copy moves out in the direction of the word, and `video-pan-x` or `video-pan-y` moves the next item in behind it. The script moves the next item first. On `drm`, a still picture as the next item is a copy too (below). |
+| `slide-in-left`, `-right`, `-up`, `-down` | The next item moves in over the copy, which stays where it is. The copy gets the crop of the wipe, and the next item moves as in the push. |
 | `slide-out-left`, `-right`, `-up`, `-down` | The copy moves out in the direction of the word and the next item stays where it is. The cheapest kind: only the position of the overlay changes. |
 | `zoom-out` | The copy gets smaller toward the centre of the screen (the destination size of the overlay). |
 | `split` | The copy is two halves in two overlays (62 and 63). They move apart from the centre. The two overlays do not touch, and they draw right on `drm` and on `gpu`. Stacked overlays are still wrong on `drm`. |
+
+On `drm`, each change of `video-pan` makes mpv set up its scaler again and draw the whole
+picture in software (`VOCTRL_SET_PANSCAN`, the reconfig of vo_drm). On the throttled Zero proxy
+a push or a slide-in into an image showed no step until the end: a cut. So when the next item
+is a still picture, the script copies its frame at its first `playback-restart`
+(`screenshot-raw video`, scaled as above; the `window` copy of `drm` holds the OSD). Each step
+puts the rows of the two copies into one picture in overlay 62, and `video-pan` stays 0. A
+video as the next item still moves with `video-pan`. On `gpu`, `video-pan` costs little and
+does not change.
 
 Only `fade` and `fade-white` change pixels. Each other kind moves, crops or scales an overlay.
 The square of the dip is not one pixel: vo=gpu puts a clear border of one pixel around each

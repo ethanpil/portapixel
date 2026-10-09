@@ -30,10 +30,11 @@
 --   wipe-*     the copy of A gets smaller; B shows at one side. The word is
 --              the direction in which the edge moves.
 --   push-*     the copy of A moves out in the direction of the word, and B
---              moves in behind it (video-pan-x and video-pan-y move B).
+--              moves in behind it (video-pan-x and video-pan-y move B). On
+--              vo=drm a still picture B is a copy too, in the overlay of A.
 --   slide-in-* B moves in over the copy of A, which stays where it is. The
---              copy gets smaller under B (the same crop as wipe-*), and
---              video-pan moves B as in push-*.
+--              copy gets smaller under B (the same crop as wipe-*), and B
+--              moves as in push-*.
 --   slide-out-* the copy of A moves out in the direction of the word and B
 --              stays where it is. This is the push without the move of B.
 --   zoom-out   the copy of A gets smaller toward the centre of the screen
@@ -45,7 +46,8 @@
 -- screen (see TURN).
 --
 -- Only fade and fade-white change pixels (a pass of LuaJIT over the copy in the
--- first half). Each other kind moves, crops or scales an overlay.
+-- first half). Each other kind moves, crops or scales an overlay. A push or a
+-- slide-in with a copy of B puts rows of the two copies into one picture.
 --
 -- Ken Burns. An image with pptr-kb zooms and pans slowly while it shows. The
 -- timer sets video-zoom, video-pan-x and video-pan-y in steps. It starts when the
@@ -251,10 +253,33 @@ local function finish(why)
     kb_begin()
 end
 
+-- pair shows the part of A, as show gives it, and the copy of B at S.bx, S.by
+-- (see pan) as one picture. The two parts fill the screen and do not overlap.
+-- One overlay holds both, so no frame shows one part moved and the other not.
+local function pair(ptr, off, x, y, w, h)
+    local W, H, R = S.w, S.h, S.stride
+    local out = ffi.cast("uint8_t *", S.buf)
+    local a, b, bx, by = ptr + off, S.next.base, S.bx, S.by
+    local bx0, bx1 = math.max(0, bx), math.min(W, W + bx)
+    local by0, by1 = math.max(0, by), math.min(H, H + by)
+    for row = 0, H - 1 do
+        local o = out + row * R
+        if w > 0 and row >= y and row < y + h then
+            ffi.copy(o + x * 4, a + (row - y) * R, w * 4)
+        end
+        if bx1 > bx0 and row >= by0 and row < by1 then
+            ffi.copy(o + bx0 * 4, b + (row - by) * R + (bx0 - bx) * 4, (bx1 - bx0) * 4)
+        end
+    end
+    return mp.commandv("overlay-add", COVER, 0, 0, addr(S.buf), 0, "bgra", W, H, R)
+end
+
 -- show puts a part of a picture on the screen: w x h pixels from the byte
--- offset off, at x, y. id is the overlay; the default is COVER.
+-- offset off, at x, y. id is the overlay; the default is COVER. A push or a
+-- slide-in with a copy of B shows the copy of B in the same overlay (pair).
 local function show(ptr, off, x, y, w, h, id)
     id = id or COVER
+    if S.next and id == COVER then return pair(ptr, off, x, y, w, h) end
     if w < 1 or h < 1 then
         mp.commandv("overlay-remove", id)
         return true
@@ -296,9 +321,14 @@ local function scale(src8, dst, n, a, orm, white)
     end
 end
 
--- pan moves B. The value is in pixels of the screen; video-pan takes a part of
--- the size of the video on the screen.
+-- pan moves B. The value is in pixels of the screen. With a copy of B (see
+-- start), the next show moves the copy. Else video-pan moves B; it takes a part
+-- of the size of the video on the screen.
 local function pan(x, y)
+    if S.next then
+        S.bx, S.by = x, y
+        return
+    end
     mp.set_property_number("video-pan-x", x / S.vw)
     mp.set_property_number("video-pan-y", y / S.vh)
 end
@@ -384,29 +414,6 @@ local function step()
         if not r then finish("the overlay failed") end
     end)
     if not ok then finish("error: " .. tostring(err)) end
-end
-
--- start begins the movement when B shows its first frame.
-local function start()
-    if deadman then deadman:kill(); deadman = nil end
-    if S.kind == "join" then
-        -- B goes on from the frame that the moving crossfade showed last.
-        finish()
-        return
-    end
-    S.t0 = mp.get_time()
-    local k = S.kind
-    if k == "fade" or k == "fade-white" or k == "crossfade" then
-        S.buf = ffi.new("int32_t[?]", S.w * S.h)
-    end
-    if k:sub(1, 5) == "push-" or k:sub(1, 9) == "slide-in-" then
-        local d = mp.get_property_native("osd-dimensions")
-        S.vw = math.max(1, d.w - d.ml - d.mr)
-        S.vh = math.max(1, d.h - d.mt - d.mb)
-        S.pan = true
-    end
-    S.timer = mp.add_periodic_timer(STEP, step)
-    step()
 end
 
 -- drops gives the dropped frames of the file so far.
@@ -631,7 +638,8 @@ end
 
 -- grab takes a copy of the screen for a transition. It gives a table with w, h
 -- and base (opaque BGRA pixels, rows of w * 4 bytes), or nil when the copy
--- failed.
+-- failed. With frame, it copies the frame at its own size, on vo=drm only. That
+-- copy has no OSD, so it shows item B under the copy of A.
 --
 -- On vo=drm, mpv makes the copy of the window from the frame. It scales the
 -- frame to the window in the format of the frame, and does not check the
@@ -639,11 +647,15 @@ end
 -- empty when the picture and the window have different sizes, and the
 -- transition started from black (lab7). The frame at its own size is right, and
 -- reshape scales it.
-local function grab()
-    local r = capture("window")
-    local frame = false
-    if r and mp.get_property("current-vo") == "drm" and empty(r) then
-        r, frame = framecopy(), true
+local function grab(frame)
+    local drm = mp.get_property("current-vo") == "drm"
+    local r = nil
+    if not frame then
+        r = capture("window")
+        frame = r and drm and empty(r)
+    end
+    if frame then
+        r = drm and framecopy()
     end
     if not r then return nil end
     local c = { w = r.w, h = r.h }
@@ -718,6 +730,44 @@ local function cover()
     deadman = mp.add_timeout(DEADMAN, function()
         finish("the next item did not show in " .. DEADMAN .. " s")
     end)
+end
+
+-- start begins the movement when B shows its first frame.
+local function start()
+    if deadman then deadman:kill(); deadman = nil end
+    if S.kind == "join" then
+        -- B goes on from the frame that the moving crossfade showed last.
+        finish()
+        return
+    end
+    local k = S.kind
+    if k == "fade" or k == "fade-white" or k == "crossfade" then
+        S.buf = ffi.new("int32_t[?]", S.w * S.h)
+    end
+    if k:sub(1, 5) == "push-" or k:sub(1, 9) == "slide-in-" then
+        -- On vo=drm each change of video-pan makes mpv set up its scaler again
+        -- and draw the whole picture in software (vo_drm reconfig). On a slow
+        -- device the screen showed no step until the end, so the push was a cut
+        -- (lab7). A still picture B needs no video-pan: a copy of B moves in
+        -- one overlay with the copy of A (see pair). grab gives no such copy on
+        -- vo=gpu, which moves B with video-pan at no cost.
+        local v = video(false)
+        if v and v.image then
+            local c = grab(true)
+            if c and c.w == S.w and c.h == S.h then
+                S.next, S.buf = c, ffi.new("int32_t[?]", S.w * S.h)
+            end
+        end
+        if not S.next then
+            local d = mp.get_property_native("osd-dimensions")
+            S.vw = math.max(1, d.w - d.ml - d.mr)
+            S.vh = math.max(1, d.h - d.mt - d.mb)
+            S.pan = true
+        end
+    end
+    S.t0 = mp.get_time()
+    S.timer = mp.add_periodic_timer(STEP, step)
+    step()
 end
 
 -- The next item of a moving crossfade starts where the mix stopped, so no

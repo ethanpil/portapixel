@@ -476,6 +476,13 @@ or with the ops log.
   pixels at the size of the frame.
 - On vo=drm, `screenshot-raw window` also draws the OSD into the copy. A copy of
   the next item under the cover of the old item must use `video`.
+- On vo=drm, each change of `video-pan` sends `VOCTRL_SET_PANSCAN`, and vo_drm
+  runs its whole reconfig: a new scaler, a new frame buffer and a full software
+  draw. On the throttled Zero proxy a push or a slide-in into an image showed no
+  step until the end, while the script ran 23 steps. A slide-out and a fade,
+  which change only the overlay, moved. It was not a regression: the scripts of
+  4c5e688 and 0917424 did the same. A still picture as the next item is now a
+  copy that moves in the overlay of the old item.
 - Stacked overlays blend wrongly on vo=drm: the colours wash out and pink and
   blue specks show. Overlays that sit side by side and do not touch are right.
   So `fade` puts one black square in the place of the copy, and `split` uses two
