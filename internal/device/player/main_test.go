@@ -236,6 +236,7 @@ type dump struct {
 	Loads int            `json:"loads"`
 	Pos   int            `json:"pos"`
 	Props map[string]any `json:"props"`
+	Busy  bool           `json:"busy"`
 }
 
 func (h *harness) dump() dump {
@@ -286,8 +287,18 @@ func (h *harness) advance(d time.Duration) {
 // settle waits until mpv answered every request. A test calls it before a jump
 // of the clock that is longer than the timeout: an answer that is still on its
 // way would then look like silence. The time of a device does not jump.
+//
+// The fake shows the file of a load with replace 10 ms later, and the supervisor
+// then asks three questions. The fake must have done that before the poll of
+// advance: mpv answers in order, so the answer to the poll then comes behind the
+// events, and heardAt cannot pass them. A fake that does not answer (it hangs or
+// it ended) does not hold settle back.
 func (h *harness) settle() {
 	h.t.Helper()
+	waitFor(h.t, "the fake shows its file", func() bool {
+		d, ok := h.tryDump()
+		return !ok || !d.Busy
+	})
 	h.advance(pollEvery)
 }
 

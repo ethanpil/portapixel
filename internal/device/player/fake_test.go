@@ -28,8 +28,9 @@ import (
 //	fake-exit <code>    end the process
 //	fake-drops <vo> <decoder>  set the two dropped frame counters
 //	fake-fault <text>   set user-data/pptr/fault, as transitions.lua does
-//	fake-dump           give the arguments, the playlist, the load count and
-//	                    the values that set_property set
+//	fake-dump           give the arguments, the playlist, the load count, the
+//	                    values that set_property set, and busy (a load with
+//	                    replace did not show its file yet)
 //
 // set_property keeps the value and tells the observers, so a test can also set
 // user-data/pptr/moved as transitions.lua does.
@@ -65,11 +66,14 @@ type fakeMPV struct {
 	// loading counts the loads with replace, so a late start of an old list does
 	// nothing.
 	loading int
-	timePos float64
-	stall   bool
-	hang    bool
-	vo, dec int
-	fault   any
+	// scheduled counts the delayed starts that did not run yet. A test that
+	// moves the clock waits for 0 first (see harness.settle).
+	scheduled int
+	timePos   float64
+	stall     bool
+	hang      bool
+	vo, dec   int
+	fault     any
 	// props holds the values of set_property, for example user-data/pptr/motion.
 	props map[string]any
 }
@@ -179,10 +183,12 @@ func (f *fakeMPV) handle(c *fakeClient, name string, a []any, id int64, args []s
 			// mpv opens the new file in its play loop, after it took the commands
 			// that came with this one. The appends of the list come first.
 			f.loading++
+			f.scheduled++
 			gen := f.loading
 			time.AfterFunc(10*time.Millisecond, func() {
 				f.mu.Lock()
 				defer f.mu.Unlock()
+				f.scheduled--
 				if f.loading == gen && !f.hang {
 					f.play(0)
 				}
@@ -220,7 +226,8 @@ func (f *fakeMPV) handle(c *fakeClient, name string, a []any, id int64, args []s
 		reply(nil, "success")
 		f.notify(prop)
 	case "fake-dump":
-		reply(map[string]any{"args": args, "list": f.list, "loads": f.loads, "pos": f.pos, "props": f.props}, "success")
+		reply(map[string]any{"args": args, "list": f.list, "loads": f.loads, "pos": f.pos, "props": f.props,
+			"busy": f.scheduled > 0}, "success")
 	case "quit":
 		reply(nil, "success")
 		os.Exit(0)
