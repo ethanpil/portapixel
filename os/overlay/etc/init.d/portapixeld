@@ -104,9 +104,11 @@ start_pre() {
 	# tty1 when it takes the console. Measured in QEMU (SeaBIOS): that text was
 	# on the screen for 1 s after each kill of mpv. ESC [3J also clears the
 	# scrollback. The kernel command line hides the cursor. The -c test comes
-	# first: a redirect to a missing device node makes a plain file in /dev.
+	# first: a redirect to a missing device node makes a plain file in /dev. The
+	# braces put 2>/dev/null around the redirect too, so a tty1 that cannot be
+	# opened (a container, for example) gives no error text.
 	if [ -c /dev/tty1 ]; then
-		printf '\033[H\033[2J\033[3J' >/dev/tty1 2>/dev/null || :
+		{ printf '\033[H\033[2J\033[3J' >/dev/tty1; } 2>/dev/null || :
 	fi
 }
 
