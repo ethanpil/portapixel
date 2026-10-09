@@ -309,7 +309,9 @@ is the sentence for a person. The codes are the constants of
 The player fields of `Status`: `player_state` uses the State words of the player
 supervisor (`stopped`, `starting`, `running`, `waiting-for-display`, `disabled`).
 `video_output` is `"gpu"` or `"drm"`. `hwdec` is the decoder of the current video, `"no"`
-for software decoding, and `""` when no video plays. `now_playing.dropped_frames` counts
+for software decoding, and `""` when no video plays. It is also `""` while a video plays
+that ends in a moving crossfade: mpv gives no `hwdec-current` when its filter graph feeds
+the output (section 7a). `now_playing.dropped_frames` counts
 the frames of the current video that the player dropped. An empty value means that the
 player did not report it. `Status` has no device tier and no codec report.
 
@@ -406,13 +408,16 @@ mpv --no-config --profile=fast --idle=yes --force-window=yes --keep-open=yes \
   --input-default-bindings=no --osc=no --ytdl=no --load-stats-overlay=no \
   --load-console=no --load-auto-profiles=no --load-select=no --load-commands=no \
   --load-positioning=no --hwdec=auto-safe|v4l2m2m-copy --ao=alsa --msg-level=all=warn \
-  --vo=drm | --vo=gpu --gpu-context=drm \
+  --gpu-shader-cache=no --vo=drm | --vo=gpu --gpu-context=drm \
   [--video-rotate=<display.rotation>] [--drm-mode=<display.video_mode>]
 ```
 
 This block is a copy for the reader. `command.go` is the source, and the mpv command line
 lives there and nowhere else. mpv refuses an option that it does not know, so the image
-needs mpv 0.40 or later. The environment of mpv is `PATH` and `HOME=<run>/player`.
+needs mpv 0.40 or later. The environment of mpv is `PATH`, `HOME=<run>/player` and
+`MESA_SHADER_CACHE_DISABLE=true`. HOME is on the small tmpfs of the run directory, so no
+shader cache goes there: not the one of mpv (`--gpu-shader-cache=no`) and not the one of
+Mesa.
 
 `--player-cmd` or `PORTAPIXEL_PLAYER_CMD` replaces the program. Its own arguments come
 after the arguments of the daemon, and mpv uses the last value of an option. An override
@@ -441,7 +446,9 @@ board gives `--hwdec=auto-safe`. auto-safe tries only the decoders of the mpv wh
 drm-copy, mediacodec-copy and videotoolbox, with their `-copy` forms. `v4l2m2m` is not in
 that list, and the H.264 decoder of a Pi Zero 2 W, 3 and 4 is a V4L2 memory-to-memory
 device. `v4l2m2m-copy` is FFmpeg's `h264_v4l2m2m` with the frames in memory, which works
-with vo=drm, vo=gpu and the moving crossfade. A Pi 5 has no H.264 decoder. mpv falls back
+with vo=drm, vo=gpu and the moving crossfade. A Pi 5 has no H.264 decoder. The HEVC
+decoder of a Pi 4 and a Pi 5 needs the V4L2 request API (`drm` and `drm-copy`), and the
+FFmpeg of Alpine aarch64 does not have it, so every Pi gets `v4l2m2m-copy`. mpv falls back
 to software decoding by itself when a hardware decoder fails.
 
 On a Pi Zero 2 W, 3 and 4 each video item also gets `vd-lavc-o=num_capture_buffers=8`
@@ -619,15 +626,22 @@ rotation and square pixels, A has 1 s before the mix, and no moving crossfade fa
 mpv. Else the crossfade uses the copy.
 
 Faults. A graph that fails in its setup makes mpv refuse the item (`end-file` `error`). A
-graph that stops in the mix ends the item early. In both cases the script reports
-`{failed: true}`, makes no more moving crossfades in this mpv, and uses the copy. When A
-showed no frame, the script plays A again with no graph. B is never skipped.
+graph that stops in the mix ends the item early. mpv writes each fault of the graph with the
+prefix `lavfi`, and the script listens to the error messages: an item that ends early with
+such a message is a fault of the graph, and an item that ends early for another reason (a
+file that does not decode, a file shorter than its duration) is not. For a fault of the
+graph the script reports `{failed: true}`, makes no more moving crossfades in this mpv, and
+uses the copy. When A showed no frame, the script plays A again with no graph. B is never
+skipped, and the other transitions go on.
 
 The guard. After each moving crossfade the script sets `user-data/pptr/moved` to its
 dropped frames (`frame-drop-count` plus `decoder-frame-drop-count` over the mix) and the
-frames of the mix. When a crossfade failed or dropped more than a quarter of its frames, the
-daemon sets `user-data/pptr/motion` to `"no"` until the daemon stops (also through a restart
-of mpv) and writes one ops log line, `player.motion.off`.
+frames of the mix. With `playback.motion = "auto"`, when a crossfade failed or dropped more
+than a quarter of its frames, the daemon sets `user-data/pptr/motion` to `"no"` until the
+daemon stops (also through a restart of mpv) and writes one ops log line,
+`player.motion.off`. `"on"` is the choice of the owner: the daemon writes
+`player.motion.slow` (at most once an hour) and keeps the moving crossfade on. A new value
+of `playback.motion` clears the guard.
 
 ## 8. Web assets
 
