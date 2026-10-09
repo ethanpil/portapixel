@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -46,7 +47,29 @@ var Days = []string{"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
 
 // videoModePattern is the shape of a video_mode value, for example
 // "1920x1080@60" or "1920x1080".
-var videoModePattern = regexp.MustCompile(`^\d+x\d+(@\d+)?$`)
+var videoModePattern = regexp.MustCompile(`^(\d+)x(\d+)(@\d+)?$`)
+
+// maxModeSide is the largest width and the largest height of a video_mode. It
+// is more than an 8K mode, so only a typing error goes over it. The daemon draws
+// the fallback screen at this size. A mode of 3840x21600 needs 330 MB for one
+// picture, and the kernel then stops the daemon on a device with 512 MB.
+const maxModeSide = 8192
+
+// videoModeOK reports if a video_mode value has the right shape and a size
+// from 1 to maxModeSide on each side.
+func videoModeOK(mode string) bool {
+	m := videoModePattern.FindStringSubmatch(mode)
+	if m == nil {
+		return false
+	}
+	for _, side := range m[1:3] {
+		n, err := strconv.Atoi(side)
+		if err != nil || n < 1 || n > maxModeSide {
+			return false
+		}
+	}
+	return true
+}
 
 // Validate gives every rule that the configuration breaks. An empty list means
 // that the configuration is good.
@@ -123,8 +146,8 @@ func (c Config) Validate() Errors {
 	if !slices.Contains([]int{0, 90, 180, 270}, c.Display.Rotation) {
 		add("display.rotation", "must be 0, 90, 180 or 270")
 	}
-	if c.Display.VideoMode != "" && !videoModePattern.MatchString(c.Display.VideoMode) {
-		add("display.video_mode", "must be in the form 1920x1080 or 1920x1080@60")
+	if c.Display.VideoMode != "" && !videoModeOK(c.Display.VideoMode) {
+		add("display.video_mode", "must be in the form 1920x1080 or 1920x1080@60, with each side from 1 to 8192")
 	}
 	oneOf("display.video_output", c.Display.VideoOutput, "auto", "gpu", "drm")
 	oneOf("display.power_method", c.Display.PowerMethod, "auto", "cec", "dpms", "none")

@@ -147,6 +147,16 @@ var validateCases = []validateCase{
 	{name: "bad video mode", change: func(c *Config) { c.Display.VideoMode = "1080p" }, wantField: "display.video_mode"},
 	{name: "video mode with no refresh is good", change: func(c *Config) { c.Display.VideoMode = "1920x1080" }},
 	{name: "video mode with a refresh is good", change: func(c *Config) { c.Display.VideoMode = "3840x2160@30" }},
+	{name: "video mode at the largest size is good", change: func(c *Config) { c.Display.VideoMode = "8192x8192" }},
+	// The fallback screen is drawn at this size. One zero too many is gigabytes.
+	{name: "video mode too high", change: func(c *Config) { c.Display.VideoMode = "3840x21600" }, wantField: "display.video_mode"},
+	{name: "video mode too wide", change: func(c *Config) { c.Display.VideoMode = "38400x2160@30" }, wantField: "display.video_mode"},
+	{name: "video mode of zero", change: func(c *Config) { c.Display.VideoMode = "0x1080" }, wantField: "display.video_mode"},
+	{
+		name:      "video mode with a number too long for an int",
+		change:    func(c *Config) { c.Display.VideoMode = "99999999999999999999x1080" },
+		wantField: "display.video_mode",
+	},
 	{
 		name:      "video mode with letters",
 		change:    func(c *Config) { c.Display.VideoMode = "1920x1080@60Hz" },
