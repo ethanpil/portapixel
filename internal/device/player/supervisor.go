@@ -28,7 +28,7 @@ const (
 	// defaultTick is how often the supervisor looks at the world.
 	defaultTick = time.Second
 	// pollEvery is the time between two state requests to mpv: the playlist
-	// position, and for a video the time position and the dropped frames. Each
+	// position, the time position, and for a video the dropped frames. Each
 	// answer is also the heartbeat of the IPC.
 	pollEvery = 2 * time.Second
 	// graceTimeout is how long the nightly restart waits for an item boundary.
@@ -862,8 +862,14 @@ func (s *Supervisor) poll(now time.Time) {
 	}
 	s.lastPoll = now
 	s.request(now, reqPos, 0, "get_property", "playlist-pos")
-	if it, ok := s.current(); ok && it.Kind == kindVideo {
-		s.request(now, reqTimePos, 0, "get_property", "time-pos")
+	it, ok := s.current()
+	if !ok {
+		return
+	}
+	// Also for an image: an animated GIF, PNG or WebP plays as a video in mpv,
+	// and its position moves (see checkWatchdog).
+	s.request(now, reqTimePos, 0, "get_property", "time-pos")
+	if it.Kind == kindVideo {
 		s.request(now, reqDropVO, 0, "get_property", "frame-drop-count")
 		s.request(now, reqDropDec, 0, "get_property", "decoder-frame-drop-count")
 	}

@@ -2,6 +2,7 @@ package player
 
 import (
 	"errors"
+	"math"
 	"net"
 	"os"
 	"path/filepath"
@@ -571,6 +572,52 @@ func TestRestartWhenImageOverruns(t *testing.T) {
 	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
 	if !h.eventWith("player.restart", "welcome.jpg stayed on the screen") {
 		t.Fatalf("no overrun line:\n%s", h.events())
+	}
+}
+
+// mpv plays an animated GIF as a video, for its own length, and it ignores
+// image-display-duration. An animation longer than its duration and the grace
+// is not stuck while its position moves; each such restart counted, and a long
+// GIF in a loop rebooted the device every hour. An animation that stops moving
+// is still restarted.
+func TestAnAnimatedImageIsNotStuckWhileItMoves(t *testing.T) {
+	m := playlist("lobby", "fade", 400,
+		library.ManifestItem{Name: "anim.gif"}, // the fake moves the position of a .gif
+		library.ManifestItem{Name: "b.jpg"},
+	)
+	h := newHarness(t, m, nil)
+	h.waitPlaying(0)
+	first := h.sup.proc.pid()
+	h.settle()
+	for range 30 { // 60 s, and the limit is 10 s and the grace of 30 s
+		h.advance(2 * time.Second)
+	}
+	if h.sup.State().Restarts != 0 {
+		t.Fatalf("an animation that moves was restarted:\n%s", h.events())
+	}
+
+	h.ctl("fake-stall")
+	h.advance(2 * time.Second)
+	h.advance(heartbeatTimeout)
+	waitFor(t, "a new mpv", func() bool { pid := h.sup.proc.pid(); return pid != 0 && pid != first })
+	if !h.eventWith("player.restart", "anim.gif stayed on the screen") {
+		t.Fatalf("no overrun line:\n%s", h.events())
+	}
+}
+
+// A duration of some billion seconds must not overflow the limit of the image
+// rule. The sum was less than zero, and the rule fired at each image.
+func TestImageLimitDoesNotOverflow(t *testing.T) {
+	if got := imageLimit(10, 30*time.Second); got != 40*time.Second {
+		t.Errorf("imageLimit(10, 30s) = %s", got)
+	}
+	for _, seconds := range []int{9223372036, 9999999999, math.MaxInt} {
+		if got := imageLimit(seconds, 30*time.Second); got != math.MaxInt64 {
+			t.Errorf("imageLimit(%d, 30s) = %s, want the largest duration", seconds, got)
+		}
+	}
+	if got := imageLimit(9223372000, 30*time.Second); got <= 0 {
+		t.Errorf("imageLimit(9223372000, 30s) = %s", got)
 	}
 }
 
