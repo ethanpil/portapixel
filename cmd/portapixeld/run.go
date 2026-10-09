@@ -846,26 +846,33 @@ const fallbackWait = 2 * time.Second
 // starts the function again only after the last call has ended.
 type slowInfo struct {
 	mu      sync.Mutex
-	running chan struct{} // closed when the call that runs now ends; nil if none runs
+	running bool // a call of build runs now
 	last    fallback.Info
 }
 
-// get gives the answer of build. When build needs more than wait, it gives the
-// answer of the last call that ended, and build goes on in the background.
+// get gives the answer of build. A call that starts build waits for it, up to
+// wait. When build needs more, get gives the answer of the last call that ended,
+// and build goes on in the background.
+//
+// A call that finds build still running does not wait at all: it gives the last
+// answer at once. It waited for the build of an earlier call before, so a stick
+// that hangs held the loop for the whole wait at each check of the fallback
+// screen.
 func (c *slowInfo) get(build func() fallback.Info, wait time.Duration) fallback.Info {
 	c.mu.Lock()
-	if c.running == nil {
-		done := make(chan struct{})
-		c.running = done
-		go func() {
-			info := build()
-			c.mu.Lock()
-			c.last, c.running = info, nil
-			c.mu.Unlock()
-			close(done)
-		}()
+	if c.running {
+		defer c.mu.Unlock()
+		return c.last
 	}
-	done := c.running
+	c.running = true
+	done := make(chan struct{})
+	go func() {
+		info := build()
+		c.mu.Lock()
+		c.last, c.running = info, false
+		c.mu.Unlock()
+		close(done)
+	}()
 	c.mu.Unlock()
 
 	select {

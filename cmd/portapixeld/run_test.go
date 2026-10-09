@@ -1002,7 +1002,9 @@ func TestAPlaylistRenameSavesUnderTheRulesOfASave(t *testing.T) {
 
 // The player loop calls fallbackInfo, and the report reads the media mount. A
 // mount that hangs must not hold the loop: the caller gets the last answer after
-// the wait, and a second call does not start a second report.
+// the wait, and a second call does not start a second report. The second call
+// also does not wait: it waited for the report of the first call, at each check
+// of the fallback screen.
 func TestSlowInfoDoesNotHoldTheCaller(t *testing.T) {
 	var c slowInfo
 	release := make(chan struct{})
@@ -1020,13 +1022,21 @@ func TestSlowInfoDoesNotHoldTheCaller(t *testing.T) {
 	if took := time.Since(start); took > 5*time.Second {
 		t.Errorf("get waited %s", took)
 	}
-	c.get(build, 20*time.Millisecond)
+	start = time.Now()
+	c.get(build, 5*time.Second)
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("the second get waited %s for the report of the first", took)
+	}
 	if n := calls.Load(); n != 1 {
 		t.Errorf("%d reports started while the first hangs, want 1", n)
 	}
 
 	close(release)
-	if got := c.get(build, 10*time.Second); got.Name != "Lobby" {
-		t.Errorf("get gave %+v after the report ended, want its answer", got)
+	deadline := time.Now().Add(10 * time.Second)
+	for c.get(build, time.Second).Name != "Lobby" {
+		if time.Now().After(deadline) {
+			t.Fatal("get never gave the answer of the report that ended")
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
