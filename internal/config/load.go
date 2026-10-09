@@ -60,9 +60,9 @@ func ShadowPath(stateDir string) string { return filepath.Join(stateDir, ShadowN
 func Load(mediaRoot, stateDir string) Result {
 	data, err := os.ReadFile(MediaPath(mediaRoot))
 	if err == nil {
-		cfg, unknown, parseErr := parseKeys(data)
+		cfg, unknown, parseErr := ParseKeys(data)
 		if parseErr == nil {
-			warnUnknown := unknownWarning(unknown)
+			warnUnknown := UnknownWarning(unknown)
 			cfg, bad := Repair(cfg)
 			if len(bad) == 0 {
 				mirror(stateDir, data)
@@ -112,10 +112,10 @@ func repairWarning(name string, bad Errors) string {
 // maxUnknownShown is the most keys that the warning of unknown keys names.
 const maxUnknownShown = 5
 
-// unknownWarning says which keys of the file the device does not know. It gives
+// UnknownWarning says which keys of the file the device does not know. It gives
 // "" when there is none. The usual cause is a key that a person turned on while
 // its [table] line is still a comment, so the text asks about that.
-func unknownWarning(unknown []string) string {
+func UnknownWarning(unknown []string) string {
 	if len(unknown) == 0 {
 		return ""
 	}

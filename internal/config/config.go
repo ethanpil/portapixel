@@ -255,15 +255,15 @@ func Default() Config {
 // default value, so an old or a short file still gives a complete
 // configuration. Parse does not check the values: use Validate for that.
 func Parse(data []byte) (Config, error) {
-	cfg, _, err := parseKeys(data)
+	cfg, _, err := ParseKeys(data)
 	return cfg, err
 }
 
-// parseKeys is Parse that also names the keys of the file that Config does not
+// ParseKeys is Parse that also names the keys of the file that Config does not
 // know. The names are in the order of the file, as the full name of the key, for
 // example "device.tier". A table whose keys are all unknown gives its keys and not
 // its own name.
-func parseKeys(data []byte) (Config, []string, error) {
+func ParseKeys(data []byte) (Config, []string, error) {
 	cfg := Default()
 	meta, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&cfg)
 	if err != nil {

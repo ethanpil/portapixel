@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// parseKeys names the full key of each unknown key, in the order of the file. An
+// ParseKeys names the full key of each unknown key, in the order of the file. An
 // unknown table gives the keys in it and not its own name.
 func TestParseKeysNamesTheUnknownKeys(t *testing.T) {
 	tests := []struct {
@@ -27,7 +27,7 @@ func TestParseKeysNamesTheUnknownKeys(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, got, err := parseKeys([]byte(tt.file))
+			_, got, err := ParseKeys([]byte(tt.file))
 			if err != nil {
 				t.Fatal(err)
 			}
