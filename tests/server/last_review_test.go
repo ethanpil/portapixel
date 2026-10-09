@@ -1,6 +1,7 @@
 package server_test
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -47,5 +48,57 @@ func TestAProxyLineAfterTheClientLineWins(t *testing.T) {
 	f.mustOK(res, "an enroll with two forwarding lines")
 	if got := f.pendingByDevice(t, "px-twoline1").IP; got != "198.51.100.7" {
 		t.Fatalf("the server counted %q, want the address that the proxy added", got)
+	}
+}
+
+// TestAPendingModeTokenCannotFillTheList covers the cap on new pending rows.
+//
+// The limiter counted the requests with no token only. A pending-mode token is in
+// clear text on each card, and a request with it and a new device ID each time made
+// a new row each time. The list then reached its cap of 200, and each real screen
+// that paired by code was refused for up to a day.
+func TestAPendingModeTokenCannotFillTheList(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	token := f.makeToken("pending", 0, "")
+
+	limited := 0
+	for i := 0; i < 8; i++ {
+		_, res := f.enroll(fmt.Sprintf("px-slow%04d", i), token)
+		switch res.status {
+		case http.StatusOK:
+		case http.StatusTooManyRequests:
+			limited++
+		default:
+			t.Fatalf("attempt %d answered %d: %s", i, res.status, res.body)
+		}
+	}
+	if limited == 0 {
+		t.Fatal("eight new screens with a pending-mode token from one address were never limited")
+	}
+	if n, err := f.db.CountPending(); err != nil || n > 5 {
+		t.Fatalf("one address made %d waiting rows (%v)", n, err)
+	}
+}
+
+// TestARefusedNewScreenDoesNotBlockAGoodToken covers the two limiters of the enroll
+// route together.
+//
+// A request that the pending limiter refused did not end the attempt that the
+// wrong-token limiter had opened. Five such requests in a minute filled that limiter
+// for the address, and a card with a good auto token behind the same router then got
+// "too many enroll attempts".
+func TestARefusedNewScreenDoesNotBlockAGoodToken(t *testing.T) {
+	f := newFleet(t)
+	f.login()
+	token := f.makeToken("auto", 0, "")
+
+	for i := 0; i < 10; i++ {
+		f.enroll(fmt.Sprintf("px-batch%03d", i), "")
+	}
+	out, res := f.enroll("px-goodcard", token)
+	f.mustOK(res, "an enroll with a good auto token after the pending limit")
+	if out.Status != "paired" {
+		t.Fatalf("the card with a good token got %+v", out)
 	}
 }

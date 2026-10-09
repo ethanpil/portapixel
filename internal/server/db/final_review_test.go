@@ -27,7 +27,7 @@ func TestThePendingCapCountsOnlyTheRequestsThatWait(t *testing.T) {
 	// Fill the table with rows that the admin approved and that nobody collected.
 	for i := 0; i < maxPending; i++ {
 		id := "px-appro" + string(rune('a'+i%26)) + string(rune('a'+i/26))
-		res, err := d.Enroll(enrollReq(id, id+"-hw", ""), "10.0.0.5")
+		res, err := d.Enroll(enrollReq(id, id+"-hw", ""), "10.0.0.5", true)
 		if err != nil {
 			t.Fatalf("the enroll of %s failed: %v", id, err)
 		}
@@ -41,7 +41,7 @@ func TestThePendingCapCountsOnlyTheRequestsThatWait(t *testing.T) {
 	}
 
 	// A new screen still gets in.
-	if _, err := d.Enroll(enrollReq("px-newone1", "px-newone1-hw", ""), "10.0.0.6"); err != nil {
+	if _, err := d.Enroll(enrollReq("px-newone1", "px-newone1-hw", ""), "10.0.0.6", true); err != nil {
 		t.Fatalf("a new screen was refused although every row waits for its own device: %v", err)
 	}
 }
@@ -53,7 +53,7 @@ func TestThePendingCapCountsOnlyTheRequestsThatWait(t *testing.T) {
 // secret never expired and no admin route could see it or cancel it.
 func TestAnApprovedRequestDoesNotWaitForEver(t *testing.T) {
 	d := open(t)
-	res, err := d.Enroll(enrollReq("px-oldclaim", "px-oldclaim-hw", ""), "10.0.0.5")
+	res, err := d.Enroll(enrollReq("px-oldclaim", "px-oldclaim-hw", ""), "10.0.0.5", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +67,7 @@ func TestAnApprovedRequestDoesNotWaitForEver(t *testing.T) {
 
 	// The device comes back with its secret long after the approval.
 	d.SetClock(func() time.Time { return time.Now().Add(approvedLife + time.Hour) })
-	got, err := d.Enroll(enrollReq("px-oldclaim", "px-oldclaim-hw", res.ClaimSecret), "10.0.0.9")
+	got, err := d.Enroll(enrollReq("px-oldclaim", "px-oldclaim-hw", res.ClaimSecret), "10.0.0.9", true)
 	if err == nil && got.DeviceToken != "" {
 		t.Fatal("a claim secret of an approval that is a month old still bought a device token")
 	}
@@ -150,7 +150,7 @@ func TestANeverPairedRowTakesTheGroupOfItsToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := d.Enroll(enrollReq("px-group001", "px-group001-hw", token), "10.0.0.5")
+	res, err := d.Enroll(enrollReq("px-group001", "px-group001-hw", token), "10.0.0.5", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func (d *DB) mustPair(t *testing.T, id, hardware string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err2 := d.Enroll(enrollReq(id, hardware, token), "10.0.0.5")
+	res, err2 := d.Enroll(enrollReq(id, hardware, token), "10.0.0.5", true)
 	if err2 != nil {
 		t.Fatal(err2)
 	}

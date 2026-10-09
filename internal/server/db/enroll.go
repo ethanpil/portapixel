@@ -26,6 +26,10 @@ var ErrBadDeviceID = errors.New("the device ID must be 1 to 64 characters of a-z
 // unauthenticated caller from filling the database with requests (R5).
 var ErrTooManyPending = errors.New("too many screens wait for approval")
 
+// ErrQueueLimited says that the request would make a new pending row and that its
+// address already made too many (R5).
+var ErrQueueLimited = errors.New("too many new screens from this address")
+
 // ErrNotPending says that a row does not wait for approval. A second click on
 // the approve button lands here, so the route answers 409 and not 500.
 var ErrNotPending = errors.New("this request does not wait for approval")
@@ -158,8 +162,12 @@ type EnrollResult struct {
 // request that waits longer than pendingLife goes away.
 //
 // R5. Every request that makes a pending row counts against the limit of its
-// address. A poll with a good claim secret does not.
-func (d *DB) Enroll(req manifest.EnrollRequest, ip string) (EnrollResult, error) {
+// address. A poll with a good claim secret does not. The route checks the limit
+// before the write and gives the answer in mayQueue: when it is false, a request
+// that would make a new pending row gets ErrQueueLimited and writes nothing. Only
+// the rules know which request makes a row: a request with no token, a
+// pending-mode token, and an auto token for a paired device ID all can.
+func (d *DB) Enroll(req manifest.EnrollRequest, ip string, mayQueue bool) (EnrollResult, error) {
 	if !validDeviceID(req.DeviceID) {
 		return EnrollResult{}, ErrBadDeviceID
 	}
@@ -186,6 +194,10 @@ func (d *DB) Enroll(req manifest.EnrollRequest, ip string) (EnrollResult, error)
 	}
 	if err != nil {
 		return EnrollResult{}, err
+	}
+	// The new row is not committed yet, so this refusal writes nothing (R5).
+	if out.Created && !mayQueue {
+		return EnrollResult{}, ErrQueueLimited
 	}
 	if err := tx.Commit(); err != nil {
 		return EnrollResult{}, err

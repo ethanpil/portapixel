@@ -351,7 +351,7 @@ func pair(t *testing.T, d *DB, id string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := d.Enroll(req(id, token), "10.0.0.5")
+	res, err := d.Enroll(req(id, token), "10.0.0.5", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -424,7 +424,7 @@ func TestEnrollTokenLimits(t *testing.T) {
 			// The first device always goes through. That proves that the token
 			// worked before the limit closed it, so the case measures the limit and
 			// not a token that never worked.
-			if _, err := d.Enroll(req("px-first", token), "10.0.0.1"); err != nil {
+			if _, err := d.Enroll(req("px-first", token), "10.0.0.1", true); err != nil {
 				t.Fatalf("the first enroll failed: %v", err)
 			}
 			if c.revoke {
@@ -436,7 +436,7 @@ func TestEnrollTokenLimits(t *testing.T) {
 				// Move the clock past the expiry.
 				d.SetClock(func() time.Time { return c.expires.Add(time.Minute) })
 			}
-			_, err = d.Enroll(req("px-second", token), "10.0.0.2")
+			_, err = d.Enroll(req("px-second", token), "10.0.0.2", true)
 			if c.wantErr && !errors.Is(err, ErrBadToken) {
 				t.Fatalf("the second enroll gave %v, want ErrBadToken", err)
 			}
@@ -453,7 +453,7 @@ func TestEnrollPendingModeThenApprove(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := d.Enroll(req("px-bbbb0002", token), "10.0.0.7")
+	res, err := d.Enroll(req("px-bbbb0002", token), "10.0.0.7", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -473,7 +473,7 @@ func TestEnrollPendingModeThenApprove(t *testing.T) {
 	}
 
 	// A poll with the claim secret still says pending, and the code does not move.
-	poll, err := d.Enroll(req("px-bbbb0002", res.ClaimSecret), "10.0.0.7")
+	poll, err := d.Enroll(req("px-bbbb0002", res.ClaimSecret), "10.0.0.7", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +496,7 @@ func TestEnrollPendingModeThenApprove(t *testing.T) {
 		t.Fatalf("the second approval gave %v, want ErrNotPending", err)
 	}
 
-	done, err := d.Enroll(req("px-bbbb0002", res.ClaimSecret), "10.0.0.7")
+	done, err := d.Enroll(req("px-bbbb0002", res.ClaimSecret), "10.0.0.7", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,7 +513,7 @@ func TestEnrollPendingModeThenApprove(t *testing.T) {
 // write-ahead log must not find it.
 func TestClaimSecretIsStoredHashed(t *testing.T) {
 	d := open(t)
-	res, err := d.Enroll(req("px-hash0001", ""), "10.0.0.9")
+	res, err := d.Enroll(req("px-hash0001", ""), "10.0.0.9", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ func TestClaimSecretIsStoredHashed(t *testing.T) {
 		t.Fatalf("the table holds %q, want the SHA-256 of the secret", stored)
 	}
 	// A secret that does not match finds nothing, whatever device ID it names.
-	if _, err := d.Enroll(req("px-hash0001", "a secret that nobody gave out"), "10.0.0.9"); !errors.Is(err, ErrBadToken) {
+	if _, err := d.Enroll(req("px-hash0001", "a secret that nobody gave out"), "10.0.0.9", true); !errors.Is(err, ErrBadToken) {
 		t.Fatalf("a wrong claim secret gave %v, want ErrBadToken", err)
 	}
 }
@@ -542,7 +542,7 @@ func TestClaimSecretIsStoredHashed(t *testing.T) {
 // must lose them again, or the table only grows.
 func TestPendingRequestsExpire(t *testing.T) {
 	d := open(t)
-	if _, err := d.Enroll(req("px-old00001", ""), "10.0.0.1"); err != nil {
+	if _, err := d.Enroll(req("px-old00001", ""), "10.0.0.1", true); err != nil {
 		t.Fatal(err)
 	}
 	if n, _ := d.CountPending(); n != 1 {
@@ -564,11 +564,11 @@ func TestPendingListHasACap(t *testing.T) {
 	d := open(t)
 	for i := 0; i < maxPending; i++ {
 		id := "px-" + hashOfIndex(i)[:8]
-		if _, err := d.Enroll(req(id, ""), "10.0.0.1"); err != nil {
+		if _, err := d.Enroll(req(id, ""), "10.0.0.1", true); err != nil {
 			t.Fatalf("request %d failed: %v", i, err)
 		}
 	}
-	if _, err := d.Enroll(req("px-onemore", ""), "10.0.0.1"); !errors.Is(err, ErrTooManyPending) {
+	if _, err := d.Enroll(req("px-onemore", ""), "10.0.0.1", true); !errors.Is(err, ErrTooManyPending) {
 		t.Fatalf("the request over the cap gave %v, want ErrTooManyPending", err)
 	}
 }
@@ -591,7 +591,7 @@ func TestPairingCodeAlphabet(t *testing.T) {
 
 func TestEnrollByCode(t *testing.T) {
 	d := open(t)
-	res, err := d.Enroll(req("px-cccc0003", ""), "10.0.0.8")
+	res, err := d.Enroll(req("px-cccc0003", ""), "10.0.0.8", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -636,7 +636,7 @@ func TestEnrollTokenTakesTheGroupOfANewRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Enroll(req("px-grp00001", token), "10.0.0.1"); err != nil {
+	if _, err := d.Enroll(req("px-grp00001", token), "10.0.0.1", true); err != nil {
 		t.Fatal(err)
 	}
 	dev, err := d.Device("px-grp00001")
@@ -652,7 +652,7 @@ func TestEnrollTokenTakesTheGroupOfANewRow(t *testing.T) {
 	if err := d.MoveDevice("px-grp00001", lobby); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.Enroll(req("px-grp00001", token), "10.0.0.1"); err != nil {
+	if _, err := d.Enroll(req("px-grp00001", token), "10.0.0.1", true); err != nil {
 		t.Fatal(err)
 	}
 	if dev, err = d.Device("px-grp00001"); err != nil {
@@ -667,7 +667,7 @@ func TestEnrollTokenTakesTheGroupOfANewRow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := d.Enroll(req("px-grp00002", pendingToken), "10.0.0.1")
+	res, err := d.Enroll(req("px-grp00002", pendingToken), "10.0.0.1", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -690,7 +690,7 @@ func TestEnrollAgainWithTheDeviceToken(t *testing.T) {
 	d := open(t)
 	token := pair(t, d, "px-dddd0004")
 
-	res, err := d.Enroll(req("px-dddd0004", token), "10.0.0.9")
+	res, err := d.Enroll(req("px-dddd0004", token), "10.0.0.9", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -705,7 +705,7 @@ func TestATokenOfAnotherDeviceIsRefused(t *testing.T) {
 
 	// A device that presents the token of another row must be refused. This is
 	// the "device token scoped to its own row" rule.
-	if _, err := d.Enroll(req("px-ffff0006", token), "10.0.0.10"); !errors.Is(err, ErrBadToken) {
+	if _, err := d.Enroll(req("px-ffff0006", token), "10.0.0.10", true); !errors.Is(err, ErrBadToken) {
 		t.Fatalf("the enroll gave %v, want ErrBadToken", err)
 	}
 }
@@ -727,7 +727,7 @@ func TestEnrollmentTokenCannotTakeOverAPairedRow(t *testing.T) {
 		DeviceID: "px-victim01", HardwareID: hw("another-machine"),
 		Name: "mine now", Token: token, Version: "9.9.9",
 	}
-	res, err := d.Enroll(attack, "10.0.0.66")
+	res, err := d.Enroll(attack, "10.0.0.66", true)
 	if err != nil {
 		t.Fatalf("the request gave %v; it must land in the pending list", err)
 	}
@@ -759,7 +759,7 @@ func TestEnrollmentTokenCannotTakeOverAPairedRow(t *testing.T) {
 	// The same rule holds with no token at all.
 	byCode, err := d.Enroll(manifest.EnrollRequest{
 		DeviceID: "px-victim01", HardwareID: hw("a third machine"),
-	}, "10.0.0.67")
+	}, "10.0.0.67", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -790,7 +790,7 @@ func TestReflashedCardPairsAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := d.Enroll(req("px-reflash1", token), "10.0.0.5")
+	res, err := d.Enroll(req("px-reflash1", token), "10.0.0.5", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -810,7 +810,7 @@ func TestReflashedCardPairsAgain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	slow, err := d.Enroll(req("px-reflash1", pendingToken), "10.0.0.5")
+	slow, err := d.Enroll(req("px-reflash1", pendingToken), "10.0.0.5", true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -822,7 +822,7 @@ func TestReflashedCardPairsAgain(t *testing.T) {
 func TestBadDeviceID(t *testing.T) {
 	d := open(t)
 	for _, id := range []string{"", "px-UPPER", "px-../etc", "px with space"} {
-		if _, err := d.Enroll(req(id, ""), "10.0.0.1"); !errors.Is(err, ErrBadDeviceID) {
+		if _, err := d.Enroll(req(id, ""), "10.0.0.1", true); !errors.Is(err, ErrBadDeviceID) {
 			t.Fatalf("the device ID %q gave %v, want ErrBadDeviceID", id, err)
 		}
 	}
