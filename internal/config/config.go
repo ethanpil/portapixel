@@ -153,8 +153,14 @@ type Logging struct {
 }
 
 // Transitions are the transition names that a playlist may use (D14). "fade"
-// goes through black, and playback.transition_ms is the length of the fade.
-var Transitions = []string{"cut", "fade"}
+// goes through black. A wipe or a push moves in the direction of its word.
+// playback.transition_ms is the length of each transition except "cut". The
+// player script internal/device/player/transitions.lua knows the same words.
+var Transitions = []string{
+	"cut", "fade", "crossfade",
+	"wipe-left", "wipe-right", "wipe-up", "wipe-down",
+	"push-left", "push-right", "push-up", "push-down",
+}
 
 // IsTransition reports if name is a transition that the player knows.
 func IsTransition(name string) bool { return slices.Contains(Transitions, name) }

@@ -99,6 +99,36 @@ func TestApplyWritesTheFleetPlaylistAndTheObject(t *testing.T) {
 	}
 }
 
+// TestAnOldTransitionWordFromTheServerIsGood covers a server that a stage 1
+// build ran: it can still send crossfade and push-*. Those words are
+// transitions again, so the playlist must render and load with no fault.
+func TestAnOldTransitionWordFromTheServerIsGood(t *testing.T) {
+	for _, word := range []string{"crossfade", "push-left", "push-right", "push-up", "push-down"} {
+		t.Run(word, func(t *testing.T) {
+			f := newFakeServer(t)
+			ref := f.addObject("sign.png", "a picture")
+			m := lobbyManifest(ref)
+			m.Playlists[0].Transition = word
+			f.setManifest(m)
+
+			d := pairedDev(t, f)
+			d.s.Once(context.Background())
+
+			if text := d.readFleetPlaylist("lobby"); !strings.Contains(text, `transition = "`+word+`"`) {
+				t.Fatalf("the fleet playlist is:\n%s", text)
+			}
+			snap := d.lib.Snapshot()
+			p, ok := snap.Find("lobby")
+			if !ok || p.Transition != word {
+				t.Fatalf("the library serves %+v (%v)", p, ok)
+			}
+			if len(snap.Problems) != 0 {
+				t.Errorf("the library reports %+v", snap.Problems)
+			}
+		})
+	}
+}
+
 // TestSecondApplyOfTheSameManifestWritesNothing is the steady-state rule: no file
 // changes, no rescan and no player event while the server says the same thing (D2).
 func TestSecondApplyOfTheSameManifestWritesNothing(t *testing.T) {

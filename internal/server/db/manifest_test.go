@@ -4,6 +4,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/config"
 )
 
 // fixture makes a database with two groups, three playlists and one media object.
@@ -377,6 +379,22 @@ func TestPlaylistValidation(t *testing.T) {
 			}
 			t.Fatalf("no error names the field %q; the errors are %v", c.field, errs)
 		})
+	}
+}
+
+// Each word of config.Transitions saves. Migration 2 changed the old words to
+// "fade" in the rows of that time; a new save may use them again.
+func TestPlaylistTakesEveryTransition(t *testing.T) {
+	f := newFixture(t)
+	for _, word := range config.Transitions {
+		id, err := f.d.SavePlaylist(Playlist{Title: "with " + word, Transition: word,
+			Items: []PlaylistItem{{SHA256: testSHA, Name: "a.jpg"}}})
+		if err != nil {
+			t.Fatalf("%s: %v", word, err)
+		}
+		if p, err := f.d.Playlist(id); err != nil || p.Transition != word {
+			t.Errorf("%s: the saved playlist has %q (%v)", word, p.Transition, err)
+		}
 	}
 }
 

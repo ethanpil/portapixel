@@ -241,6 +241,11 @@ func TestValidate(t *testing.T) {
 			playlist: Playlist{Meta: Meta{Transition: "fade"}, Items: []Item{{File: "a.jpg"}}},
 		},
 		{
+			// A stage 1 build refused it, and an older fleet playlist holds it.
+			name:     "an old transition word that is good again",
+			playlist: Playlist{Meta: Meta{Transition: "push-left"}, Items: []Item{{File: "a.jpg"}}},
+		},
+		{
 			name: "the second item is bad",
 			playlist: Playlist{Items: []Item{
 				{File: "a.jpg", Duration: 10},

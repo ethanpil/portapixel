@@ -12,10 +12,21 @@
 import { h, fill, icon, toast, modal, confirmDialog, fmtDuration, fmtBytes, banner, progress } from './ui.js';
 import { warningsFor } from './item-warnings.js';
 
-/* The same two words as config.Transitions in internal/config. */
-const TRANSITIONS = [
+/* The same words as config.Transitions in internal/config, with a label for a
+   person. The device settings page uses this list too. A wipe or a push moves in
+   the direction of its word. */
+export const TRANSITIONS = [
   ['fade', 'Fade through black'],
+  ['crossfade', 'Crossfade'],
   ['cut', 'Hard cut'],
+  ['wipe-left', 'Wipe left'],
+  ['wipe-right', 'Wipe right'],
+  ['wipe-up', 'Wipe up'],
+  ['wipe-down', 'Wipe down'],
+  ['push-left', 'Push left'],
+  ['push-right', 'Push right'],
+  ['push-up', 'Push up'],
+  ['push-down', 'Push down'],
 ];
 
 const KIND_LABEL = { image: 'Image', video: 'Video' };

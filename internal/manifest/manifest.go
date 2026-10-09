@@ -45,7 +45,7 @@ type Manifest struct {
 type Playlist struct {
 	Name       string `json:"name"` // directory-safe slug
 	Title      string `json:"title"`
-	Transition string `json:"transition,omitempty"`
+	Transition string `json:"transition,omitempty"` // a word of config.Transitions; empty = the device setting
 	Shuffle    *bool  `json:"shuffle,omitempty"`
 	Items      []Item `json:"items"`
 }

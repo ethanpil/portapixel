@@ -62,8 +62,12 @@ func Render(cfg Config) []byte {
 
 	b.WriteString("\n[playback]\n")
 	line(&b, "default_playlist", Quote(cfg.Playback.DefaultPlaylist), "")
-	line(&b, "transition", Quote(cfg.Playback.Transition), strings.Join(Transitions, " | "))
-	line(&b, "transition_ms", strconv.Itoa(cfg.Playback.TransitionMS), "The length of a fade.")
+	words := wrap(Transitions, " | ", 48)
+	line(&b, "transition", Quote(cfg.Playback.Transition), words[0])
+	for _, w := range words[1:] {
+		comment(&b, w)
+	}
+	line(&b, "transition_ms", strconv.Itoa(cfg.Playback.TransitionMS), "The length of a transition.")
 	line(&b, "image_duration", strconv.Itoa(cfg.Playback.ImageDuration), "Seconds for an image that has no duration.")
 	line(&b, "shuffle", boolText(cfg.Playback.Shuffle), "")
 	line(&b, "nightly_restart", Quote(cfg.Playback.NightlyRestart), "The daily player restart. \"\" stops it.")
@@ -148,6 +152,28 @@ func optional(b *strings.Builder, key, value string, set bool, example string) {
 		return
 	}
 	b.WriteString("# " + key + " = " + example + "\n")
+}
+
+// wrap joins words with sep into lines of at most width characters. Each line
+// but the last ends with the separator, so the reader sees that the list goes on.
+func wrap(words []string, sep string, width int) []string {
+	var lines []string
+	cur := ""
+	for i, w := range words {
+		if i < len(words)-1 {
+			w += strings.TrimRight(sep, " ")
+		}
+		switch {
+		case cur == "":
+			cur = w
+		case len(cur)+1+len(w) > width:
+			lines = append(lines, cur)
+			cur = w
+		default:
+			cur += " " + w
+		}
+	}
+	return append(lines, cur)
 }
 
 // comment writes a comment line that continues the line above it.

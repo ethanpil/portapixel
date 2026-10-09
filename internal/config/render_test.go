@@ -216,3 +216,20 @@ func TestRenderEndsEachLineWithOneNewline(t *testing.T) {
 		t.Error("the file must use Unix line ends")
 	}
 }
+
+// The comment of playback.transition names every word of Transitions, so a
+// person who edits the file by hand sees each choice.
+func TestRenderNamesEveryTransition(t *testing.T) {
+	out := string(Render(Default()))
+	block := out[strings.Index(out, "transition = "):strings.Index(out, "transition_ms = ")]
+	for _, w := range Transitions {
+		if !strings.Contains(block, w) {
+			t.Errorf("the transition comment does not name %q:\n%s", w, block)
+		}
+	}
+	for _, l := range strings.Split(block, "\n") {
+		if len(l) > 80 {
+			t.Errorf("the line %q is longer than 80 characters", l)
+		}
+	}
+}

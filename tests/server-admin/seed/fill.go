@@ -168,28 +168,31 @@ func upload(c *client) (map[string]string, error) {
 type item map[string]any
 
 func makePlaylists(c *client, media map[string]string) (map[string]int64, error) {
+	// Each playlist has a different transition, so the editor shows a few of
+	// the words of config.Transitions.
 	wanted := []struct {
-		title string
-		items []item
+		title      string
+		transition string
+		items      []item
 	}{
-		{"Lobby loop", []item{
+		{"Lobby loop", "crossfade", []item{
 			{"sha256": media["welcome-autumn.jpg"], "name": "welcome-autumn.jpg", "duration": 15},
 			{"sha256": media["lobby-hours.jpg"], "name": "lobby-hours.jpg", "duration": 12},
 			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false},
 		}},
-		{"Safety loop", []item{
+		{"Safety loop", "fade", []item{
 			{"sha256": media["safety-notice-1.png"], "name": "safety-notice-1.png", "duration": 20},
 			{"sha256": media["safety-notice-2.png"], "name": "safety-notice-2.png", "duration": 20},
 			{"sha256": media["safety-brief-4k-hevc.mp4"], "name": "safety-brief-4k-hevc.mp4", "mute": true},
 		}},
-		{"Menu boards", []item{
+		{"Menu boards", "cut", []item{
 			{"sha256": media["menu-board.png"], "name": "menu-board.png", "duration": 30},
 		}},
-		{"Retail promo", []item{
+		{"Retail promo", "push-left", []item{
 			{"sha256": media["retail-promo.jpg"], "name": "retail-promo.jpg", "duration": 10},
 			{"sha256": media["promo-fall.mp4"], "name": "promo-fall.mp4", "mute": false, "max_duration": 24},
 		}},
-		{"Room signs", []item{
+		{"Room signs", "wipe-up", []item{
 			{"sha256": media["room-signs.jpg"], "name": "room-signs.jpg", "duration": 20},
 		}},
 	}
@@ -214,7 +217,7 @@ func makePlaylists(c *client, media map[string]string) (map[string]int64, error)
 		var saved struct {
 			ID int64 `json:"id"`
 		}
-		body := map[string]any{"title": w.title, "transition": "fade", "items": w.items}
+		body := map[string]any{"title": w.title, "transition": w.transition, "items": w.items}
 		if err := c.call("POST", "/api/admin/playlists", body, &saved); err != nil {
 			return nil, fmt.Errorf("playlist %s: %w", w.title, err)
 		}

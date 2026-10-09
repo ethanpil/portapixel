@@ -17,12 +17,10 @@ import {
   fmtAgo, card, pageHead, setText, setShown, errorText, dayChips,
 } from '/shared/ui.js';
 import { api } from '/shared/api.js';
+import { TRANSITIONS } from '/shared/playlist-editor.js';
 import { notInThisBuild, nameToSave } from '../util.js';
 
 const MASK = '********';
-
-/* The same two words as config.Transitions in internal/config. */
-const TRANSITIONS = [['fade', 'Fade through black'], ['cut', 'Hard cut']];
 
 export function mount(main, ctx) {
   /* The comment-loss warning is shown one time for each visit to this page (D16).
@@ -334,7 +332,7 @@ export function mount(main, ctx) {
           field('playback.default_playlist', 'Plays when nothing is scheduled', cDefault),
           h('div', { class: 'pp-fields' },
             field('playback.transition', 'Between items', cTransition),
-            field('playback.transition_ms', 'Fade length (ms)', cTransitionMS)),
+            field('playback.transition_ms', 'Transition length (ms)', cTransitionMS)),
           h('div', { class: 'pp-fields' },
             field('playback.image_duration', 'Default image time (seconds)', cImageDuration),
             field('playback.nightly_restart', 'Nightly restart', cNightly)),

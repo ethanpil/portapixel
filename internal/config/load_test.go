@@ -197,9 +197,10 @@ func TestLoadRepairsInsteadOfDropping(t *testing.T) {
 }
 
 // TestLoadAcceptsAnOldFile covers a portapixel.toml that an older build wrote.
-// The key device.tier does not exist now, and the old transition words are not
-// transitions now. Load must ignore the first and repair the second to "fade",
-// and it must keep every other value that the person wrote.
+// The key device.tier does not exist now: Load must ignore it. The old
+// transition words are transitions again: Load must keep them and repair
+// nothing, so the device gives no config-repaired warning. Load must keep every
+// other value that the person wrote.
 func TestLoadAcceptsAnOldFile(t *testing.T) {
 	for _, old := range []string{"crossfade", "push-left", "push-right", "push-up", "push-down"} {
 		t.Run(old, func(t *testing.T) {
@@ -222,11 +223,11 @@ func TestLoadAcceptsAnOldFile(t *testing.T) {
 			if got.FromDefault || got.FromShadow {
 				t.Fatalf("Load threw the file away: %+v", got)
 			}
-			if len(got.Repaired) != 1 || got.Repaired[0].Field != "playback.transition" {
-				t.Fatalf("Repaired = %v, want playback.transition only", got.Repaired)
+			if len(got.Repaired) != 0 || got.Warning != "" {
+				t.Fatalf("Repaired = %v, warning %q; want a clean load", got.Repaired, got.Warning)
 			}
-			if got.Config.Playback.Transition != "fade" {
-				t.Errorf("transition = %q, want fade", got.Config.Playback.Transition)
+			if got.Config.Playback.Transition != old {
+				t.Errorf("transition = %q, want %q", got.Config.Playback.Transition, old)
 			}
 			if got.Config.Device.Name != "Lobby" || got.Config.Network.WifiPSK != "a wifi secret" {
 				t.Errorf("Load lost a value that the person wrote: %+v", got.Config)

@@ -182,7 +182,7 @@ func TestIsTransition(t *testing.T) {
 			t.Errorf("IsTransition(%q) = false", name)
 		}
 	}
-	for _, name := range []string{"", "crossfade", "push-left", "FADE", "fade "} {
+	for _, name := range []string{"", "FADE", "fade ", "wipe", "push", "slide-left", "push-diagonal"} {
 		if IsTransition(name) {
 			t.Errorf("IsTransition(%q) = true", name)
 		}
