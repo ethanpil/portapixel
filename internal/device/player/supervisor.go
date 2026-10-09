@@ -693,10 +693,11 @@ func (s *Supervisor) connect(now time.Time) {
 }
 
 // request sends one command to mpv and records it, so that the answer goes to
-// the right place and the silence rule can see an answer that does not come.
-func (s *Supervisor) request(now time.Time, w what, index int, args ...any) {
+// the right place and the silence rule can see an answer that does not come. It
+// gives false when mpv did not take the command.
+func (s *Supervisor) request(now time.Time, w what, index int, args ...any) bool {
 	if s.ipc == nil {
-		return
+		return false
 	}
 	r := request{what: w, gen: s.gen, at: now, index: index}
 	id, err := s.ipc.send(args...)
@@ -706,6 +707,7 @@ func (s *Supervisor) request(now time.Time, w what, index int, args ...any) {
 		id = -s.ipc.next
 	}
 	s.pending[id] = r
+	return err == nil
 }
 
 // oldestRequest gives the time of the oldest request that has no answer.
@@ -983,7 +985,11 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 		if j == 0 {
 			mode = "replace"
 		}
-		s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p, p.Items[idx], n == 1))
+		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p, p.Items[idx], n == 1)) {
+			// A write that fails waited for its time limit. The next ones would wait
+			// as long each. The silence rule restarts mpv.
+			break
+		}
 	}
 	s.logRepeat("player.playlist", p.Name, fmt.Sprintf("%s: %d items, transition %s %d ms",
 		p.Name, n, p.Transition, p.TransitionMS))

@@ -2,6 +2,7 @@ package player
 
 import (
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -548,6 +549,28 @@ func TestDisabledPlayer(t *testing.T) {
 	}
 	if err := s.Resume(); err != nil || s.State().Suspended {
 		t.Fatalf("Resume = %v", err)
+	}
+}
+
+// An mpv that does not read its socket makes each write wait for the write
+// timeout. The load of a playlist stops at the first write that fails, so the loop
+// is not held for the timeout times the number of items. The request that failed
+// stays in the list, and the silence rule restarts mpv.
+func TestLoadStopsAfterAFailedWrite(t *testing.T) {
+	a, b := net.Pipe() // nobody reads b
+	defer a.Close()
+	defer b.Close()
+	s := New(Options{Command: CommandConfig{Override: "mpv"}})
+	s.ipc = &ipcConn{conn: a, msgs: make(chan message), done: make(chan struct{})}
+	s.pending = make(map[int64]request)
+
+	start := time.Now()
+	s.loadManifest(threeItems(), time.Now())
+	if took := time.Since(start); took >= 2*writeTimeout {
+		t.Errorf("the load took %s, want one write timeout (%s)", took, writeTimeout)
+	}
+	if len(s.pending) != 1 {
+		t.Errorf("%d requests are open, want the one that failed", len(s.pending))
 	}
 }
 
