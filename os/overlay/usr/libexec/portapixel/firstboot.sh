@@ -87,6 +87,14 @@ split_part() {
 	return 0
 }
 
+# The fstab names the media root when a partition must be mounted there: an
+# image, or an on-box install with --media-partition. An on-box install with no
+# media partition keeps the media root on the root file system, with no entry.
+media_in_fstab() {
+	awk -v m="$PP_MEDIA" '$1 !~ /^#/ && $2 == m { f = 1 } END { exit !f }' \
+		/etc/fstab 2>/dev/null
+}
+
 # How many sectors the KERNEL thinks a partition has. This is not the same as
 # what the GPT says: the root is on the same disk, so the disk is busy and the
 # kernel can refuse to re-read the table.  $1 = the partition node.
@@ -138,6 +146,15 @@ grow_media() {
 	# Leave the install stick in an on-box machine, and that answer is the STICK.
 	# The dance would then delete and re-make the partition of the stick.
 	MEDIA_DEV="$(awk -v m="$PP_MEDIA" '$2 == m { print $1 }' /proc/mounts | tail -n1)"
+	# A media root in the fstab that did not mount is a fault, not an on-box
+	# install. The skip marker below would stop the grow for ever. A power cut
+	# in mkfs can leave a file system that does not mount, and the files of the
+	# user are then only in staging. No marker: the next boot tries again.
+	if [ -z "$MEDIA_DEV" ] && media_in_fstab; then
+		oplog firstboot.grow.fail \
+			"$PP_MEDIA is in the fstab and is not mounted; the next boot tries again"
+		return 1
+	fi
 	if [ -z "$MEDIA_DEV" ] || [ ! -b "$MEDIA_DEV" ]; then
 		oplog firstboot.grow.skip \
 			"nothing is mounted at $PP_MEDIA: this is an on-box install"
@@ -365,18 +382,18 @@ root_password() {
 
 # ----------------------------------------------------------------- 4. run it
 rc=0
-grow_ok=1
-grow_media || { rc=1; grow_ok=0; }
+grow_media || rc=1
 ssh_host_keys
 root_password || rc=1
 
 # Steps 2, 4 and 5 of plan section 14 belong to the daemon: the device id, the
 # default portapixel.toml and the default playlist (ARCHITECTURE section 4).
 #
-# A failed grow can leave PPMEDIA unmounted. Provision would then write the
-# default videos into the empty mount point on PPROOT, where PPMEDIA hides them
-# at the next boot. So provision waits for the next boot in that case.
-if [ "$grow_ok" = 0 ] && ! mountpoint -q "$PP_MEDIA"; then
+# PPMEDIA can be unmounted here: after a failed grow, or when it did not mount
+# at boot. Provision would then write the default videos into the empty mount
+# point on PPROOT, where PPMEDIA hides them at the next boot. So provision
+# waits for a boot with PPMEDIA mounted.
+if media_in_fstab && ! mountpoint -q "$PP_MEDIA"; then
 	oplog firstboot.provision.skip "$PP_MEDIA is not mounted; the next boot provisions"
 elif [ -x /opt/portapixel/current/portapixeld ]; then
 	prc=0
