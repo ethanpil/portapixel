@@ -958,14 +958,24 @@ func TestSuspendAndResume(t *testing.T) {
 	h.waitPlaying(0)
 }
 
-// A fault of transitions.lua goes in the ops log one time.
+// A fault of transitions.lua goes in the ops log, and the same fault again goes
+// in again after noteRepeat. mpv sends an event only for a value that changed,
+// so the report has a count: with the text alone, a fault that came again
+// reached the daemon one time in the life of mpv.
 func TestTransitionFaultIsLogged(t *testing.T) {
-	h := newHarness(t, threeItems(), nil)
+	const text = "fade: the copy of the screen failed; the transition is a cut"
+	h := newHarness(t, videos(), nil)
 	h.waitPlaying(0)
-	h.ctl("fake-fault", "fade: the copy of the screen failed; the transition is a cut")
-	waitFor(t, "the fault line", func() bool {
-		return h.eventWith("player.transition.fault", "the copy of the screen failed")
-	})
+	h.ctl("fake-fault", text)
+	waitFor(t, "the fault line", func() bool { return h.countEvent("player.transition.fault") == 1 })
+
+	h.settle()
+	h.advance(noteRepeat)
+	h.ctl("fake-fault", text)
+	waitFor(t, "the fault line one hour later", func() bool { return h.countEvent("player.transition.fault") == 2 })
+	if !h.eventWith("player.transition.fault", text) {
+		t.Errorf("the line does not hold the text of the fault:\n%s", h.events())
+	}
 }
 
 // A disabled player starts nothing, and a screen-off does not wait for it.

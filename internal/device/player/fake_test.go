@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -27,13 +28,15 @@ import (
 //	fake-stall          time-pos stops
 //	fake-exit <code>    end the process
 //	fake-drops <vo> <decoder>  set the two dropped frame counters
-//	fake-fault <text>   set user-data/pptr/fault, as transitions.lua does
+//	fake-fault <text>   set user-data/pptr/fault, as transitions.lua does: a
+//	                    table with a count and the text
 //	fake-dump           give the arguments, the playlist, the load count, the
 //	                    values that set_property set, and busy (a load with
 //	                    replace did not show its file yet)
 //
 // set_property keeps the value and tells the observers, so a test can also set
-// user-data/pptr/moved as transitions.lua does.
+// user-data/pptr/moved as transitions.lua does. As in mpv, the observers hear
+// only a value that changed.
 const fakeFlag = "--pp-fake-mpv"
 
 // fakeLife is how long the fake lives at most. A test that fails must not leave
@@ -73,7 +76,7 @@ type fakeMPV struct {
 	stall     bool
 	hang      bool
 	vo, dec   int
-	fault     any
+	faults    int
 	// props holds the values of set_property, for example user-data/pptr/motion.
 	props map[string]any
 }
@@ -217,14 +220,13 @@ func (f *fakeMPV) handle(c *fakeClient, name string, a []any, id int64, args []s
 		f.vo, f.dec = int(vo), int(dec)
 		reply(nil, "success")
 	case "fake-fault":
-		f.fault = a[0]
+		f.faults++
+		f.set("user-data/pptr/fault", map[string]any{"count": float64(f.faults), "text": a[0]})
 		reply(nil, "success")
-		f.notify("user-data/pptr/fault")
 	case "set_property":
 		prop, _ := a[0].(string)
-		f.props[prop] = a[1]
+		f.set(prop, a[1])
 		reply(nil, "success")
-		f.notify(prop)
 	case "fake-dump":
 		reply(map[string]any{"args": args, "list": f.list, "loads": f.loads, "pos": f.pos, "props": f.props,
 			"busy": f.scheduled > 0}, "success")
@@ -263,6 +265,16 @@ func (f *fakeMPV) play(pos int) {
 	f.notify("idle-active")
 }
 
+// set changes a property that a client sets, and tells the observers when the
+// value is new. mpv sends no event for a value that did not change.
+func (f *fakeMPV) set(prop string, v any) {
+	if reflect.DeepEqual(f.props[prop], v) {
+		return
+	}
+	f.props[prop] = v
+	f.notify(prop)
+}
+
 // value gives the value of a property, or nil.
 func (f *fakeMPV) value(prop string) any {
 	switch prop {
@@ -287,8 +299,6 @@ func (f *fakeMPV) value(prop string) any {
 			return "no"
 		}
 		return fakeHwdec
-	case "user-data/pptr/fault":
-		return f.fault
 	}
 	return f.props[prop]
 }

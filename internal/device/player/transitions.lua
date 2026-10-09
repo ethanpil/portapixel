@@ -83,8 +83,8 @@
 --   - Show one overlay at a time. On vo=drm, two overlays on top of each other
 --     mix wrongly (washed-out colours and coloured dots). Only split uses two
 --     overlays, and they do not touch each other.
---   - A fault goes into the property user-data/pptr/fault. portapixeld reads it
---     and writes it to the ops log.
+--   - A fault goes into the property user-data/pptr/fault, as a table with a
+--     count and the text. portapixeld reads it and writes it to the ops log.
 --   - The pixel work needs the FFI of LuaJIT. Without it, each transition is a
 --     cut.
 
@@ -133,10 +133,16 @@ local function turned(kind)
     return kind
 end
 
--- fault tells portapixeld about a fault. The transition is then a cut.
+local faults = 0     -- the count of faults, for user-data/pptr/fault
+
+-- fault tells portapixeld about a fault. The transition is then a cut. The
+-- count makes each report a new value: mpv sends an event only for a value that
+-- changed, so the same text again reached portapixeld one time in the life of
+-- mpv.
 local function fault(text)
     mp.msg.warn(text)
-    mp.set_property("user-data/pptr/fault", text)
+    faults = faults + 1
+    mp.set_property_native("user-data/pptr/fault", { count = faults, text = text })
 end
 
 if not (has_ffi and has_bit) then

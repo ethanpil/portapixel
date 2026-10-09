@@ -257,6 +257,16 @@ func TestScriptTurnsTheDirectionsWithTheRotation(t *testing.T) {
 	}
 }
 
+// The script reports a fault as a table with a count, as it reports a moving
+// crossfade. mpv sends an event only for a value that changed, and the daemon
+// reads the text from the table.
+func TestScriptCountsItsFaults(t *testing.T) {
+	s := string(TransitionScript())
+	if !strings.Contains(s, `mp.set_property_native("user-data/pptr/fault", { count = faults, text = text })`) {
+		t.Error("the script does not report a fault as a table with a count and the text")
+	}
+}
+
 func TestLadder(t *testing.T) {
 	at := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	set := DefaultWatchdog()

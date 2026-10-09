@@ -1015,9 +1015,13 @@ func (s *Supervisor) onProperty(m message, now time.Time) {
 		s.hwdec = v
 		s.mu.Unlock()
 	case obsFault:
-		var v string
-		if json.Unmarshal(m.Data, &v) == nil && v != "" {
-			s.note("player.transition.fault", v, now)
+		// A table with a count and the text: the count makes the same fault
+		// again a new value, and mpv sends an event only for a new value.
+		var f struct {
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(m.Data, &f) == nil && f.Text != "" {
+			s.note("player.transition.fault", f.Text, now)
 		}
 	case obsMoved:
 		s.onMoved(m.Data, now)
