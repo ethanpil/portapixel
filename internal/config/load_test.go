@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -197,10 +198,10 @@ func TestLoadRepairsInsteadOfDropping(t *testing.T) {
 }
 
 // TestLoadAcceptsAnOldFile covers a portapixel.toml that an older build wrote.
-// The key device.tier does not exist now: Load must ignore it. The old
-// transition words are transitions again: Load must keep them and repair
-// nothing, so the device gives no config-repaired warning. Load must keep every
-// other value that the person wrote.
+// The key device.tier does not exist now: Load must ignore its value and warn of
+// the key. The old transition words are transitions again: Load must keep them
+// and repair nothing, so the device gives no config-repaired warning. Load must
+// keep every other value that the person wrote.
 func TestLoadAcceptsAnOldFile(t *testing.T) {
 	for _, old := range []string{"crossfade", "push-left", "push-right", "push-up", "push-down"} {
 		t.Run(old, func(t *testing.T) {
@@ -223,8 +224,11 @@ func TestLoadAcceptsAnOldFile(t *testing.T) {
 			if got.FromDefault || got.FromShadow {
 				t.Fatalf("Load threw the file away: %+v", got)
 			}
-			if len(got.Repaired) != 0 || got.Warning != "" {
-				t.Fatalf("Repaired = %v, warning %q; want a clean load", got.Repaired, got.Warning)
+			if len(got.Repaired) != 0 {
+				t.Fatalf("Repaired = %v; want no repair", got.Repaired)
+			}
+			if !slices.Equal(got.Unknown, []string{"device.tier"}) || !strings.Contains(got.Warning, "device.tier") {
+				t.Errorf("Unknown = %v, warning %q; want a warning that names device.tier", got.Unknown, got.Warning)
 			}
 			if got.Config.Playback.Transition != old {
 				t.Errorf("transition = %q, want %q", got.Config.Playback.Transition, old)

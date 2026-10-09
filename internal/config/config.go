@@ -1,8 +1,10 @@
 package config
 
 import (
+	"bytes"
 	"fmt"
 	"slices"
+	"strings"
 
 	_ "time/tzdata" // the time zone database, see doc.go
 
@@ -253,9 +255,29 @@ func Default() Config {
 // default value, so an old or a short file still gives a complete
 // configuration. Parse does not check the values: use Validate for that.
 func Parse(data []byte) (Config, error) {
+	cfg, _, err := parseKeys(data)
+	return cfg, err
+}
+
+// parseKeys is Parse that also names the keys of the file that Config does not
+// know. The names are in the order of the file, as the full name of the key, for
+// example "device.tier". A table whose keys are all unknown gives its keys and not
+// its own name.
+func parseKeys(data []byte) (Config, []string, error) {
 	cfg := Default()
-	if err := toml.Unmarshal(data, &cfg); err != nil {
-		return Default(), fmt.Errorf("bad configuration file: %w", err)
+	meta, err := toml.NewDecoder(bytes.NewReader(data)).Decode(&cfg)
+	if err != nil {
+		return Default(), nil, fmt.Errorf("bad configuration file: %w", err)
 	}
-	return cfg, nil
+	keys := meta.Undecoded()
+	var unknown []string
+	for i, k := range keys {
+		name := k.String()
+		// BurntSushi names an unknown table and then each key in it.
+		if i+1 < len(keys) && strings.HasPrefix(keys[i+1].String(), name+".") {
+			continue
+		}
+		unknown = append(unknown, name)
+	}
+	return cfg, unknown, nil
 }

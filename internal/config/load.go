@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/ethanpil/portapixel/internal/fsutil"
 )
@@ -23,6 +24,12 @@ type Result struct {
 	// that the person wrote and puts the default value in each of these fields.
 	// It is empty when the file breaks no rule.
 	Repaired []FieldError
+	// Unknown holds the keys of the file on PPMEDIA that this build does not know.
+	// A key whose [table] line is still a comment is one of them. An old key that
+	// is gone is another. Load ignores these keys: they are no repair, they change
+	// no value, and the file still loads. Warning names them. It is empty when the
+	// file holds no such key.
+	Unknown []string
 	// Warning says what is wrong with the copy on PPMEDIA. It is empty when that
 	// copy was good.
 	Warning string
@@ -46,17 +53,26 @@ func ShadowPath(stateDir string) string { return filepath.Join(stateDir, ShadowN
 // schedule that stand beside it. Load mirrors the file to the state directory
 // only when the file breaks no rule, so a repaired file never replaces the
 // last-known-good copy.
+//
+// A key that Config does not know is a warning and not a repair. Load keeps the
+// values as they are, mirrors the file, and names the keys in Warning and in
+// Unknown.
 func Load(mediaRoot, stateDir string) Result {
 	data, err := os.ReadFile(MediaPath(mediaRoot))
 	if err == nil {
-		cfg, parseErr := Parse(data)
+		cfg, unknown, parseErr := parseKeys(data)
 		if parseErr == nil {
+			warnUnknown := unknownWarning(unknown)
 			cfg, bad := Repair(cfg)
 			if len(bad) == 0 {
 				mirror(stateDir, data)
-				return Result{Config: cfg}
+				return Result{Config: cfg, Unknown: unknown, Warning: warnUnknown}
 			}
-			return Result{Config: cfg, Repaired: bad, Warning: repairWarning(FileName, bad)}
+			warning := repairWarning(FileName, bad)
+			if warnUnknown != "" {
+				warning += "; " + warnUnknown
+			}
+			return Result{Config: cfg, Repaired: bad, Unknown: unknown, Warning: warning}
 		}
 		err = parseErr
 	}
@@ -91,6 +107,32 @@ func repairWarning(name string, bad Errors) string {
 		msg += ". The admin password is the default password now: change it"
 	}
 	return msg
+}
+
+// maxUnknownShown is the most keys that the warning of unknown keys names.
+const maxUnknownShown = 5
+
+// unknownWarning says which keys of the file the device does not know. It gives
+// "" when there is none. The usual cause is a key that a person turned on while
+// its [table] line is still a comment, so the text asks about that.
+func unknownWarning(unknown []string) string {
+	if len(unknown) == 0 {
+		return ""
+	}
+	shown := unknown
+	if len(shown) > maxUnknownShown {
+		shown = shown[:maxUnknownShown]
+	}
+	list := strings.Join(shown, ", ")
+	if more := len(unknown) - len(shown); more > 0 {
+		list += fmt.Sprintf(" and %d more", more)
+	}
+	if len(unknown) == 1 {
+		return fmt.Sprintf("%s has a key that this device does not know: %s (is its [table] line still commented?)",
+			FileName, list)
+	}
+	return fmt.Sprintf("%s has keys that this device does not know: %s (is the [table] line of each still commented?)",
+		FileName, list)
 }
 
 // Save checks cfg, writes it to PPMEDIA, and mirrors it. The write is staged and
