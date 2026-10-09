@@ -54,12 +54,27 @@ func runCommand(args []string) int {
 	defer srv.Close()
 
 	// A signal stops the server. The context ends on the first one, and a second
-	// signal ends the process the hard way, because signal.NotifyContext stops
-	// listening after the first.
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// signal ends the process at once.
+	ctx, stop := signalContext(os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
 	return srv.Serve(ctx)
+}
+
+// signalContext gives a context that ends on the first of the signals. After
+// that, the next one of them ends the process, because the default action of the
+// signal is back.
+//
+// signal.NotifyContext alone does not do this. It keeps its handler until the
+// stop function runs, so a second signal went nowhere while a slow shutdown
+// waited for a transfer.
+func signalContext(sigs ...os.Signal) (context.Context, context.CancelFunc) {
+	ctx, stop := signal.NotifyContext(context.Background(), sigs...)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	return ctx, stop
 }
 
 // server holds everything that the process owns.
