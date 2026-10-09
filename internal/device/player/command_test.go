@@ -3,10 +3,13 @@ package player
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/ethanpil/portapixel/internal/config"
 )
 
 func TestArgs(t *testing.T) {
@@ -137,6 +140,24 @@ func TestTransitionScript(t *testing.T) {
 		if strings.Contains(s, bad) {
 			t.Errorf("the script holds the lab leftover %q", bad)
 		}
+	}
+}
+
+// The script knows each word of config.Transitions except "cut", which needs no
+// script work, and no other word.
+func TestScriptKnowsEveryTransition(t *testing.T) {
+	s := string(TransitionScript())
+	block := s[strings.Index(s, "local KINDS = {"):]
+	block = block[:strings.Index(block, "}")]
+	var kinds []string
+	for _, m := range regexp.MustCompile(`\["([a-z-]+)"\] = true`).FindAllStringSubmatch(block, -1) {
+		kinds = append(kinds, m[1])
+	}
+	want := slices.DeleteFunc(slices.Clone(config.Transitions), func(w string) bool { return w == "cut" })
+	slices.Sort(kinds)
+	slices.Sort(want)
+	if !slices.Equal(kinds, want) {
+		t.Errorf("the script knows %v, want %v", kinds, want)
 	}
 }
 

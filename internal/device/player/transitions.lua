@@ -22,9 +22,10 @@
 --   fade       dip to black. The copy of A goes dark. Then one black pixel,
 --              scaled to the screen, goes clear over B.
 --   crossfade  the copy of A goes clear over B.
---   wipe-*     the copy of A gets smaller; B shows at one side.
---   push-*     the copy of A moves out at one side, and B moves in from the
---              other side (video-pan-x and video-pan-y move B).
+--   wipe-*     the copy of A gets smaller; B shows at one side. The word is
+--              the direction in which the edge moves.
+--   push-*     the copy of A moves out in the direction of the word, and B
+--              moves in behind it (video-pan-x and video-pan-y move B).
 --
 -- Rules:
 --   - Every fault ends in a cut: the script removes the overlay.
@@ -40,7 +41,6 @@ local has_ffi, ffi = pcall(require, "ffi")
 local has_bit, bit = pcall(require, "bit")
 
 local COVER = 62     -- the overlay that holds the copy of A
-local BLACK = 63     -- the overlay of one black pixel, scaled to the screen
 local STEP = 0.02    -- the time between two steps, in seconds
 local DEADMAN = 5    -- the time that B may take to show, in seconds
 
@@ -78,7 +78,6 @@ local function finish(why)
     if not S then return end
     if S.timer then S.timer:kill() end
     mp.commandv("overlay-remove", COVER)
-    mp.commandv("overlay-remove", BLACK)
     if S.pan then
         mp.set_property_number("video-pan-x", 0)
         mp.set_property_number("video-pan-y", 0)
@@ -94,16 +93,21 @@ end
 -- show puts a part of a picture on the screen: w x h pixels from the byte
 -- offset off, at x, y.
 local function show(ptr, off, x, y, w, h)
-    if w < 1 or h < 1 then return true end
+    if w < 1 or h < 1 then
+        mp.commandv("overlay-remove", COVER)
+        return true
+    end
     return mp.commandv("overlay-add", COVER, x, y, addr(ptr), off, "bgra", w, h, S.stride)
 end
 
 -- black shows one black pixel with the alpha a (0 to 255), scaled to the
--- screen. mpv copies the pixel at each call, so one buffer is enough.
+-- screen. It replaces the copy in the same overlay, so the change is one step
+-- and there is never a frame with no cover. mpv copies the pixel at each call,
+-- so one buffer is enough.
 local pixel = ffi.new("int32_t[1]")
 local function black(a)
     pixel[0] = lshift(a, 24)
-    return mp.commandv("overlay-add", BLACK, 0, 0, addr(pixel), 0, "bgra", 1, 1, 4, S.w, S.h)
+    return mp.commandv("overlay-add", COVER, 0, 0, addr(pixel), 0, "bgra", 1, 1, 4, S.w, S.h)
 end
 
 -- scale writes src * a / 256 into dst for all four channels of n premultiplied
@@ -116,6 +120,13 @@ local function scale(src8, dst, n, a, orm)
         local ga = band(rshift(px, 8), 0x00FF00FF) * a
         dst[i] = bor(band(rshift(rb, 8), 0x00FF00FF), band(ga, -16711936), orm)
     end
+end
+
+-- pan moves B. The value is in pixels of the screen; video-pan takes a part of
+-- the size of the video on the screen.
+local function pan(x, y)
+    mp.set_property_number("video-pan-x", x / S.vw)
+    mp.set_property_number("video-pan-y", y / S.vh)
 end
 
 -- step draws the transition at the time now.
@@ -131,7 +142,6 @@ local function step()
                 scale(S.base, S.buf, W * H, math.floor((1 - 2 * p) * 256 + 0.5), OPAQUE)
                 r = show(S.buf, 0, 0, 0, W, H)
             else
-                if not S.dark then mp.commandv("overlay-remove", COVER); S.dark = true end
                 r = black(math.floor((1 - p) * 510 + 0.5))
             end
         elseif k == "crossfade" then
@@ -141,18 +151,20 @@ local function step()
         elseif k == "wipe-right" then r = show(S.base, dx * 4, dx, 0, W - dx, H)
         elseif k == "wipe-up" then r = show(S.base, 0, 0, 0, W, H - dy)
         elseif k == "wipe-down" then r = show(S.base, dy * R, 0, dy, W, H - dy)
+        -- A push moves B first and the copy second. In the other order, one
+        -- frame can show the gap between them.
         elseif k == "push-left" then
+            pan(W - dx, 0)
             r = show(S.base, dx * 4, 0, 0, W - dx, H)
-            mp.set_property_number("video-pan-x", (W - dx) / S.vw)
         elseif k == "push-right" then
+            pan(dx - W, 0)
             r = show(S.base, 0, dx, 0, W - dx, H)
-            mp.set_property_number("video-pan-x", -(W - dx) / S.vw)
         elseif k == "push-up" then
+            pan(0, H - dy)
             r = show(S.base, dy * R, 0, 0, W, H - dy)
-            mp.set_property_number("video-pan-y", (H - dy) / S.vh)
         elseif k == "push-down" then
+            pan(0, dy - H)
             r = show(S.base, 0, 0, dy, W, H - dy)
-            mp.set_property_number("video-pan-y", -(H - dy) / S.vh)
         end
         if not r then finish("the overlay failed") end
     end)
@@ -168,7 +180,6 @@ local function start()
         S.buf = ffi.new("int32_t[?]", S.w * S.h)
     end
     if k:sub(1, 5) == "push-" then
-        -- video-pan moves B in units of the size of the video on the screen.
         local d = mp.get_property_native("osd-dimensions")
         S.vw = math.max(1, d.w - d.ml - d.mr)
         S.vh = math.max(1, d.h - d.mt - d.mb)
@@ -180,8 +191,15 @@ end
 
 -- cover puts the copy of the screen on top before mpv unloads item A.
 local function cover()
-    if S then finish() end -- B was shorter than its transition
     local kind = mp.get_opt("pptr-kind") or "cut"
+    if S then
+        if not S.t0 then
+            -- This item showed no frame: it did not load. The copy still shows
+            -- the last frame that did show, so it stays for the next item.
+            return
+        end
+        finish() -- the item was shorter than its transition
+    end
     local ms = tonumber(mp.get_opt("pptr-ms") or "") or 0
     if kind == "cut" or ms <= 0 then return end
     if not KINDS[kind] then
