@@ -291,7 +291,7 @@ func TestPlaylistChangeReplacesTheList(t *testing.T) {
 // picture is drawn again for a new minute and for new data, at the size of the
 // display.
 func TestFallbackScreen(t *testing.T) {
-	h := newHarness(t, library.PlayerManifest{Fallback: true}, func(o *Options, h *harness) {
+	h := newHarness(t, library.PlayerManifest{}, func(o *Options, h *harness) {
 		writeFile(t, filepath.Join(h.drm, "card0-HDMI-A-1", "status"), "connected\n")
 		writeFile(t, filepath.Join(h.drm, "card0-HDMI-A-1", "modes"), "1280x720\n1920x1080\n")
 	})
@@ -403,7 +403,7 @@ func TestAFallbackRedrawReadsTheDataOneTime(t *testing.T) {
 // event. The loop must try again by itself, or the screen stays black.
 func TestFallbackDrawFailureIsRetried(t *testing.T) {
 	failures := 2
-	h := newHarness(t, library.PlayerManifest{Fallback: true}, func(o *Options, h *harness) {
+	h := newHarness(t, library.PlayerManifest{}, func(o *Options, h *harness) {
 		o.Render = func(info fallback.Info, w, h2 int) ([]byte, error) {
 			h.mu.Lock()
 			defer h.mu.Unlock()
@@ -450,7 +450,7 @@ func TestFallbackRetryDoesNotReplaceContentThatCameBack(t *testing.T) {
 	h.mu.Lock()
 	fail = true
 	h.mu.Unlock()
-	h.setManifest(library.PlayerManifest{Fallback: true}) // a gap in the schedule
+	h.setManifest(library.PlayerManifest{}) // a gap in the schedule
 	waitFor(t, "the failed draw", func() bool { return h.eventWith("player.fallback.fail", "the render failed") })
 	h.setManifest(threeItems()) // the schedule comes back to the same playlist
 	h.settle()
@@ -584,7 +584,7 @@ func TestResumePointDoesNotOutliveAFallbackScreen(t *testing.T) {
 	// The content goes away, but the supervisor does not learn it before mpv
 	// crashes. The new mpv then gets the fallback screen.
 	h.mu.Lock()
-	h.manifest = library.PlayerManifest{Fallback: true}
+	h.manifest = library.PlayerManifest{}
 	h.mu.Unlock()
 	h.ctl("fake-exit", 9)
 	path := h.sup.opt.Command.FallbackPath()
@@ -835,7 +835,7 @@ func TestLocalTimeComesFromTheZone(t *testing.T) {
 	h.advance(58 * time.Second)
 	waitFor(t, "the grace", func() bool { return h.countEvent("player.nightly.grace") == 1 })
 
-	f := newHarness(t, library.PlayerManifest{Fallback: true}, func(o *Options, h *harness) { o.Local = local })
+	f := newHarness(t, library.PlayerManifest{}, func(o *Options, h *harness) { o.Local = local })
 	waitFor(t, "a render", func() bool { return f.renderCount() > 0 })
 	f.mu.Lock()
 	got := f.renders[0].Now.Location()

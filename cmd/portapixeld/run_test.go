@@ -219,10 +219,10 @@ func TestPairedDeviceShowsOnlyFleetContent(t *testing.T) {
 		// fleetDefault is the default playlist of the manifest.
 		fleetDefault string
 		wantFallback bool
-		wantTitle    string
+		wantFile     string
 	}{
-		{name: "unpaired: the local playlist plays", wantTitle: "Local lobby"},
-		{name: "paired: the fleet playlist of the name plays", paired: true, fleetDefault: "lobby", wantTitle: "Fleet lobby"},
+		{name: "unpaired: the local playlist plays", wantFile: "local.jpg"},
+		{name: "paired: the fleet playlist of the name plays", paired: true, fleetDefault: "lobby", wantFile: "fleet.jpg"},
 		{name: "paired with no fleet default: nothing plays", paired: true, fleetDefault: "", wantFallback: true},
 		{name: "paired with a fleet default that is not there", paired: true, fleetDefault: "gone", wantFallback: true},
 	}
@@ -256,17 +256,14 @@ func TestPairedDeviceShowsOnlyFleetContent(t *testing.T) {
 			}
 
 			m := d.playerManifest()
-			if m.Fallback != tt.wantFallback {
-				t.Fatalf("fallback = %v, want %v (active %q)", m.Fallback, tt.wantFallback, d.sched.Active())
+			if fallback := m.Playlist == nil; fallback != tt.wantFallback {
+				t.Fatalf("fallback = %v, want %v (active %q)", fallback, tt.wantFallback, d.sched.Active())
 			}
 			if tt.wantFallback {
-				if m.Playlist != nil {
-					t.Fatalf("the fallback manifest holds a playlist: %+v", m.Playlist)
-				}
 				return
 			}
-			if m.Playlist.Title != tt.wantTitle {
-				t.Fatalf("the player got %q, want %q", m.Playlist.Title, tt.wantTitle)
+			if got := m.Playlist.Items[0].Name; got != tt.wantFile {
+				t.Fatalf("the player got %q, want %q", got, tt.wantFile)
 			}
 		})
 	}

@@ -335,7 +335,6 @@ func (h *harness) eventWith(name, text string) bool {
 // playlist makes a manifest of items. A name that ends in .mp4 is a video.
 func playlist(name, transition string, ms int, items ...library.ManifestItem) library.PlayerManifest {
 	for i := range items {
-		items[i].Index = i
 		if items[i].Kind == "" {
 			items[i].Kind = kindImage
 			if strings.HasSuffix(items[i].Name, ".mp4") {
@@ -357,7 +356,5 @@ func playlist(name, transition string, ms int, items ...library.ManifestItem) li
 			items[i].Duration = 10
 		}
 	}
-	return library.PlayerManifest{Playlist: &library.ManifestPlaylist{
-		Name: name, Title: name, Transition: transition, TransitionMS: ms, Items: items,
-	}}
+	return library.PlayerManifest{Playlist: &library.ManifestPlaylist{Name: name, Items: items}}
 }

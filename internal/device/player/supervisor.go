@@ -351,7 +351,7 @@ func New(opt Options) *Supervisor {
 		opt.DisplayProbe = displayProbeEvery
 	}
 	if opt.Manifest == nil {
-		opt.Manifest = func() library.PlayerManifest { return library.PlayerManifest{Fallback: true} }
+		opt.Manifest = func() library.PlayerManifest { return library.PlayerManifest{} }
 	}
 	if opt.Fallback == nil {
 		opt.Fallback = func() fallback.Info { return fallback.Info{Name: "PortaPixel"} }
@@ -1128,7 +1128,7 @@ func (s *Supervisor) playlistChanged(now time.Time) {
 	// A playback setting can be playback.motion.
 	s.sendMotion(now)
 	m := s.opt.Manifest()
-	content := !m.Fallback && m.Playlist != nil && len(m.Playlist.Items) > 0
+	content := hasContent(m)
 	switch {
 	case !content && s.list != nil && s.list.fallback && s.failedAt.IsZero():
 		return // the fallback screen shows already
@@ -1144,6 +1144,12 @@ func (s *Supervisor) playlistChanged(now time.Time) {
 	s.loadManifest(m, now)
 }
 
+// hasContent reports if the manifest has an item to show. With none, the
+// fallback screen shows.
+func hasContent(m library.PlayerManifest) bool {
+	return m.Playlist != nil && len(m.Playlist.Items) > 0
+}
+
 // loadContent gives mpv what must play now.
 func (s *Supervisor) loadContent(now time.Time) {
 	s.loadManifest(s.opt.Manifest(), now)
@@ -1157,7 +1163,7 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	// its first item.
 	resume := s.resumeFrom
 	s.resumeFrom = nil
-	if m.Fallback || m.Playlist == nil || len(m.Playlist.Items) == 0 {
+	if !hasContent(m) {
 		s.showFallback(now, "there is no playable content")
 		return
 	}
@@ -1207,8 +1213,8 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 			break
 		}
 	}
-	s.logRepeat("player.playlist", p.Name, fmt.Sprintf("%s: %d items, transition %s %d ms",
-		p.Name, len(order), p.Transition, p.TransitionMS))
+	// Each item carries its own transition, so the line names none.
+	s.logRepeat("player.playlist", p.Name, fmt.Sprintf("%s: %d items", p.Name, len(order)))
 }
 
 // fileOptions gives the per-file options of one item (ARCHITECTURE 7a). mpv sets

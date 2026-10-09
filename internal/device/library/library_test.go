@@ -6,6 +6,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -610,14 +612,16 @@ file = "notes.txt"
 
 	cfg := config.Default()
 	m := BuildManifest(&p, cfg, 1)
-	if m.Fallback || m.Playlist == nil {
+	if m.Playlist == nil {
 		t.Fatalf("manifest = %+v", m)
-	}
-	if m.Playlist.Transition != "cut" || m.Playlist.TransitionMS != 500 {
-		t.Errorf("transition = %q %d", m.Playlist.Transition, m.Playlist.TransitionMS)
 	}
 	if len(m.Playlist.Items) != 2 {
 		t.Fatalf("items = %+v", m.Playlist.Items)
+	}
+	for _, it := range m.Playlist.Items {
+		if it.Transition != "cut" || it.TransitionMS != 500 {
+			t.Errorf("%s has the transition %q %d", it.Name, it.Transition, it.TransitionMS)
+		}
 	}
 	if m.Playlist.Items[0].Duration != cfg.Playback.ImageDuration {
 		t.Errorf("the image did not get the default duration: %+v", m.Playlist.Items[0])
@@ -629,9 +633,31 @@ file = "notes.txt"
 	if want := filepath.Join(f.media, "default", "b.mp4"); m.Playlist.Items[1].Path != want {
 		t.Errorf("path = %q, want %q", m.Playlist.Items[1].Path, want)
 	}
-	for i, it := range m.Playlist.Items {
-		if it.Index != i {
-			t.Errorf("item %d has index %d", i, it.Index)
+}
+
+// The player compares two manifests to decide if mpv gets a new list, and a new
+// list starts at the first item. A change that does not change what plays must
+// give the same manifest: a new title restarted the playlist before.
+func TestBuildManifestIgnoresWhatDoesNotPlay(t *testing.T) {
+	cfg := config.Default()
+	on, off := true, false
+	item := func(word string) Item {
+		return Item{Kind: "image", Name: "a.jpg", Duration: 10, Transition: word, path: "/media/lobby/a.jpg"}
+	}
+	base := Playlist{Name: "lobby", Title: "Lobby", Items: []Item{item("fade")}}
+	want := BuildManifest(&base, cfg, 1)
+	changes := map[string]func(p *Playlist){
+		"a new title":                                 func(p *Playlist) { p.Title = "Front desk" },
+		"shuffle on a playlist of one item":           func(p *Playlist) { p.Shuffle = &on },
+		"shuffle off":                                 func(p *Playlist) { p.Shuffle = &off },
+		"a playlist transition that each item covers": func(p *Playlist) { p.Transition = "split" },
+	}
+	for name, change := range changes {
+		p := base
+		p.Items = slices.Clone(base.Items)
+		change(&p)
+		if got := BuildManifest(&p, cfg, 1); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s changed the manifest: %+v, want %+v", name, got.Playlist, want.Playlist)
 		}
 	}
 }
@@ -735,12 +761,12 @@ file = "a.jpg"
 
 func TestBuildManifestFallback(t *testing.T) {
 	cfg := config.Default()
-	if m := BuildManifest(nil, cfg, 1); !m.Fallback || m.Playlist != nil {
+	if m := BuildManifest(nil, cfg, 1); m.Playlist != nil {
 		t.Fatalf("a nil playlist gave %+v", m)
 	}
 	// A playlist whose files are all missing has nothing to show.
 	p := Playlist{Name: "x", Items: []Item{{Kind: "image", Missing: true}}}
-	if m := BuildManifest(&p, cfg, 1); !m.Fallback {
+	if m := BuildManifest(&p, cfg, 1); m.Playlist != nil {
 		t.Fatalf("a playlist of missing files is not fallback")
 	}
 }

@@ -9,31 +9,29 @@ import (
 
 // PlayerManifest is what the player must show now (ARCHITECTURE section 7a). The
 // daemon applies every default and does the shuffle, so the player has no rules
-// to know: it gives mpv the list in the order that it receives.
+// to know: it gives mpv the list in the order that it receives. A nil Playlist
+// is the fallback screen (D18).
+//
+// The manifest holds only what the player uses. The player compares two
+// manifests to decide if mpv gets a new list, and a field that it does not use
+// decided it too: a new title restarted the playlist at its first item.
 type PlayerManifest struct {
-	Fallback bool
 	Playlist *ManifestPlaylist
 }
 
 // ManifestPlaylist is the playlist that the player must show.
 type ManifestPlaylist struct {
-	Name         string
-	Title        string
-	Transition   string
-	TransitionMS int
-	Shuffle      bool
+	Name string
 	// KenBurns is the choice of the playlist. The player decides if the output
 	// can show it.
 	KenBurns bool
 	Items    []ManifestItem
 }
 
-// ManifestItem is one item that the player can show. Index is the position in
-// this list, not the position in playlist.toml.
+// ManifestItem is one item that the player can show.
 type ManifestItem struct {
-	Index int
-	Kind  string // image | video
-	Name  string
+	Kind string // image | video
+	Name string
 	// Path is the absolute path of the file. mpv reads the file directly.
 	Path string
 
@@ -52,17 +50,16 @@ type ManifestItem struct {
 
 // BuildManifest makes the manifest for one playlist.
 //
-// A nil playlist, or a playlist with nothing that the player can show, gives
-// Fallback: true. The player then shows the fallback screen (D18). An item that
+// A nil playlist, or a playlist with nothing that the player can show, gives no
+// playlist. The player then shows the fallback screen (D18). An item that
 // names a missing file, or a file kind that the player does not know, is left
 // out here and shown as a warning in the admin UI.
 //
 // seed makes the shuffle. The caller gives a new seed each time a playlist
 // starts, so the order is different at each start but stable while it plays.
 func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
-	out := PlayerManifest{Fallback: true}
 	if p == nil {
-		return out
+		return PlayerManifest{}
 	}
 
 	transition := cfg.Playback.Transition
@@ -101,7 +98,7 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 		})
 	}
 	if len(items) == 0 {
-		return out
+		return PlayerManifest{}
 	}
 
 	shuffle := cfg.Playback.Shuffle
@@ -112,20 +109,5 @@ func BuildManifest(p *Playlist, cfg config.Config, seed uint64) PlayerManifest {
 		r := rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15))
 		r.Shuffle(len(items), func(i, j int) { items[i], items[j] = items[j], items[i] })
 	}
-	for i := range items {
-		items[i].Index = i
-	}
-
-	return PlayerManifest{
-		Fallback: false,
-		Playlist: &ManifestPlaylist{
-			Name:         p.Name,
-			Title:        p.Title,
-			Transition:   transition,
-			TransitionMS: cfg.Playback.TransitionMS,
-			Shuffle:      shuffle,
-			KenBurns:     p.KenBurns,
-			Items:        items,
-		},
-	}
+	return PlayerManifest{Playlist: &ManifestPlaylist{Name: p.Name, KenBurns: p.KenBurns, Items: items}}
 }
