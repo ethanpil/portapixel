@@ -492,7 +492,8 @@ on the pp-zero lab VM on 2026-10-08: vo=drm and vo=gpu as `kiosk`.
 Rotation goes to `--video-rotate`, and `display.video_mode` goes to `--drm-mode`. A change
 of `display.rotation`, `display.video_mode`, `display.video_output` or `audio.output`
 restarts mpv (change class `player`). A `video_mode` that the display does not have does
-not stop mpv. No file can show, mpv goes idle, and the ops log names `player.log`.
+not stop mpv. No file can show, and mpv goes idle. The ops log can hold `player.item.fail` and
+`player.playlist.fail` lines, and `player.log` holds the error of mpv.
 
 The watchdog ladder (plan 3.3). The thresholds come from `[watchdog]` (D30). T is
 `heartbeat_timeout`.
