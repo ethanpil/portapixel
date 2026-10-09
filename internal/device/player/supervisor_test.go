@@ -266,6 +266,31 @@ func TestRestartAfterExit(t *testing.T) {
 	}
 }
 
+// The resume point is for the first load after a restart. If a fallback screen
+// takes that load, the point is gone: the same playlist, much later, starts at its
+// first item and not in the middle.
+func TestResumePointDoesNotOutliveAFallbackScreen(t *testing.T) {
+	h := newHarness(t, threeItems(), nil)
+	h.waitPlaying(0)
+	h.ctl("fake-next")
+	h.waitPlaying(1)
+
+	// The content goes away, but the supervisor does not learn it before mpv
+	// crashes. The new mpv then gets the fallback screen.
+	h.mu.Lock()
+	h.manifest = library.PlayerManifest{Fallback: true}
+	h.mu.Unlock()
+	h.ctl("fake-exit", 9)
+	path := h.sup.opt.Command.FallbackPath()
+	waitFor(t, "the fallback screen", func() bool {
+		d, ok := h.tryDump()
+		return ok && len(d.List) == 1 && d.List[0].Path == path
+	})
+
+	h.setManifest(threeItems())
+	h.waitPlaying(0)
+}
+
 // An mpv that does not answer its IPC (SIGSTOP, a dead lock) is restarted.
 func TestRestartWhenIPCIsSilent(t *testing.T) {
 	h := newHarness(t, videos(), nil)

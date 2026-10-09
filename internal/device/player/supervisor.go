@@ -954,6 +954,11 @@ func (s *Supervisor) loadContent(now time.Time) {
 // loadManifest gives mpv a manifest: the playlist, or the fallback screen.
 func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	s.failedAt = time.Time{}
+	// The resume point is for the first load after a restart and for no other. A
+	// fallback screen uses it up as well: the same playlist, hours later, starts at
+	// its first item.
+	resume := s.resumeFrom
+	s.resumeFrom = nil
 	if m.Fallback || m.Playlist == nil || len(m.Playlist.Items) == 0 {
 		s.showFallback(now, "there is no playable content")
 		return
@@ -961,10 +966,9 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	p := m.Playlist
 	n := len(p.Items)
 	start := 0
-	if r := s.resumeFrom; r != nil && r.name == p.Name && r.count == n {
-		start = r.index
+	if resume != nil && resume.name == p.Name && resume.count == n {
+		start = resume.index
 	}
-	s.resumeFrom = nil
 	s.newList(&loaded{playlist: p, offset: start, single: n == 1})
 	// mpv loads the first file of a replace at once and the others behind it. The
 	// list starts at the resume item, and mpv loops it, so the order of the loop
