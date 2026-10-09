@@ -550,14 +550,22 @@ func (d *DB) pairRow(tx *tx, req manifest.EnrollRequest, ip string, now time.Tim
 	// The flags of the identity rules go away with the new token. One machine holds
 	// the token of this row now, so a conflict of two machines and a hardware change
 	// that waited are both answered.
-	if _, err := tx.Exec(`UPDATE devices SET token_hash = ?, ever_paired = 1, paired_at = ?,
+	res, err := tx.Exec(`UPDATE devices SET token_hash = ?, ever_paired = 1, paired_at = ?,
 		needs_confirm = 0, pending_hardware_id = '', pending_hardware_at = '',
 		conflict = 0, conflict_hardware_id = ''
-		WHERE id = ?`, tokenHash, d.stamp(now), req.DeviceID); err != nil {
+		WHERE id = ?`, tokenHash, d.stamp(now), req.DeviceID)
+	if err != nil {
 		return err
 	}
+	// A token that no row holds must never go to a device: its first poll would
+	// get token-revoked, and the device would drop the pairing.
+	if n, err := res.RowsAffected(); err != nil {
+		return err
+	} else if n == 0 {
+		return errors.New("the device row of " + req.DeviceID + " is not there")
+	}
 	// The request that asked for this token is finished.
-	_, err := tx.Exec(`DELETE FROM pending_enrollments WHERE device_id = ?`, req.DeviceID)
+	_, err = tx.Exec(`DELETE FROM pending_enrollments WHERE device_id = ?`, req.DeviceID)
 	return err
 }
 
@@ -753,7 +761,12 @@ func (d *DB) RejectPending(pendingID int64) error {
 	if _, err := tx.Exec(`DELETE FROM pending_enrollments WHERE id = ?`, pendingID); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(`DELETE FROM devices WHERE id = ? AND ever_paired = 0`, deviceID); err != nil {
+	// The device row stays while another request of the same device ID is in the
+	// list. An approval of that request made the row, and its device collects the
+	// token from it at its next poll.
+	if _, err := tx.Exec(`DELETE FROM devices WHERE id = ? AND ever_paired = 0
+		AND NOT EXISTS (SELECT 1 FROM pending_enrollments WHERE device_id = ?)`,
+		deviceID, deviceID); err != nil {
 		return err
 	}
 	return tx.Commit()
