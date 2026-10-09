@@ -22,6 +22,9 @@ import { notInThisBuild, nameToSave } from '../util.js';
 
 const MASK = '********';
 
+/* playback.motion. The device decides "auto" from its hardware. */
+const MOTION = [['auto', 'Automatic'], ['on', 'On'], ['off', 'Off']];
+
 export function mount(main, ctx) {
   /* The comment-loss warning is shown one time for each visit to this page (D16).
      A person who saves four times in a row does not need it four times, and a
@@ -194,6 +197,7 @@ export function mount(main, ctx) {
   const cDefault = select([]);
   const cTransition = select(TRANSITIONS);
   const cTransitionMS = number({ min: '0', max: '5000', step: '50' });
+  const cMotion = select(MOTION);
   const cImageDuration = number({ min: '1', max: '3600', step: '1' });
   const cShuffle = toggle('Shuffle the items', 'A new order each time the playlist starts.');
   const cNightly = clock();
@@ -333,6 +337,8 @@ export function mount(main, ctx) {
           h('div', { class: 'pp-fields' },
             field('playback.transition', 'Between items', cTransition),
             field('playback.transition_ms', 'Transition length (ms)', cTransitionMS)),
+          field('playback.motion', 'Moving crossfade', cMotion,
+            'In a crossfade from a video, the video keeps moving while the next item comes in. Automatic is on for a PC and a Raspberry Pi 5. The player turns it off until the next start when the device drops too many frames.'),
           h('div', { class: 'pp-fields' },
             field('playback.image_duration', 'Default image time (seconds)', cImageDuration),
             field('playback.nightly_restart', 'Nightly restart', cNightly)),
@@ -420,6 +426,7 @@ export function mount(main, ctx) {
     cDefault.value = cfg.playback.default_playlist || '';
     cTransition.value = cfg.playback.transition || 'fade';
     cTransitionMS.value = String(cfg.playback.transition_ms ?? 500);
+    cMotion.value = cfg.playback.motion || 'auto';
     cImageDuration.value = String(cfg.playback.image_duration ?? 10);
     cShuffle.input.checked = !!cfg.playback.shuffle;
     cNightly.value = cfg.playback.nightly_restart || '';
@@ -480,6 +487,7 @@ export function mount(main, ctx) {
     next.playback.default_playlist = cDefault.value;
     next.playback.transition = cTransition.value;
     next.playback.transition_ms = Number(cTransitionMS.value) || 0;
+    next.playback.motion = cMotion.value;
     next.playback.image_duration = Number(cImageDuration.value) || 0;
     next.playback.shuffle = cShuffle.input.checked;
     next.playback.nightly_restart = cNightly.value;

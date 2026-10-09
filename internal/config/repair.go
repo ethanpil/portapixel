@@ -81,6 +81,8 @@ func Repair(cfg Config) (Config, Errors) {
 			out.Playback.ImageDuration = def.Playback.ImageDuration
 		case field == "playback.nightly_restart":
 			out.Playback.NightlyRestart = def.Playback.NightlyRestart
+		case field == "playback.motion":
+			out.Playback.Motion = def.Playback.Motion
 
 		// Each watchdog value stands alone. A bad timeout must not cost the reboot
 		// step beside it: half of the ladder is still a ladder.

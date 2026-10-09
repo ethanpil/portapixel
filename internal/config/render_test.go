@@ -33,6 +33,7 @@ func full() Config {
 	cfg.Playback.ImageDuration = 20
 	cfg.Playback.Shuffle = true
 	cfg.Playback.NightlyRestart = "04:15"
+	cfg.Playback.Motion = "off"
 	cfg.Watchdog.Enabled = false
 	cfg.Watchdog.HeartbeatTimeout = 45
 	cfg.Watchdog.RestartsBeforeReboot = 0
@@ -146,7 +147,7 @@ func TestRenderHoldsEveryKey(t *testing.T) {
 		"mode", "address", "gateway", "dns", "wifi_ssid", "wifi_psk",
 		"rotation", "video_mode", "video_output", "power_method", "on_time", "off_time", "power_days",
 		"output", "volume",
-		"default_playlist", "transition", "transition_ms", "image_duration", "shuffle", "nightly_restart",
+		"default_playlist", "transition", "transition_ms", "image_duration", "shuffle", "nightly_restart", "motion",
 		"heartbeat_timeout", "restarts_before_reboot", "restart_window",
 		"playlist", "days", "start", "end",
 		"url", "token", "poll_seconds",

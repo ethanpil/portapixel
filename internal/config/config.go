@@ -85,6 +85,11 @@ type Playback struct {
 	TransitionMS    int    `toml:"transition_ms" json:"transition_ms"`
 	ImageDuration   int    `toml:"image_duration" json:"image_duration"`
 	Shuffle         bool   `toml:"shuffle" json:"shuffle"`
+	// Motion permits the moving crossfade: in a crossfade from a video, both
+	// items move. "auto" is on for an x86_64 device and a Raspberry Pi 5 or
+	// Compute Module 5, and off for every other board. "off" keeps the frozen
+	// last frame of the video. See internal/device/player.
+	Motion string `toml:"motion" json:"motion"` // auto | on | off
 	// NightlyRestart is the time of the daily player restart. An empty value
 	// stops it (D30).
 	NightlyRestart string `toml:"nightly_restart" json:"nightly_restart"`
@@ -192,6 +197,7 @@ func Default() Config {
 			TransitionMS:    500,
 			ImageDuration:   10,
 			Shuffle:         false,
+			Motion:          "auto",
 			NightlyRestart:  "03:30",
 		},
 		Watchdog: Watchdog{

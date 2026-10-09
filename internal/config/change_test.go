@@ -52,6 +52,7 @@ func TestChangeClass(t *testing.T) {
 		{name: "default playlist", change: func(c *Config) { c.Playback.DefaultPlaylist = "lobby" }, wantField: "playback.default_playlist", wantClass: Live},
 		{name: "transition", change: func(c *Config) { c.Playback.Transition = "cut" }, wantField: "playback.transition", wantClass: Live},
 		{name: "transition time", change: func(c *Config) { c.Playback.TransitionMS = 100 }, wantField: "playback.transition_ms", wantClass: Live},
+		{name: "motion", change: func(c *Config) { c.Playback.Motion = "off" }, wantField: "playback.motion", wantClass: Live},
 		{name: "image duration", change: func(c *Config) { c.Playback.ImageDuration = 30 }, wantField: "playback.image_duration", wantClass: Live},
 		{name: "shuffle", change: func(c *Config) { c.Playback.Shuffle = true }, wantField: "playback.shuffle", wantClass: Live},
 		{name: "nightly restart", change: func(c *Config) { c.Playback.NightlyRestart = "" }, wantField: "playback.nightly_restart", wantClass: Live},

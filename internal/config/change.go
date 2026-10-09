@@ -79,6 +79,7 @@ func ChangeClass(old, next Config) []Change {
 	add("playback.image_duration", Live, old.Playback.ImageDuration != next.Playback.ImageDuration)
 	add("playback.shuffle", Live, old.Playback.Shuffle != next.Playback.Shuffle)
 	add("playback.nightly_restart", Live, old.Playback.NightlyRestart != next.Playback.NightlyRestart)
+	add("playback.motion", Live, old.Playback.Motion != next.Playback.Motion)
 	add("schedule", Live, !sameRules(old.Schedule, next.Schedule))
 
 	// [watchdog]. The player supervisor reads these four values at each check

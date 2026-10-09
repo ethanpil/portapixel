@@ -218,6 +218,10 @@ var validateCases = []validateCase{
 		change:    func(c *Config) { c.Playback.Transition = "wipe" },
 		wantField: "playback.transition",
 	},
+	{name: "bad motion", change: func(c *Config) { c.Playback.Motion = "yes" }, wantField: "playback.motion"},
+	{name: "empty motion", change: func(c *Config) { c.Playback.Motion = "" }, wantField: "playback.motion"},
+	{name: "motion on is good", change: func(c *Config) { c.Playback.Motion = "on" }},
+	{name: "motion off is good", change: func(c *Config) { c.Playback.Motion = "off" }},
 	{
 		name:      "negative transition time",
 		change:    func(c *Config) { c.Playback.TransitionMS = -1 },
