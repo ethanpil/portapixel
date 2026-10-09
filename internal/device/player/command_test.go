@@ -105,6 +105,41 @@ func TestPrepare(t *testing.T) {
 	}
 }
 
+// A Raspberry Pi decodes H.264 with v4l2m2m-copy, which auto-safe does not try.
+// Every other board takes auto-safe. The model comes from a fake device tree.
+func TestHwdecFollowsTheBoard(t *testing.T) {
+	dir := t.TempDir()
+	tests := []struct {
+		name, model, want string
+	}{
+		{"zero 2 w", "Raspberry Pi Zero 2 W Rev 1.0\x00", "v4l2m2m-copy"},
+		{"pi 4", "Raspberry Pi 4 Model B Rev 1.5\x00", "v4l2m2m-copy"},
+		{"pi 5", "Raspberry Pi 5 Model B Rev 1.0\x00", "v4l2m2m-copy"},
+		{"compute module 5", "Raspberry Pi Compute Module 5 Rev 1.0\x00", "v4l2m2m-copy"},
+		{"another arm board", "Pine64 RockPro64 v2.1\x00", "auto-safe"},
+		{"a pc has no file", "", "auto-safe"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(dir, "no-model")
+			if tt.model != "" {
+				path = filepath.Join(dir, tt.name)
+				if err := os.WriteFile(path, []byte(tt.model), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			model := BoardModel(path)
+			if strings.ContainsRune(model, 0) {
+				t.Errorf("BoardModel kept the NUL byte: %q", model)
+			}
+			args := CommandConfig{RunDir: "/run/portapixel"}.Args(Launch{Output: OutputDRM, Model: model})
+			if !slices.Contains(args, "--hwdec="+tt.want) {
+				t.Errorf("model %q gives %q, want --hwdec=%s", model, args, tt.want)
+			}
+		})
+	}
+}
+
 func TestSplitArgs(t *testing.T) {
 	tests := []struct {
 		in   string

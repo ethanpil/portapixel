@@ -76,6 +76,19 @@ func TestPlaylistLoadsWithFileOptions(t *testing.T) {
 	}
 }
 
+// The supervisor reads the board model one time and gives it to the command
+// line: a Raspberry Pi gets the hardware decoder of the SoC.
+func TestTheBoardModelChoosesTheDecoder(t *testing.T) {
+	h := newHarness(t, videos(), func(o *Options, h *harness) {
+		o.ModelPath = filepath.Join(h.run, "model")
+		writeFile(t, o.ModelPath, "Raspberry Pi Zero 2 W Rev 1.0\x00")
+	})
+	h.waitPlaying(0)
+	if args := h.dump().Args; !slices.Contains(args, "--hwdec=v4l2m2m-copy") {
+		t.Errorf("the arguments %q do not hold --hwdec=v4l2m2m-copy", args)
+	}
+}
+
 // One image alone stays on the screen and one video alone loops in its file:
 // neither gets a transition into itself.
 func TestSingleItemsStay(t *testing.T) {

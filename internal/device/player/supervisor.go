@@ -154,6 +154,8 @@ type Options struct {
 	ScreenOffCovers func(t time.Time) bool
 	// DRMRoot is where the display connectors are. "" uses /sys/class/drm.
 	DRMRoot string
+	// ModelPath is the file that names the board. "" uses ModelPath.
+	ModelPath string
 	// DisplayProbe is the time between two reads of the connectors. 0 uses
 	// displayProbeEvery.
 	DisplayProbe time.Duration
@@ -250,6 +252,9 @@ type Supervisor struct {
 	opt  Options
 	proc *launcher
 	cmds chan command
+	// model is the board name (BoardModel). It does not change while the
+	// daemon runs.
+	model string
 
 	// Fields that the loop owns.
 	ipc       *ipcConn
@@ -337,8 +342,12 @@ func New(opt Options) *Supervisor {
 	if opt.Watchdog == nil {
 		opt.Watchdog = DefaultWatchdog
 	}
+	if opt.ModelPath == "" {
+		opt.ModelPath = ModelPath
+	}
 	s := &Supervisor{
 		opt:         opt,
+		model:       BoardModel(opt.ModelPath),
 		proc:        newLauncher(opt.Command, opt.Log),
 		cmds:        make(chan command, 8),
 		cur:         -1,
@@ -667,7 +676,7 @@ func (s *Supervisor) launch(now time.Time) {
 	s.mu.Unlock()
 	s.setState(StateStarting, "")
 
-	err := s.proc.start(Launch{Output: output, Rotation: set.Rotation, VideoMode: set.VideoMode})
+	err := s.proc.start(Launch{Output: output, Rotation: set.Rotation, VideoMode: set.VideoMode, Model: s.model})
 	if err != nil {
 		s.setState(StateStopped, err.Error())
 		s.log("player.start.fail", fmt.Sprintf("%s; the next try is in %s", err, s.launchDelay))

@@ -31,6 +31,10 @@ const (
 	LogName = "player.log"
 )
 
+// ModelPath is where the kernel names the board. A Raspberry Pi has the file
+// (it comes from the device tree); a PC does not.
+const ModelPath = "/proc/device-tree/model"
+
 // The words of display.video_output. Output gives "gpu" or "drm"; "auto" is only
 // a setting.
 const (
@@ -52,12 +56,36 @@ type CommandConfig struct {
 	RunDir string
 }
 
-// Launch holds the values that a start of mpv takes from the configuration.
+// Launch holds the values that a start of mpv takes from the configuration and
+// from the hardware.
 type Launch struct {
 	// Output is "gpu" or "drm", never "auto".
 	Output    string
 	Rotation  int
 	VideoMode string
+	// Model is the board name from ModelPath, or "" (a PC).
+	Model string
+}
+
+// BoardModel gives the board name in the file at path, or "" when there is no
+// such file. The device tree ends the name with a NUL byte.
+func BoardModel(path string) string {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimRight(string(data), "\x00"))
+}
+
+// IsRaspberryPi reports if a board name from BoardModel is a Raspberry Pi.
+func IsRaspberryPi(model string) bool { return strings.HasPrefix(model, "Raspberry Pi") }
+
+// Hwdec gives the value of --hwdec for a board. See Args.
+func Hwdec(model string) string {
+	if IsRaspberryPi(model) {
+		return "v4l2m2m-copy"
+	}
+	return "auto-safe"
 }
 
 // Disabled reports if the player is switched off.
@@ -97,20 +125,24 @@ func (c CommandConfig) LogPath() string { return filepath.Join(c.RunDir, LogName
 //	--osc=no --ytdl=no --load-*=no     the built-in scripts take memory and
 //	                                   start time, and a screen with no person at
 //	                                   it uses none of them
-//	--hwdec=auto-safe                  see below
+//	--hwdec=auto-safe | v4l2m2m-copy   see below
 //	--ao=alsa                          D11: direct ALSA. /etc/asound.conf names
 //	                                   the card (internal/device/audio).
 //	--msg-level=all=warn               player.log holds the faults only
 //	--vo=gpu --gpu-context=drm | --vo=drm
 //	--video-rotate, --drm-mode         display.rotation and display.video_mode
 //
-// About --hwdec=auto-safe. mpv 0.40 tries only the decoders in its whitelist
-// (video/decode/vd_lavc.c, HWDEC_FLAG_WHITELIST): d3d11va, dxva2-copy, nvdec,
-// vaapi, vulkan, vdpau-copy, drm, drm-copy, mediacodec-copy and videotoolbox,
-// with their -copy forms. v4l2m2m is NOT in the list. On a Raspberry Pi the
-// H.264 decoder of the SoC is v4l2m2m, so auto-safe decodes H.264 in software
-// there. drm and drm-copy are the V4L2 request API (the HEVC decoder of a Pi 4
-// and Pi 5), and they work only when FFmpeg has that support.
+// About --hwdec. auto-safe (the same as auto in mpv 0.40) tries only the
+// decoders in the whitelist of video/decode/vd_lavc.c: d3d11va, dxva2-copy,
+// nvdec, vaapi, vulkan, vdpau-copy, drm, drm-copy, mediacodec-copy and
+// videotoolbox, with their -copy forms. v4l2m2m is NOT in the list, and the H.264
+// decoder of a Raspberry Pi (Zero 2 W, 3, 4) is a V4L2 memory-to-memory device.
+// So on a Raspberry Pi (IsRaspberryPi) the value is v4l2m2m-copy: the decoder
+// h264_v4l2m2m of FFmpeg, which gives the frames back in memory. That form
+// works with vo=drm, vo=gpu and the filters of the moving crossfade. A Pi 5 has
+// no H.264 decoder, and a file that the decoder does not take plays in software:
+// mpv falls back by itself when the hardware decoder fails. Every other board
+// uses auto-safe (vaapi on an Intel or AMD PC).
 func (c CommandConfig) Args(l Launch) []string {
 	args := []string{
 		"--no-config",
@@ -131,7 +163,7 @@ func (c CommandConfig) Args(l Launch) []string {
 		"--load-select=no",
 		"--load-commands=no",
 		"--load-positioning=no",
-		"--hwdec=auto-safe",
+		"--hwdec=" + Hwdec(l.Model),
 		"--ao=alsa",
 		"--msg-level=all=warn",
 	}

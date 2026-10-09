@@ -121,6 +121,7 @@ func newHarness(t *testing.T, m library.PlayerManifest, opts func(*Options, *har
 		Tick:         2 * time.Millisecond,
 		DisplayProbe: 5 * time.Second,
 		DRMRoot:      h.drm,
+		ModelPath:    filepath.Join(run, "no-model"),
 		Manifest:     func() library.PlayerManifest { h.mu.Lock(); defer h.mu.Unlock(); return h.manifest },
 		Fallback:     func() fallback.Info { h.mu.Lock(); defer h.mu.Unlock(); return h.info },
 		Render: func(info fallback.Info, w, h2 int) ([]byte, error) {
