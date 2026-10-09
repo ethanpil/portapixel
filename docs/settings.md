@@ -8,6 +8,8 @@ when a change of it takes effect.
 The image ships `portapixel.toml` on the media partition with every key
 turned off by a `#`. Remove the `#` from a key and from its `[table]` line to
 set it. At the first boot the device writes the file again with all values.
+A key whose `[table]` line still has its `#` does nothing, and the dashboard
+warns of it.
 
 **Takes effect** has three values:
 
@@ -228,4 +230,11 @@ rest of the file.** The web UI shows which fields were repaired.
 
 A repaired file is never written to the shadow copy in its place: the
 shadow copy always holds the last file that parsed and validated cleanly.
-A key that this version does not know is ignored.
+
+A key that this version does not know is ignored, and the dashboard shows the
+warning `config-unknown-key` with the name of the key. The usual cause is a key
+that you turned on while its `[table]` line still has its `#`. An old key that
+is gone, such as `device.tier`, gives the same warning. The warning is not a
+repair: every other value applies as you wrote it, and the file is not changed.
+The first boot also leaves a file like this as it is, so that you can see the
+warning.

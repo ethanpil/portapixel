@@ -74,7 +74,10 @@ you must use Save As, set "Save as type" to "All files", or Notepad adds
 in Windows, turn on "File name extensions" in the View menu of Explorer.
 
 At the first boot, the device writes the file again with all the values. Your
-values stay, and the comments come back.
+values stay, and the comments come back. If the file has a bad value, or a key
+that the device does not know, the device leaves the file as it is and shows a
+warning on the dashboard. A key does not work when its `[table]` line still has
+its `#`.
 
 `wifi_country` is the two-letter radio region of your country, for example
 `US` or `DE`. Leave it out and some WiFi radios show fewer channels, so a

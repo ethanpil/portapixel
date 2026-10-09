@@ -111,7 +111,11 @@ set WiFi or the fleet server on any computer before the first boot. `config.Temp
 it from `Render(Default())`, and `os/portapixel.toml` is its generated copy
 (`go run ./internal/config/cmd/gentemplate`). `os/build-image.sh` copies it to PPMEDIA. The
 daemon reads it as the defaults. At the first boot, `provision` finds the file, and
-`refreshConfigID` writes the full file with the real values and the device ID.
+`refreshConfigID` writes the full file with the real values and the device ID. It
+leaves a file as it is when `Load` repaired it or found a key that `Config` does
+not know. `Load` gives such a key in `Result.Unknown`. The status warning is
+`config-unknown-key`. It is a warning and not a repair: no value changes, and the
+file loads and is mirrored.
 
 Files in the state dir: `ops.log`, `portapixel.toml.lkg` (shadow config, D38),
 `state.json` (stored device ID, device token, server-assigned data, bad releases),
@@ -353,7 +357,7 @@ day, and the device scheduler reads the pair the same way.
 is the sentence for a person. The codes are the constants of
 `internal/manifest/status.go`: `default-web-password`, `default-root-password`,
 `timezone-utc`, `clock-unsynced`, `config-shadow`, `config-repaired`,
-`config-bad-edit`, `playlist-problem`, `hardware-changed`, `update-rolled-back`,
+`config-bad-edit`, `config-unknown-key`, `playlist-problem`, `hardware-changed`, `update-rolled-back`,
 `server-insecure`.
 
 The player fields of `Status`: `player_state` uses the State words of the player

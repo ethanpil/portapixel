@@ -440,9 +440,16 @@ or with the ops log.
 - The image ships `os/portapixel.toml` on PPMEDIA: `config.Template()`, every line
   a comment. `Load` reads it as the defaults and finds no fault, so the first boot
   keeps it, `refreshConfigID` writes the full file, and the ops log has no
-  `provision.config` line. `boot-smoke.exp` tests for that line. A key whose
-  `[table]` line keeps its `#` is not an error: the parser drops it or the key joins
-  the table above it (lab8, 2026-10-09). Copy the file onto exFAT with a plain `cp`.
+  `provision.config` line. `boot-smoke.exp` tests for that line, and for the
+  `provision.done` line that makes the test mean something. A key whose
+  `[table]` line keeps its `#` is not a parse error: the parser drops it or the key
+  joins the table above it (lab8, 2026-10-09). So `Load` reads the undecoded keys of
+  the TOML decoder and warns with `config-unknown-key` (no repair, no value
+  changes, the file loads). `refreshConfigID` leaves such a file as it is, or the
+  first boot would drop the key before the daemon could warn of it. A save of the
+  daemon still goes on, because the key had no effect. Copy the file onto exFAT
+  with a plain `cp`. The image build and `smoke-arm.sh` mount PPMEDIA, so the
+  runner needs the `exfat` module, and the jobs load it first.
 
 ### Lessons of the change to mpv
 
