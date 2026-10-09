@@ -231,6 +231,9 @@ type fallbackScreen struct {
 	since   time.Time
 	checked time.Time
 	info    fallback.Info
+	// failed says that the last draw did not work. mpv then has no fallback
+	// picture, and serviceFallback tries again.
+	failed bool
 }
 
 // Supervisor owns mpv. One goroutine, Run, changes it. Each exported method
@@ -969,6 +972,7 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	if resume != nil && resume.name == p.Name && resume.count == n {
 		start = resume.index
 	}
+	s.fb.failed = false // the content takes the place of the fallback screen
 	s.newList(&loaded{playlist: p, offset: start, single: n == 1})
 	// mpv loads the first file of a replace at once and the others behind it. The
 	// list starts at the resume item, and mpv loops it, so the order of the loop
@@ -1068,8 +1072,13 @@ func (s *Supervisor) drawFallback(now time.Time) bool {
 	}
 	if err != nil {
 		s.note("player.fallback.fail", "the fallback screen could not be drawn: "+err.Error(), now)
+		// mpv has no picture to show, and no event will come to say so. The loop
+		// asks again after fallbackCheck.
+		s.fb.failed = true
+		s.fb.checked = now
 		return false
 	}
+	s.fb.failed = false
 	s.fb.info = info
 	s.fb.checked = now
 	s.newList(&loaded{fallback: true})
@@ -1091,6 +1100,9 @@ func (s *Supervisor) fallbackInfo(now time.Time) fallback.Info {
 // serviceFallback keeps the fallback screen current, and tries the playlist
 // again after a failure.
 func (s *Supervisor) serviceFallback(now time.Time) {
+	if s.fb.failed && now.Sub(s.fb.checked) >= fallbackCheck {
+		s.drawFallback(now)
+	}
 	if s.list == nil || !s.list.fallback {
 		return
 	}

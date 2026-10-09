@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/library"
 )
 
@@ -219,6 +220,37 @@ func TestFallbackScreen(t *testing.T) {
 	// Content comes back.
 	h.setManifest(threeItems())
 	h.waitPlaying(0)
+}
+
+// If the daemon cannot draw the fallback picture, mpv has no file and sends no
+// event. The loop must try again by itself, or the screen stays black.
+func TestFallbackDrawFailureIsRetried(t *testing.T) {
+	failures := 2
+	h := newHarness(t, library.PlayerManifest{Fallback: true}, func(o *Options, h *harness) {
+		o.Render = func(info fallback.Info, w, h2 int) ([]byte, error) {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if failures > 0 {
+				failures--
+				return nil, errors.New("the render failed")
+			}
+			return []byte("PNG"), nil
+		}
+	})
+	waitFor(t, "the first failed draw", func() bool { return h.eventWith("player.fallback.fail", "the render failed") })
+	if h.sup.Started() {
+		t.Fatal("Started is true while mpv shows nothing")
+	}
+
+	h.settle()
+	h.advance(fallbackCheck + time.Second)
+	h.advance(fallbackCheck + time.Second)
+	path := h.sup.opt.Command.FallbackPath()
+	waitFor(t, "the fallback picture", func() bool {
+		d, ok := h.tryDump()
+		return ok && len(d.List) == 1 && d.List[0].Path == path
+	})
+	waitFor(t, "the first picture", h.sup.Started)
 }
 
 // When no item can play, mpv goes idle. The fallback screen then shows, each
