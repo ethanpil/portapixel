@@ -50,8 +50,9 @@ type Inputs struct {
 	ConfigWarning    string
 	// ConfigWarningCode names the fault of ConfigWarning:
 	// manifest.WarnConfigRepaired for a value that Load put back to its default,
-	// manifest.WarnConfigBadEdit for a hand edit that the daemon refused. An
-	// empty value with a warning text gets the repaired code.
+	// manifest.WarnConfigBadEdit for a hand edit that the daemon refused,
+	// manifest.WarnConfigUnknownKey for a key that the file holds and this build
+	// does not know. An empty value with a warning text gets the repaired code.
 	ConfigWarningCode string
 	DeviceID          string
 	// HardwareChanged is the repair flag of the state file (D21).

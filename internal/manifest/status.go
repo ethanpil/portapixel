@@ -81,6 +81,10 @@ const (
 	WarnConfigShadow   = "config-shadow"
 	WarnConfigRepaired = "config-repaired"
 	WarnConfigBadEdit  = "config-bad-edit"
+	// WarnConfigUnknownKey says that portapixel.toml holds a key that this build
+	// does not know. A key whose [table] line is still a comment is one. The
+	// device ignores the key and every other value applies.
+	WarnConfigUnknownKey = "config-unknown-key"
 	// WarnConfigManagedIgnored says that a hand edit of portapixel.toml changed a
 	// field that the fleet server owns while this device is paired (D48). The
 	// running value stays and the other edited fields apply as they are.
