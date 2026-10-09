@@ -20,6 +20,7 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ### Fixed
 
+- Fix the findings of the final review of the whole code (9acef4d, 5936ec4, and the merges after them). Device: an orphan mpv after a daemon crash, a file that crashes mpv, an unbounded `video_mode`, animated images and the watchdog, a slow fallback render, an explicit CEC method, padded screen rows, a chain of moving crossfades, a turned screen, a lost screen-off, a stack buffer given to the kernel, lost playlist changes, the fallback flash after a schedule change, flash wear from repeated log lines, and `auto` audio on a Pi. Server: a database fault that unpaired every screen, a reject that removed a paired screen, the client address behind a proxy, the pending-row limit, server.toml saves, the upload allowlist, pre-release marks and the order of `-rc.N`. OS and web: an on-box install that could erase PPMEDIA, a first boot with no PPMEDIA mount, and the server playlist rename.
 - The 3.5 mm audio jack of a Raspberry Pi was never on: `dtparam=audio` was below the overlay in `config.txt` (61128f7).
 - The device player is mpv on DRM/KMS, driven over JSON IPC, with a watchdog that measures time with the monotonic clock (3a619c0, 0d30320, ab9b606). An embedded Lua script makes the transitions inside mpv (e0c3738).
 - The fallback screen is a PNG that the daemon draws (65f2578). The screen goes off through DRM DPMS, not `wlr-randr` (a56c330).
