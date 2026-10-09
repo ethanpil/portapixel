@@ -360,13 +360,13 @@ func New(opt Options) *Supervisor {
 		opt.Render = fallback.Render
 	}
 	if opt.Display == nil {
-		opt.Display = func() DisplaySettings { return DisplaySettings{VideoOutput: OutputAuto} }
+		opt.Display = func() DisplaySettings { return DisplaySettings{VideoOutput: config.VideoOutputAuto} }
 	}
 	if opt.Watchdog == nil {
 		opt.Watchdog = DefaultWatchdog
 	}
 	if opt.Motion == nil {
-		opt.Motion = func() string { return MotionAuto }
+		opt.Motion = func() string { return config.MotionAuto }
 	}
 	if opt.ModelPath == "" {
 		opt.ModelPath = ModelPath
@@ -850,8 +850,8 @@ func (s *Supervisor) onMoved(data json.RawMessage, now time.Time) {
 	if reason == "" {
 		return
 	}
-	if s.motionFor == MotionOn {
-		s.note("player.motion.slow", MotionOn, reason+"; playback.motion is on, so the moving crossfade stays on", now)
+	if s.motionFor == config.MotionOn {
+		s.note("player.motion.slow", config.MotionOn, reason+"; playback.motion is on, so the moving crossfade stays on", now)
 		return
 	}
 	s.motionOff = true
@@ -1210,10 +1210,10 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 	// software at each step of the zoom. That took a quarter of a fast core at 10
 	// steps in a second in the lab, and a Pi Zero 2 W has far less. The copy of the
 	// screen for the next transition also does not show the zoom there.
-	kenBurns := p.KenBurns && s.output == OutputGPU
+	kenBurns := p.KenBurns && s.output == config.VideoOutputGPU
 	if p.KenBurns && !kenBurns {
 		s.note("player.kenburns.off", p.Name, p.Name+": Ken Burns is off, because the video output is "+
-			s.output+" and not "+OutputGPU, now)
+			s.output+" and not "+config.VideoOutputGPU, now)
 	}
 	// mpv loads the first file of a replace at once and the others behind it.
 	for j, idx := range order {

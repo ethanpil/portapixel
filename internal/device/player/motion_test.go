@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ethanpil/portapixel/internal/config"
 )
 
 // auto is on for x86_64 and for a Raspberry Pi 5 or Compute Module 5, off for
@@ -14,16 +16,16 @@ func TestResolveMotion(t *testing.T) {
 		setting, arch, model string
 		want                 bool
 	}{
-		{MotionAuto, "amd64", "", true},
-		{MotionAuto, "arm64", "Raspberry Pi 5 Model B Rev 1.0\x00", true},
-		{MotionAuto, "arm64", "Raspberry Pi Compute Module 5 Rev 1.0\x00", true},
-		{MotionAuto, "arm64", "Raspberry Pi 4 Model B Rev 1.5\x00", false},
-		{MotionAuto, "arm64", "Raspberry Pi Zero 2 W Rev 1.0\x00", false},
-		{MotionAuto, "arm64", "Raspberry Pi Compute Module 4 Rev 1.0\x00", false},
-		{MotionAuto, "arm64", "", false},
-		{MotionAuto, "arm", "Raspberry Pi 3 Model B Plus Rev 1.3\x00", false},
-		{MotionOn, "arm64", "Raspberry Pi Zero 2 W Rev 1.0\x00", true},
-		{MotionOff, "amd64", "", false},
+		{config.MotionAuto, "amd64", "", true},
+		{config.MotionAuto, "arm64", "Raspberry Pi 5 Model B Rev 1.0\x00", true},
+		{config.MotionAuto, "arm64", "Raspberry Pi Compute Module 5 Rev 1.0\x00", true},
+		{config.MotionAuto, "arm64", "Raspberry Pi 4 Model B Rev 1.5\x00", false},
+		{config.MotionAuto, "arm64", "Raspberry Pi Zero 2 W Rev 1.0\x00", false},
+		{config.MotionAuto, "arm64", "Raspberry Pi Compute Module 4 Rev 1.0\x00", false},
+		{config.MotionAuto, "arm64", "", false},
+		{config.MotionAuto, "arm", "Raspberry Pi 3 Model B Plus Rev 1.3\x00", false},
+		{config.MotionOn, "arm64", "Raspberry Pi Zero 2 W Rev 1.0\x00", true},
+		{config.MotionOff, "amd64", "", false},
 	}
 	for i, tt := range tests {
 		path := filepath.Join(dir, "none")
@@ -74,7 +76,7 @@ func TestMotionFollowsTheSetting(t *testing.T) {
 		t.Fatalf("motion = %q with the setting on, want yes", got)
 	}
 	h.mu.Lock()
-	h.motion = MotionOff
+	h.motion = config.MotionOff
 	h.mu.Unlock()
 	h.sup.PlaylistChanged()
 	waitFor(t, "motion no", func() bool { return h.motionValue() == "no" })
@@ -92,7 +94,7 @@ func (h *harness) report(count, dropped, frames int, failed bool) {
 func pi5(o *Options, h *harness) {
 	o.ModelPath = filepath.Join(h.run, "model")
 	writeFile(h.t, o.ModelPath, "Raspberry Pi 5 Model B Rev 1.0")
-	h.motion = MotionAuto
+	h.motion = config.MotionAuto
 }
 
 // With "auto", a moving crossfade that drops too many frames switches the
@@ -137,12 +139,12 @@ func TestTheGuardSwitchesMotionOff(t *testing.T) {
 
 	// The owner changes the setting: the guard starts again.
 	h.mu.Lock()
-	h.motion = MotionOff
+	h.motion = config.MotionOff
 	h.mu.Unlock()
 	h.sup.PlaylistChanged()
 	h.settle()
 	h.mu.Lock()
-	h.motion = MotionAuto
+	h.motion = config.MotionAuto
 	h.mu.Unlock()
 	h.sup.PlaylistChanged()
 	waitFor(t, "motion yes after a new setting", func() bool { return h.motionValue() == "yes" })

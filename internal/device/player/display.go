@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/ethanpil/portapixel/internal/config"
 )
 
 // DefaultDRMRoot is where the kernel reports the graphics cards and the display
@@ -42,7 +44,7 @@ var glDrivers = []string{"vc4", "v3d", "i915", "xe", "amdgpu", "radeon", "nouvea
 // "drm" stay as they are, and "auto" looks at the drivers of the graphics cards.
 func ResolveOutput(setting, drmRoot string) string {
 	switch setting {
-	case OutputGPU, OutputDRM:
+	case config.VideoOutputGPU, config.VideoOutputDRM:
 		return setting
 	}
 	if drmRoot == "" {
@@ -52,10 +54,10 @@ func ResolveOutput(setting, drmRoot string) string {
 	for _, uevent := range cards {
 		driver := ueventDriver(uevent)
 		if slices.Contains(glDrivers, strings.TrimSuffix(driver, "-drm")) {
-			return OutputGPU
+			return config.VideoOutputGPU
 		}
 	}
-	return OutputDRM
+	return config.VideoOutputDRM
 }
 
 // ueventDriver gives the DRIVER= line of a uevent file, or "". The file is easier

@@ -3,13 +3,8 @@ package player
 import (
 	"encoding/json"
 	"fmt"
-)
 
-// The words of playback.motion.
-const (
-	MotionAuto = "auto"
-	MotionOn   = "on"
-	MotionOff  = "off"
+	"github.com/ethanpil/portapixel/internal/config"
 )
 
 // ResolveMotion reports if the moving crossfade is on for a value of
@@ -19,9 +14,9 @@ const (
 // decode and mix two videos in real time.
 func ResolveMotion(setting, arch, model string) bool {
 	switch setting {
-	case MotionOn:
+	case config.MotionOn:
 		return true
-	case MotionOff:
+	case config.MotionOff:
 		return false
 	}
 	return arch == "amd64" || isPi5(model)

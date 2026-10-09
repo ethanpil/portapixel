@@ -3,6 +3,8 @@ package player
 import (
 	"path/filepath"
 	"testing"
+
+	"github.com/ethanpil/portapixel/internal/config"
 )
 
 func TestResolveOutput(t *testing.T) {
@@ -12,16 +14,16 @@ func TestResolveOutput(t *testing.T) {
 		setting string
 		want    string
 	}{
-		{"Pi with the KMS overlay", []string{"vc4-drm"}, OutputAuto, OutputGPU},
-		{"Pi 4: render card and display card", []string{"v3d", "vc4-drm"}, OutputAuto, OutputGPU},
-		{"Intel", []string{"i915"}, OutputAuto, OutputGPU},
-		{"AMD", []string{"amdgpu"}, OutputAuto, OutputGPU},
-		{"QEMU virtio", []string{"virtio_gpu"}, OutputAuto, OutputDRM},
-		{"QEMU std VGA", []string{"bochs-drm"}, OutputAuto, OutputDRM},
-		{"firmware framebuffer", []string{"simple-framebuffer"}, OutputAuto, OutputDRM},
-		{"no card", nil, OutputAuto, OutputDRM},
-		{"forced gpu", []string{"virtio_gpu"}, OutputGPU, OutputGPU},
-		{"forced drm", []string{"i915"}, OutputDRM, OutputDRM},
+		{"Pi with the KMS overlay", []string{"vc4-drm"}, config.VideoOutputAuto, config.VideoOutputGPU},
+		{"Pi 4: render card and display card", []string{"v3d", "vc4-drm"}, config.VideoOutputAuto, config.VideoOutputGPU},
+		{"Intel", []string{"i915"}, config.VideoOutputAuto, config.VideoOutputGPU},
+		{"AMD", []string{"amdgpu"}, config.VideoOutputAuto, config.VideoOutputGPU},
+		{"QEMU virtio", []string{"virtio_gpu"}, config.VideoOutputAuto, config.VideoOutputDRM},
+		{"QEMU std VGA", []string{"bochs-drm"}, config.VideoOutputAuto, config.VideoOutputDRM},
+		{"firmware framebuffer", []string{"simple-framebuffer"}, config.VideoOutputAuto, config.VideoOutputDRM},
+		{"no card", nil, config.VideoOutputAuto, config.VideoOutputDRM},
+		{"forced gpu", []string{"virtio_gpu"}, config.VideoOutputGPU, config.VideoOutputGPU},
+		{"forced drm", []string{"i915"}, config.VideoOutputDRM, config.VideoOutputDRM},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

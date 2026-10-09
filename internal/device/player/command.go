@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/fsutil"
 )
 
@@ -34,14 +35,6 @@ const (
 // ModelPath is where the kernel names the board. A Raspberry Pi has the file
 // (it comes from the device tree); a PC does not.
 const ModelPath = "/proc/device-tree/model"
-
-// The words of display.video_output. Output gives "gpu" or "drm"; "auto" is only
-// a setting.
-const (
-	OutputAuto = "auto"
-	OutputGPU  = "gpu"
-	OutputDRM  = "drm"
-)
 
 // CommandConfig says how to start mpv. It is the only place in the program that
 // knows the command line (ARCHITECTURE section 7).
@@ -201,7 +194,7 @@ func (c CommandConfig) Args(l Launch) []string {
 		"--msg-level=all=warn",
 		"--gpu-shader-cache=no",
 	}
-	if l.Output == OutputGPU {
+	if l.Output == config.VideoOutputGPU {
 		args = append(args, "--vo=gpu", "--gpu-context=drm")
 	} else {
 		args = append(args, "--vo=drm")

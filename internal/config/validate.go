@@ -149,7 +149,7 @@ func (c Config) Validate() Errors {
 	if c.Display.VideoMode != "" && !videoModeOK(c.Display.VideoMode) {
 		add("display.video_mode", "must be in the form 1920x1080 or 1920x1080@60, with each side from 1 to 8192")
 	}
-	oneOf("display.video_output", c.Display.VideoOutput, "auto", "gpu", "drm")
+	oneOf("display.video_output", c.Display.VideoOutput, VideoOutputs...)
 	oneOf("display.power_method", c.Display.PowerMethod, "auto", "cec", "dpms", "none")
 	clockTime("display.on_time", c.Display.OnTime)
 	clockTime("display.off_time", c.Display.OffTime)
@@ -178,7 +178,7 @@ func (c Config) Validate() Errors {
 		add("playback.image_duration", "must be 1 second or more")
 	}
 	clockTime("playback.nightly_restart", c.Playback.NightlyRestart)
-	oneOf("playback.motion", c.Playback.Motion, "auto", "on", "off")
+	oneOf("playback.motion", c.Playback.Motion, Motions...)
 
 	// [watchdog]. The lower bound of the timeout is five polls; under that, a
 	// device on a slow card would restart the player while it still draws. The

@@ -178,6 +178,28 @@ var Transitions = []string{
 // IsTransition reports if name is a transition that the player knows.
 func IsTransition(name string) bool { return slices.Contains(Transitions, name) }
 
+// The words of display.video_output. The player uses these constants too, so a
+// word that the validator takes is a word that the player knows. "auto" is a
+// setting only: the player resolves it to gpu or drm.
+const (
+	VideoOutputAuto = "auto"
+	VideoOutputGPU  = "gpu"
+	VideoOutputDRM  = "drm"
+)
+
+// VideoOutputs are the words of display.video_output.
+var VideoOutputs = []string{VideoOutputAuto, VideoOutputGPU, VideoOutputDRM}
+
+// The words of playback.motion. The player uses these constants too.
+const (
+	MotionAuto = "auto"
+	MotionOn   = "on"
+	MotionOff  = "off"
+)
+
+// Motions are the words of playback.motion.
+var Motions = []string{MotionAuto, MotionOn, MotionOff}
+
 // Default gives the configuration of a new device. It is the same set of values
 // that the template in the plan shows.
 func Default() Config {
@@ -192,7 +214,7 @@ func Default() Config {
 		},
 		Display: Display{
 			Rotation:    0,
-			VideoOutput: "auto",
+			VideoOutput: VideoOutputAuto,
 			PowerMethod: "auto",
 		},
 		Audio: Audio{
@@ -205,7 +227,7 @@ func Default() Config {
 			TransitionMS:    500,
 			ImageDuration:   10,
 			Shuffle:         false,
-			Motion:          "auto",
+			Motion:          MotionAuto,
 			NightlyRestart:  "03:30",
 		},
 		Watchdog: Watchdog{

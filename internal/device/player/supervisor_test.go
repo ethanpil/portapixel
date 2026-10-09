@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/playlist"
@@ -72,7 +73,7 @@ func TestPlaylistLoadsWithFileOptions(t *testing.T) {
 		t.Errorf("the transition script is not in the run directory: %v", err)
 	}
 	st := h.sup.State()
-	if st.Player != StateRunning || st.VideoOutput != OutputDRM {
+	if st.Player != StateRunning || st.VideoOutput != config.VideoOutputDRM {
 		t.Errorf("state = %+v, want running on drm (virtio_gpu has no GL driver)", st)
 	}
 	if !h.sup.Started() {
@@ -143,7 +144,7 @@ func TestItemTransitionsGoToTheEntryBefore(t *testing.T) {
 // that did not ask gets none, and one image alone (it stays on the screen) gets
 // none.
 func TestKenBurnsGoesToTheImagesOnGPU(t *testing.T) {
-	onGPU := func(o *Options, h *harness) { h.display = DisplaySettings{VideoOutput: OutputGPU} }
+	onGPU := func(o *Options, h *harness) { h.display = DisplaySettings{VideoOutput: config.VideoOutputGPU} }
 	m := threeItems() // welcome.jpg 15 s, promo.mp4, tour.mp4
 	m.Playlist.KenBurns = true
 	m.Playlist.Items[2].Name, m.Playlist.Items[2].Kind, m.Playlist.Items[2].Duration = "tour.jpg", playlist.KindImage, 6
@@ -175,7 +176,7 @@ func TestKenBurnsGoesToTheImagesOnGPU(t *testing.T) {
 }
 
 func TestNoKenBurnsWhenThePlaylistDoesNotAsk(t *testing.T) {
-	h := newHarness(t, threeItems(), func(o *Options, h *harness) { h.display = DisplaySettings{VideoOutput: OutputGPU} })
+	h := newHarness(t, threeItems(), func(o *Options, h *harness) { h.display = DisplaySettings{VideoOutput: config.VideoOutputGPU} })
 	h.waitPlaying(0)
 	for i, e := range h.dump().List {
 		if strings.Contains(e.Opts["script-opts"], "pptr-kb") {
@@ -191,7 +192,7 @@ func TestKenBurnsIsOffOnDRM(t *testing.T) {
 	m.Playlist.KenBurns = true
 	h := newHarness(t, m, nil) // the fake driver is virtio_gpu: vo=drm
 	h.waitPlaying(0)
-	if st := h.sup.State(); st.VideoOutput != OutputDRM {
+	if st := h.sup.State(); st.VideoOutput != config.VideoOutputDRM {
 		t.Fatalf("the output is %q, want drm", st.VideoOutput)
 	}
 	for i, e := range h.dump().List {

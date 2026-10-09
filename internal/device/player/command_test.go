@@ -15,7 +15,7 @@ import (
 func TestArgs(t *testing.T) {
 	c := CommandConfig{RunDir: "/run/portapixel"}
 
-	drm := c.Args(Launch{Output: OutputDRM})
+	drm := c.Args(Launch{Output: config.VideoOutputDRM})
 	for _, want := range []string{
 		"--no-config", "--profile=fast", "--idle=yes", "--force-window=yes", "--keep-open=yes",
 		"--loop-playlist=inf", "--prefetch-playlist=yes", "--hwdec=auto-safe", "--ao=alsa", "--vo=drm",
@@ -37,7 +37,7 @@ func TestArgs(t *testing.T) {
 		t.Errorf("--profile=fast is not the second argument: %q", drm)
 	}
 
-	gpu := c.Args(Launch{Output: OutputGPU, Rotation: 90, VideoMode: "1920x1080@60"})
+	gpu := c.Args(Launch{Output: config.VideoOutputGPU, Rotation: 90, VideoMode: "1920x1080@60"})
 	for _, want := range []string{"--vo=gpu", "--gpu-context=drm", "--video-rotate=90", "--drm-mode=1920x1080@60"} {
 		if !slices.Contains(gpu, want) {
 			t.Errorf("the gpu arguments do not hold %q: %q", want, gpu)
@@ -47,7 +47,7 @@ func TestArgs(t *testing.T) {
 
 func TestBuild(t *testing.T) {
 	c := CommandConfig{RunDir: "/run/pp"}
-	cmd, err := c.Build(Launch{Output: OutputDRM})
+	cmd, err := c.Build(Launch{Output: config.VideoOutputDRM})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func TestBuild(t *testing.T) {
 
 	// An override replaces the program; its own arguments come last, so they win.
 	c.Override = `"/opt/my mpv/mpv" --vo=gpu --gpu-context=x11egl`
-	cmd, err = c.Build(Launch{Output: OutputDRM})
+	cmd, err = c.Build(Launch{Output: config.VideoOutputDRM})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +135,7 @@ func TestHwdecFollowsTheBoard(t *testing.T) {
 			if strings.ContainsRune(model, 0) {
 				t.Errorf("BoardModel kept the NUL byte: %q", model)
 			}
-			args := CommandConfig{RunDir: "/run/portapixel"}.Args(Launch{Output: OutputDRM, Model: model})
+			args := CommandConfig{RunDir: "/run/portapixel"}.Args(Launch{Output: config.VideoOutputDRM, Model: model})
 			if !slices.Contains(args, "--hwdec="+tt.want) {
 				t.Errorf("model %q gives %q, want --hwdec=%s", model, args, tt.want)
 			}

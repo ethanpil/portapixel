@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ethanpil/portapixel/internal/config"
 	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/library"
 	"github.com/ethanpil/portapixel/internal/opslog"
@@ -114,8 +115,8 @@ func newHarness(t *testing.T, m library.PlayerManifest, opts func(*Options, *har
 		stopped:  make(chan struct{}),
 		manifest: m,
 		info:     fallback.Info{Name: "Lobby", DeviceID: "px-1234abcd", URL: "http://lobby.local/"},
-		display:  DisplaySettings{VideoOutput: OutputAuto},
-		motion:   MotionOn,
+		display:  DisplaySettings{VideoOutput: config.VideoOutputAuto},
+		motion:   config.MotionOn,
 	}
 	writeFile(t, filepath.Join(h.drm, "card0", "device", "uevent"), "DRIVER=virtio_gpu\n")
 	o := Options{
