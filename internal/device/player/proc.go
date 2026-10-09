@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -263,12 +264,31 @@ func (t *tailBuffer) String() string {
 	return string(t.data)
 }
 
-// lastLine gives the last line that holds text. The interesting message of a
-// program that fails is at the end of its output.
+// noise holds parts of the lines that mpv writes in normal work on a device that
+// lacks something. Such a line never says why mpv ended, so lastLine skips it:
+//   - auto-safe tries each hardware decoder of its list at each video, and each
+//     decoder that the device does not have writes an error (seen on pp-zero:
+//     vaapi, Vulkan and VDPAU, three lines at each video);
+//   - the DRM output writes two lines at each start when there is no TTY;
+//   - a decoder that does not know the option of the Pi decoder says so (see
+//     DecoderOptions).
+var noise = []string{
+	"[vaapi] ", "[vdpau] ", "[vulkan] ", "[cuda] ",
+	"[ffmpeg] VAAPI", "[ffmpeg] VDPAU", "[ffmpeg] Vulkan", "[ffmpeg] CUDA",
+	"Can't open TTY for VT control", "Failed to set up VT switcher",
+	"AVOption 'num_capture_buffers' not found",
+}
+
+// lastLine gives the last line that holds text and is not noise. The interesting
+// message of a program that fails is at the end of its output.
 func lastLine(text string) string {
 	lines := strings.Split(strings.ReplaceAll(text, "\r\n", "\n"), "\n")
 	for i := len(lines) - 1; i >= 0; i-- {
-		if line := strings.TrimSpace(lines[i]); line != "" {
+		line := strings.TrimSpace(lines[i])
+		if slices.ContainsFunc(noise, func(n string) bool { return strings.Contains(line, n) }) {
+			continue
+		}
+		if line != "" {
 			if len(line) > 200 {
 				line = line[:200]
 			}
