@@ -28,9 +28,9 @@ A playlist item is an image or a video. There are no other kinds of item.
 | Image | `.jpg`, `.jpeg`, `.png`, `.gif`, `.webp`, `.avif`, `.bmp` |
 | Video | `.mp4`, `.m4v`, `.mov`, `.webm`, `.mkv`, `.ogv` |
 
-A file with another extension is not a playable item. This includes SVG
-files and web page addresses. The device skips such a file and writes a line
-to the activity log. See "A broken item" below.
+A file with another extension is not a playable item. An SVG file is an
+example. The device skips such a file and writes a line to the activity log.
+See "A broken item" below.
 
 A photo with an EXIF orientation shows the right way up. The player turns the
 picture for you.
@@ -145,9 +145,9 @@ The player (mpv) takes a copy of the last picture of the old item. It shows
 the copy on top, loads the next item under it, and then moves or fades the
 copy away. This works with any video output. The copy is a still picture.
 
-For this reason a video stands still during a transition: the copy shows its
-last frame. A `crossfade` from a video can be different. See "The moving
-crossfade".
+The old item has ended when a transition starts. So the copy shows its last
+frame, and an old video stands still during the transition. A `crossfade` from
+a video can be different. See "The moving crossfade".
 
 A transition uses the first part of the next item. The length of the loop
 does not change.
