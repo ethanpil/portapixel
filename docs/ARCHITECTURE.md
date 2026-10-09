@@ -20,7 +20,8 @@ Permitted dependencies. Each new dependency needs a rationale line here.
 | `aead.dev/minisign` | Verify release signatures (D47). |
 | `golang.org/x/crypto` | bcrypt for the server admin password. |
 | `golang.org/x/sys` | The DRM ioctls of the DPMS screen power (`internal/device/power`). |
-| `golang.org/x/image` | The fonts of the fallback screen (`internal/device/fallback`, D18). |
+| `golang.org/x/image` | The text of the fallback screen: OpenType and Go fonts (`internal/device/fallback`, D18). |
+| `golang.org/x/text` | Indirect, a dependency of `golang.org/x/image`. |
 | `golang.org/x/net` | Indirect, through `miekg/dns`. |
 | `github.com/hashicorp/mdns` | mDNS announce (D20). |
 | `github.com/miekg/dns` | Indirect, through `hashicorp/mdns`. |
