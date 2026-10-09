@@ -1004,6 +1004,26 @@ func TestLoadStopsAfterAFailedWrite(t *testing.T) {
 	}
 }
 
+// A write that fails breaks the connection. A write that timed out can have sent
+// a part of its line, and an mpv that does not read made each later write wait
+// for the timeout too: each poll, motion message and fallback draw.
+func TestASendAfterAFailedWriteFailsAtOnce(t *testing.T) {
+	a, b := net.Pipe() // nobody reads b
+	defer a.Close()
+	defer b.Close()
+	c := &ipcConn{conn: a, msgs: make(chan message), done: make(chan struct{})}
+	if _, err := c.send("get_property", "time-pos"); err == nil {
+		t.Fatal("a write that nobody read did not fail")
+	}
+	start := time.Now()
+	if _, err := c.send("get_property", "time-pos"); err == nil {
+		t.Fatal("a send on a broken connection did not fail")
+	}
+	if took := time.Since(start); took >= writeTimeout/2 {
+		t.Errorf("the send on a broken connection took %s", took)
+	}
+}
+
 // A queue that is full answers ErrBusy, so a person learns that the command did
 // not happen.
 func TestBusyQueue(t *testing.T) {

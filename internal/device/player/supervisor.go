@@ -1202,8 +1202,8 @@ func (s *Supervisor) loadManifest(m library.PlayerManifest, now time.Time) {
 		}
 		next := p.Items[order[(j+1)%len(order)]]
 		if !s.request(now, reqLoad, idx, "loadfile", p.Items[idx].Path, mode, -1, fileOptions(p.Items[idx], next, kenBurns, single, s.model)) {
-			// A write that fails waited for its time limit. The next ones would wait
-			// as long each. The silence rule restarts mpv.
+			// The connection is broken, and each next write fails. The silence rule
+			// restarts mpv.
 			break
 		}
 	}

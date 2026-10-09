@@ -49,6 +49,11 @@ type ipcConn struct {
 	done chan struct{}
 	once sync.Once
 	next int64
+	// broken is the error of the first write that failed. A write that timed out
+	// can have sent a part of its line, and an mpv that does not read makes each
+	// write wait for writeTimeout. So each send after it fails at once. Only the
+	// loop sends, so it needs no lock.
+	broken error
 }
 
 // dialIPC connects to the socket of mpv.
@@ -85,6 +90,9 @@ func (c *ipcConn) read() {
 // in the order of the requests.
 func (c *ipcConn) send(args ...any) (int64, error) {
 	c.next++
+	if c.broken != nil {
+		return 0, c.broken
+	}
 	line, err := json.Marshal(struct {
 		Command   []any `json:"command"`
 		RequestID int64 `json:"request_id"`
@@ -94,6 +102,7 @@ func (c *ipcConn) send(args ...any) (int64, error) {
 	}
 	c.conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 	if _, err := c.conn.Write(append(line, '\n')); err != nil {
+		c.broken = err
 		return 0, err
 	}
 	return c.next, nil
