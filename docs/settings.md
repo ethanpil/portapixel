@@ -120,8 +120,8 @@ the mixer refuses the volume, the status carries the warning
 | `nightly_restart` | `"03:30"` | `HH:MM`, or empty to turn it off | The daily restart of the player. It waits for the end of the item on the screen, for 60 seconds at most. | live |
 | `motion` | `"auto"` | `auto`, `on`, `off` | Lets a crossfade from a video move both items. See below. | live |
 
-The 22 transitions are the 22 words of `transition`. `docs/content.md` shows
-what each one does, and how an item or a playlist sets its own.
+The key `transition` takes one of 22 words. `docs/content.md` shows what each
+one does, and how an item or a playlist sets its own.
 
 ### The moving crossfade
 
