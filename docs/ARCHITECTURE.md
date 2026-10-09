@@ -207,7 +207,7 @@ type Manifest struct {
 type Playlist struct {
     Name       string `json:"name"` // directory-safe slug
     Title      string `json:"title"`
-    Transition string `json:"transition,omitempty"` // "cut" | "fade"; empty = the device setting
+    Transition string `json:"transition,omitempty"` // a word of config.Transitions; empty = the device setting
     Shuffle    *bool  `json:"shuffle,omitempty"`
     Items      []Item `json:"items"`
 }
@@ -261,9 +261,14 @@ The content model. An item is an image or a video, and nothing else: there are n
 web page items and no single-URL kiosk mode. `internal/playlist` holds the one
 extension table (`Kind`, `MediaType`): images `jpg jpeg png gif webp avif bmp`, videos
 `mp4 m4v mov webm mkv ogv`. The device library, `/media/` and the server media types
-all use it. A transition is `"cut"` or `"fade"` (`config.Transitions`). A fade goes
-through black, and `playback.transition_ms` is its length. The server schema
-migration 2 removed the url items and changed each old transition word to `"fade"`.
+all use it. A transition is a word of `config.Transitions`: `cut`, `fade`, `crossfade`,
+`wipe-left`, `wipe-right`, `wipe-up`, `wipe-down`, `push-left`, `push-right`, `push-up`,
+`push-down` (owner decision of 2026-10-08). A fade goes through black. A wipe or a push
+moves in the direction of its word. `playback.transition_ms` is the length of each
+transition except `cut`. The config, the playlist files, the syncer, the server database,
+the playlist editor and the device settings page use this one list. The server schema
+migration 2 removed the url items and changed each old transition word to `"fade"` in the
+rows of that time. Those words are transitions again, and the migration stays as it is.
 
 `rename` gives a screen a new display name. The device owns its name: mDNS, the host
 name and the fallback screen use it. The device saves `device.name` through the save
@@ -400,7 +405,7 @@ mpv --no-config --profile=fast --idle=yes --force-window=yes --keep-open=yes \
   --input-ipc-server=<run>/player/mpv.sock --script=<run>/transitions.lua \
   --input-default-bindings=no --osc=no --ytdl=no --load-stats-overlay=no \
   --load-console=no --load-auto-profiles=no --load-select=no --load-commands=no \
-  --load-positioning=no --hwdec=auto-safe --ao=alsa --msg-level=all=warn \
+  --load-positioning=no --hwdec=auto-safe|v4l2m2m-copy --ao=alsa --msg-level=all=warn \
   --vo=drm | --vo=gpu --gpu-context=drm \
   [--video-rotate=<display.rotation>] [--drm-mode=<display.video_mode>]
 ```
@@ -429,18 +434,32 @@ has a hardware OpenGL driver in Mesa: `vc4`, `v3d`, `i915`, `xe`, `amdgpu`, `rad
 simpledrm have no GPU, and vo=gpu there is llvmpipe. The daemon reads the `DRIVER=` line of
 `/sys/class/drm/card*/device/uevent`. `status.video_output` names the output that runs.
 
-`--hwdec=auto-safe` tries only the decoders of the mpv whitelist
+The hardware decoder comes from the board. The daemon reads `/proc/device-tree/model` one
+time. A name that starts with `Raspberry Pi` gives `--hwdec=v4l2m2m-copy`; every other
+board gives `--hwdec=auto-safe`. auto-safe tries only the decoders of the mpv whitelist
 (`video/decode/vd_lavc.c`): d3d11va, dxva2-copy, nvdec, vaapi, vulkan, vdpau-copy, drm,
 drm-copy, mediacodec-copy and videotoolbox, with their `-copy` forms. `v4l2m2m` is not in
-the list. The H.264 decoder of a Raspberry Pi is v4l2m2m, so auto-safe decodes H.264 in
-software there. `drm` and `drm-copy` are the V4L2 request API, which is the HEVC decoder
-of a Pi 4 and a Pi 5. They work only when FFmpeg has that support.
+that list, and the H.264 decoder of a Pi Zero 2 W, 3 and 4 is a V4L2 memory-to-memory
+device. `v4l2m2m-copy` is FFmpeg's `h264_v4l2m2m` with the frames in memory, which works
+with vo=drm, vo=gpu and the moving crossfade. A Pi 5 has no H.264 decoder. mpv falls back
+to software decoding by itself when a hardware decoder fails.
+
+On a Pi Zero 2 W, 3 and 4 each video item also gets `vd-lavc-o=num_capture_buffers=8`
+(section 7a): `h264_v4l2m2m` takes 20 capture buffers from the CMA area by default, about
+3.1 MB each at 1080p, and a 512 MB Pi has a CMA area of 128 MB. The option is per file and
+not on the command line, because each decoder that does not know it writes an error line.
+
+The exit reason in the ops log (`player.exit`) is the last line of the output of mpv that is
+not noise. The noise is the lines of the hardware decoder probe of auto-safe (vaapi, Vulkan,
+VDPAU, at each video on a device that does not have them), the two lines of the DRM output
+with no TTY, and the line of a decoder that does not know the buffer option.
 
 The kiosk account. mpv parses files from removable media and from the network, so it never
 runs as root. The kernel makes the first process that opens a DRM primary node the DRM
-master, also without root. mpv gets the groups `video` (`/dev/dri/card*`), `render` (a Pi
-4 renders on v3d) and `audio` (`/dev/snd`). Proven on the pp-zero lab VM on 2026-10-08:
-vo=drm and vo=gpu as `kiosk`.
+master, also without root. mpv gets the groups `video` (`/dev/dri/card*`) and `audio`
+(`/dev/snd`). Alpine has no `render` group: eudev gives `/dev/dri/renderD*` to `video` with
+mode 0666, so the render node of vo=gpu (a Pi 4 renders on v3d) needs nothing more. Proven
+on the pp-zero lab VM on 2026-10-08: vo=drm and vo=gpu as `kiosk`.
 
 Rotation goes to `--video-rotate`, and `display.video_mode` goes to `--drm-mode`. A change
 of `display.rotation`, `display.video_mode`, `display.video_output` or `audio.output`
@@ -493,13 +512,18 @@ The daemon connects to `<run>/player/mpv.sock`. Each request is one line
 `{"command": [...], "request_id": N}`, and mpv answers the requests in order. The client
 uses the standard library only.
 
-At the connect the daemon observes three properties:
+At the connect the daemon observes four properties:
 
 | ID | Property | Use |
 |---|---|---|
 | 1 | `idle-active` | `true` after a file started: no item of the list could play. |
 | 2 | `hwdec-current` | `status.hwdec` while a video plays. `no` is software decoding. |
 | 3 | `user-data/pptr/fault` | A fault of `transitions.lua`. The daemon writes it to the ops log. |
+| 4 | `user-data/pptr/moved` | The result of a moving crossfade: `{count, dropped, frames, failed}`. The guard reads it. |
+
+At the connect, and at each playlist change, the daemon also sets
+`user-data/pptr/motion` to `"yes"` or `"no"` (the moving crossfade, below), before it loads
+the list.
 
 The events that it reads are `start-file`, `playback-restart` (an item shows its first
 frame), `end-file` (`reason`, `file_error`, `playlist_entry_id`) and `property-change`.
@@ -523,7 +547,12 @@ order of the playlist. The per-file options:
 | `image-display-duration` | image | the duration; `inf` for one image alone |
 | `mute` | video | `yes` or `no`, from the `mute` of the item |
 | `end` | video | `max_duration`, when it is set |
+| `vd-lavc-o` | video | `num_capture_buffers=8` on a Pi Zero 2 W, 3 and 4 (section 7) |
 | `loop-file` | video | `inf` for one video alone |
+
+`transitions.lua` sets more options on the file itself (`file-local-options/...`) for a
+moving crossfade: `lavfi-complex`, `end` and `hwdec` on the item that ends, and `start` on
+the item that comes next.
 
 A schedule change, a library change or a playback setting gives a new manifest. The
 daemon replaces the list only when the manifest is different. No playable content gives
@@ -550,19 +579,55 @@ the counters again at each file.
 The transition script `transitions.lua` is mpv Lua with the LuaJIT FFI. When an item ends,
 its `on_unload` hook covers the screen with a copy (`screenshot-raw window bgra`, OSD
 overlay 62). The next item loads under the copy. At its `playback-restart`, a 20 ms timer
-moves the copy away. The script uses the options of the item that ends.
+moves the copy away. The script uses the options of the item that ends. vo=drm has no
+screenshot of its own and mpv stretches the frame to the window, so on vo=drm the script
+scales the copy back into the video rectangle (`osd-dimensions`) and makes the bars black.
+An item that shows no frame (it did not load) keeps the copy of the last good frame for
+the next item.
 
 | Kind | Effect |
 |---|---|
 | `cut` | No copy. |
-| `fade` | Dip to black. The copy goes dark. Then one black pixel, scaled to the screen (overlay 63), goes clear over the next item. One overlay at a time. |
-| `crossfade` | The copy goes clear over the next item. |
-| `wipe-left`, `-right`, `-up`, `-down` | The copy gets smaller at one side. |
-| `push-left`, `-right`, `-up`, `-down` | The copy moves out, and `video-pan-x` or `video-pan-y` moves the next item in. |
+| `fade` | Dip to black. The copy goes dark. Then one black pixel, scaled to the screen, takes its place in overlay 62 and goes clear over the next item. One overlay at a time. |
+| `crossfade` | The copy goes clear over the next item. With motion, both items move (below). |
+| `wipe-left`, `-right`, `-up`, `-down` | The copy gets smaller; its edge moves in the direction of the word. |
+| `push-left`, `-right`, `-up`, `-down` | The copy moves out in the direction of the word, and `video-pan-x` or `video-pan-y` moves the next item in behind it. The script moves the next item first. |
 
-`config.Transitions` permits `cut` and `fade` now. Each fault ends in a cut: a failed copy,
-an overlay that fails, a Lua error, or a next item that does not show in 5 s. With no
-LuaJIT FFI, each transition is a cut.
+Each fault of the copy ends in a cut: a failed copy, an overlay that fails, a Lua error, or a
+next item that does not show in 5 s. With no LuaJIT FFI, each transition is a cut.
+
+The moving crossfade. `playback.motion` is `auto`, `on` or `off` (default `auto`, change
+class `live`). `auto` is on for an x86_64 device and for a Raspberry Pi 5 or Compute
+Module 5 (`/proc/device-tree/model`), and off for every other board. When
+`user-data/pptr/motion` is `"yes"`, a `crossfade` from a video A to the next item B has
+motion on both sides:
+
+1. The `on_preloaded` hook of A adds the video of B as a track (`video-add <B> auto`) and
+   sets a file-local `lavfi-complex` on A:
+   `[vidB]scale=<A size>,setsar=1,format=yuva420p,fade=t=in:d=<d>:alpha=1,setpts=PTS-STARTPTS+<len-d>/TB[mix];[vidA][mix]overlay[vo]`.
+   An image B gets `loop=loop=-1:size=1,fps=<A rate>` first. overlay passes the frames of A
+   through with no work until the mix starts. (xfade takes 4:4:4 frames only and would
+   convert each frame of A.)
+2. A gets a file-local `end` at the end of the mix, and `hwdec` becomes `auto-copy` when it
+   was `auto-safe`: the graph needs the frames in memory.
+3. B starts at `start=<d>` (set in its `on_load` hook) under the copy, and the copy goes
+   away at its first frame (the kind `join`). No part of B plays two times.
+4. The audio is the audio of A. mpv marks the other tracks of B `no_auto_select`.
+
+The script makes a moving crossfade only when A is a video of the same shape as B, with no
+rotation and square pixels, A has 1 s before the mix, and no moving crossfade failed in this
+mpv. Else the crossfade uses the copy.
+
+Faults. A graph that fails in its setup makes mpv refuse the item (`end-file` `error`). A
+graph that stops in the mix ends the item early. In both cases the script reports
+`{failed: true}`, makes no more moving crossfades in this mpv, and uses the copy. When A
+showed no frame, the script plays A again with no graph. B is never skipped.
+
+The guard. After each moving crossfade the script sets `user-data/pptr/moved` to its
+dropped frames (`frame-drop-count` plus `decoder-frame-drop-count` over the mix) and the
+frames of the mix. When a crossfade failed or dropped more than a quarter of its frames, the
+daemon sets `user-data/pptr/motion` to `"no"` until the daemon stops (also through a restart
+of mpv) and writes one ops log line, `player.motion.off`.
 
 ## 8. Web assets
 
