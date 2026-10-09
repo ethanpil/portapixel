@@ -3,6 +3,8 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +19,8 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/httpd"
 	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/device/library"
+	"github.com/ethanpil/portapixel/internal/device/mdns"
+	"github.com/ethanpil/portapixel/internal/device/netcfg"
 	"github.com/ethanpil/portapixel/internal/device/player"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
@@ -1037,3 +1041,44 @@ func TestSlowInfoDoesNotHoldTheCaller(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// The QR code of the fallback screen carries the name that the announcer sends.
+// The name of the settings can belong to another device on the network, and the
+// QR code then opened the admin page of that device. With no announcement the
+// address is the URL, and with no network there is no URL.
+func TestTheAdminURLIsTheAnnouncedName(t *testing.T) {
+	cfg := config.Default()
+	cfg.Device.Name = "Lobby"
+	d := &daemon{cfg: cfg, port: 80, id: identity.Identity{DeviceID: "px-12343c4d"}}
+	d.announce = mdns.New(mdns.Options{
+		Name:     func() string { return netcfg.MDNSName(d.config(), d.id.DeviceID) },
+		Fallback: func() string { return netcfg.FactoryMDNSName(d.id.DeviceID) },
+		IPs:      func() []string { return []string{"192.168.1.10"} },
+		Port:     80,
+		Publish:  func(string, int, []net.IP) (io.Closer, error) { return nopCloser{}, nil },
+		Probe:    func(host string, _ time.Duration) bool { return host == "lobby.local" }, // another device has it
+	})
+
+	if got := d.adminURL(nil); got != "" {
+		t.Errorf("with no announcement and no address the URL is %q, want none", got)
+	}
+	if got := d.adminURL([]string{"2001:db8::7", "192.168.1.10"}); got != "http://[2001:db8::7]/" {
+		t.Errorf("with no announcement the URL is %q, want the first address", got)
+	}
+
+	done := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() { d.announce.Run(done); close(stopped) }()
+	defer func() { close(done); <-stopped }()
+	deadline := time.Now().Add(10 * time.Second)
+	for d.announce.Announced() == "" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := d.adminURL([]string{"192.168.1.10"}); got != "http://portapixel-3c4d.local/" {
+		t.Errorf("the URL is %q, want the factory name that the device announces", got)
+	}
+}
+
+type nopCloser struct{}
+
+func (nopCloser) Close() error { return nil }

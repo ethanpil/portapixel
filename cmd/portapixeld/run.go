@@ -808,13 +808,19 @@ func (d *daemon) refreshHosts() {
 
 // adminURL is the address that a person types, and the QR code on the fallback
 // screen carries. The mDNS name is the address that works from any computer on
-// the network. With no name and no address there is no URL, and the fallback
-// screen shows no QR code.
-func (d *daemon) adminURL() string {
-	cfg := d.config()
-	host := netcfg.MDNSName(cfg, d.id.DeviceID)
-	if ips := health.LocalIPs(); host == "" && len(ips) > 0 {
+// the network, and it is the name that the announcer sends now. The name of the
+// settings can belong to another device: the announcer then sends the factory
+// name, and a QR code with the name of the settings opened the other device.
+//
+// With no announcement, the first address is the URL. With no address there is
+// no network, no URL and no QR code.
+func (d *daemon) adminURL(ips []string) string {
+	host := d.announce.Announced()
+	if host == "" && len(ips) > 0 {
 		host = ips[0]
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]" // an IPv6 address in a URL
+		}
 	}
 	if host == "" {
 		return ""
@@ -903,7 +909,7 @@ func (d *daemon) buildFallbackInfo() fallback.Info {
 	return fallback.Info{
 		Name:        st.Name,
 		DeviceID:    st.DeviceID,
-		URL:         d.adminURL(),
+		URL:         d.adminURL(st.IPs),
 		IPs:         st.IPs,
 		PairingCode: st.PairingCode,
 		Warning:     strings.Join(lines, "   •   "),
