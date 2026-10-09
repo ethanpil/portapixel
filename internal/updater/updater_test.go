@@ -734,7 +734,7 @@ func TestReadSums(t *testing.T) {
 			"\n"+
 			"oneFieldOnThisLine\n"))
 
-	sums, err := readSums(path)
+	sums, err := ReadSums(path)
 	if err != nil {
 		t.Fatal(err)
 	}
