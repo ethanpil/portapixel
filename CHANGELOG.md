@@ -6,11 +6,19 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ### Removed
 
+- Chromium, `cage`, `seatd`, `dbus` and the browser fonts from the image (6bd36ad). The root file system goes from 1558 MB to 1062 MB.
 - The Chromium player: the browser package, the web player, `cage`, the DevTools control and the `--browser-*` flags (9b3031f, 0d30320).
 - Web page items, single-URL kiosk mode, the device tier and the codec report (37115a5 to 002b7bb). The player becomes mpv, which shows images and videos only. Server migration 2 deletes the web page items and changes old transition words to `fade`.
 
 ### Changed
 
+- Offer eleven transitions again: cut, fade, crossfade, wipe and push in four directions (8c62018, 4c5e688). A crossfade from a video moves on x86 and on a Pi 5, with a guard (1325177, `playback.motion`). Fix 4 findings of the review (e605abf to 9437262).
+- Decode H.264 in hardware on a Raspberry Pi (90bfce7, 38fecb1). Hide the text console (61128f7, 3c0744b). Give a 512 MB Pi 128 MB of CMA (61128f7).
+- The release workflow uses the `PORTAPIXEL_MINISIGN_*` names, and a tag `vX.Y.Z-rc.N` publishes a signed pre-release (ec1d5b7). Fix 3 findings of the stage 3 review (caf3472 to a9f891e).
+
+### Fixed
+
+- The 3.5 mm audio jack of a Raspberry Pi was never on: `dtparam=audio` was below the overlay in `config.txt` (61128f7).
 - The device player is mpv on DRM/KMS, driven over JSON IPC, with a watchdog that measures time with the monotonic clock (3a619c0, 0d30320, ab9b606). An embedded Lua script makes the transitions inside mpv (e0c3738).
 - The fallback screen is a PNG that the daemon draws (65f2578). The screen goes off through DRM DPMS, not `wlr-randr` (a56c330).
 - The command `restart-browser` is now `restart-player` (d5791ce). New setting `display.video_output` (a42c1c9).
