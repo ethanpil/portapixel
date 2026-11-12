@@ -13,8 +13,9 @@
 //     host that a person owns, a reset that they did not ask for is worse than
 //     a hang. The daemon learns the install mode from its --install-mode flag.
 //   - The daemon asks for a timeout of 60 s. A driver that refuses it keeps its
-//     own timeout (the Pi bcm2835 driver has 15 s at most), and the daemon reads
-//     that value back. It pets at a third of the timeout.
+//     own timeout, and the daemon reads that value back. It pets at a third of
+//     the timeout. The Pi bcm2835 driver takes 60 s: the hardware has about
+//     16 s, and the watchdog core of the kernel pets it in between.
 //   - The pet proves that the daemon lives. It does not prove that the player
 //     lives: the ladder of the player does that job.
 //   - A clean stop writes the magic character 'V' and closes the device, so

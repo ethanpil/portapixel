@@ -203,7 +203,8 @@ resets the machine.
 - `off` is always off.
 
 The daemon asks for a timeout of 60 seconds. A driver that refuses it keeps its
-own timeout: a Raspberry Pi permits 15 seconds at most. The daemon pets the
+own timeout, and the event log line `hwwatchdog.open` shows the timeout that
+runs. The daemon pets the
 timer at a third of the timeout. A clean stop, for example
 `rc-service portapixeld stop`, turns the timer off. A daemon that crashes leaves
 it on, and the service manager starts a new daemon in a few seconds. A daemon

@@ -21,8 +21,11 @@ type fileDevice struct {
 }
 
 // openDevice opens the device. The open starts the timer with the timeout of
-// the driver. A driver that refuses want keeps its own timeout: the Pi bcm2835
-// driver gives EINVAL above 15 s. GETTIMEOUT then gives the value that runs.
+// the driver. A driver that refuses want (EINVAL above its max_timeout) keeps
+// its own timeout, and GETTIMEOUT gives the value that runs. A driver with
+// max_hw_heartbeat_ms takes a longer timeout than its hardware: the watchdog
+// core then pets the hardware while the daemon pets in time. The Pi bcm2835
+// driver is one (hardware limit about 16 s), so a Pi gets 60 s too.
 func openDevice(path string, want time.Duration) (Device, error) {
 	f, err := os.OpenFile(path, os.O_WRONLY, 0)
 	if err != nil {
