@@ -572,3 +572,16 @@ or with the ops log.
   It does this when the program is not a Git Bash program. `gh api /repos/...`
   became `C:/Program Files/Git/repos/...`. Drop the first slash
   (`gh api repos/...`) or set `MSYS_NO_PATHCONV=1`.
+- On Linux the nice value and the I/O priority belong to a THREAD.
+  `setpriority(PRIO_PROCESS, 0)` changes the calling thread only, and a Go
+  program has many. `internal/device/priority` sets each thread in
+  `/proc/self/task`. A new thread and a child process inherit the value of the
+  thread that makes them. `oom_score_adj` belongs to the process, and a root
+  write also sets the lower limit for the children.
+- OpenRC 0.63 puts a service in `/sys/fs/cgroup/openrc.<service>` only when the
+  `cgroups` service has mounted cgroup v2. `install.sh` did not add that
+  service before 7446049. In `unified` mode the service turns on every
+  controller of the root for the cgroups below it.
+- The Pi watchdog driver (bcm2835) sets `max_hw_heartbeat_ms`, about 16 s. The
+  watchdog core then takes a longer timeout and pets the hardware itself. Read
+  the timeout back with `WDIOC_GETTIMEOUT`; do not assume a limit.
