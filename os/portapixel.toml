@@ -73,6 +73,9 @@
 # heartbeat_timeout = 30     # Seconds. 10 to 600.
 # restarts_before_reboot = 4 # 0 to 20. 0 never reboots.
 # restart_window = 60        # Minutes. 1 to 1440.
+# hardware = "auto"          # auto | on | off. on: the machine resets
+                             # when the daemon hangs. auto: on for the
+                             # image, off for an on-box install.
 
 # Playlist schedule rules. The first rule that matches wins. If no rule
 # matches, default_playlist plays. A rule with no days matches every day.

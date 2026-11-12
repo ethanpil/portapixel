@@ -356,6 +356,13 @@ var validateCases = []validateCase{
 		wantField: "watchdog.restart_window",
 	},
 	{name: "a watchdog that is off is good", change: func(c *Config) { c.Watchdog.Enabled = false }},
+	{name: "a hardware watchdog that is on is good", change: func(c *Config) { c.Watchdog.Hardware = "on" }},
+	{name: "a hardware watchdog that is off is good", change: func(c *Config) { c.Watchdog.Hardware = "off" }},
+	{
+		name:      "a hardware watchdog with an unknown word",
+		change:    func(c *Config) { c.Watchdog.Hardware = "yes" },
+		wantField: "watchdog.hardware",
+	},
 
 	{name: "poll too fast", change: func(c *Config) { c.Server.PollSeconds = 9 }, wantField: "server.poll_seconds"},
 	{name: "poll of ten seconds is good", change: func(c *Config) { c.Server.PollSeconds = 10 }},

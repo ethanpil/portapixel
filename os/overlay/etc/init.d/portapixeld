@@ -25,11 +25,12 @@ respawn_max=0
 : "${PP_RUN:=/run/portapixel}"
 : "${PP_RELEASES:=/opt/portapixel}"
 : "${PP_KIOSK_USER:=kiosk}"
+: "${PP_INSTALL_MODE:=image}"
 
 command="${PP_RELEASES}/current/portapixeld"
 # The quotes are inside the string on purpose: supervise-daemon puts this
 # through eval, so a path with a space would become two arguments.
-command_args="run --media \"${PP_MEDIA}\" --state \"${PP_STATE}\" --run \"${PP_RUN}\" --releases \"${PP_RELEASES}\" --kiosk-user \"${PP_KIOSK_USER}\""
+command_args="run --media \"${PP_MEDIA}\" --state \"${PP_STATE}\" --run \"${PP_RUN}\" --releases \"${PP_RELEASES}\" --kiosk-user \"${PP_KIOSK_USER}\" --install-mode \"${PP_INSTALL_MODE}\""
 pidfile="/run/portapixeld.pid"
 output_log="/var/log/portapixeld.log"
 error_log="/var/log/portapixeld.log"

@@ -180,6 +180,21 @@ func TestRepairUnits(t *testing.T) {
 			},
 		},
 		{
+			name: "a bad hardware watchdog word keeps the ladder",
+			make: func(c *Config) {
+				c.Watchdog.Hardware = "always"
+				c.Watchdog.HeartbeatTimeout = 45
+			},
+			check: func(t *testing.T, out Config) {
+				if out.Watchdog.Hardware != Default().Watchdog.Hardware {
+					t.Errorf("hardware = %q, want the default", out.Watchdog.Hardware)
+				}
+				if out.Watchdog.HeartbeatTimeout != 45 {
+					t.Errorf("the repair changed another watchdog value: %+v", out.Watchdog)
+				}
+			},
+		},
+		{
 			name: "an empty password takes the default password",
 			make: func(c *Config) { c.Web.Password = "" },
 			check: func(t *testing.T, out Config) {

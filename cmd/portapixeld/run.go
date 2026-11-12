@@ -28,6 +28,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/fallback"
 	"github.com/ethanpil/portapixel/internal/device/health"
 	"github.com/ethanpil/portapixel/internal/device/httpd"
+	"github.com/ethanpil/portapixel/internal/device/hwwatchdog"
 	"github.com/ethanpil/portapixel/internal/device/identity"
 	"github.com/ethanpil/portapixel/internal/device/installer"
 	"github.com/ethanpil/portapixel/internal/device/library"
@@ -110,6 +111,13 @@ type daemon struct {
 
 	port int
 
+	// installMode is the --install-mode flag: hwwatchdog.ModeImage or
+	// hwwatchdog.ModeOnBox.
+	installMode string
+	// hwdogError is the sentence of a hardware watchdog that did not open. serve
+	// sets it before it starts a goroutine, and it does not change after that.
+	hwdogError string
+
 	// stateMu holds one change of state.json at a time: the read, the change and
 	// the write are one step. See updateState.
 	stateMu sync.Mutex
@@ -152,14 +160,22 @@ func runCommand(args []string) int {
 	}
 	kioskUser := fs.String("kiosk-user", defaultKiosk, "the unprivileged account that runs mpv. Empty runs it as this user.")
 	drmRoot := fs.String("drm-root", player.DefaultDRMRoot, "where the kernel reports the graphics cards and the display connectors")
+	// The default is the image, as for the paths. os/install.sh writes the mode
+	// into /etc/conf.d/portapixeld for both modes.
+	installMode := fs.String("install-mode", hwwatchdog.ModeImage,
+		"how os/install.sh installed this system: image or onbox. watchdog.hardware \"auto\" reads it.")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *installMode != hwwatchdog.ModeImage && *installMode != hwwatchdog.ModeOnBox {
+		return fail("--install-mode must be %s or %s, not %q", hwwatchdog.ModeImage, hwwatchdog.ModeOnBox, *installMode)
 	}
 
 	d, err := newDaemon(*p, *listen, *playerCmd, *kioskUser, *drmRoot)
 	if err != nil {
 		return fail("%v", err)
 	}
+	d.installMode = *installMode
 	return d.serve(*listen)
 }
 
@@ -548,6 +564,27 @@ func (d *daemon) serve(listen string) int {
 	d.log.Log("httpd.listen", address)
 	slog.Info("portapixeld is up", "address", address, "device", d.id.DeviceID, "version", version.Version)
 
+	// The signals come first. A TERM before this line ends the process with no
+	// clean stop, and an open hardware watchdog would then reset the machine.
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+
+	// The hardware watchdog (watchdog.hardware). It opens after the listen: a
+	// daemon that cannot serve ends here, and an armed timer would then reset the
+	// machine again and again while supervise-daemon restarts the daemon.
+	dog := hwwatchdog.Start(hwwatchdog.Options{
+		Setting:     d.config().Watchdog.Hardware,
+		InstallMode: d.installMode,
+		Log:         d.log,
+	})
+	d.hwdogError = dog.Error()
+	var pet <-chan time.Time
+	if interval := dog.Interval(); interval > 0 {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		pet = ticker.C
+	}
+
 	done := make(chan struct{})
 	var group sync.WaitGroup
 	start := func(work func()) {
@@ -584,19 +621,37 @@ func (d *daemon) serve(listen string) int {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
-
 	code := 0
-	select {
-	case sig := <-signals:
-		d.log.Log("daemon.stop", "signal "+sig.String())
-	case err := <-serveErr:
-		if !errors.Is(err, http.ErrServerClosed) {
-			d.log.Log("httpd.fail", err.Error())
-			code = 1
+wait:
+	for {
+		select {
+		case <-pet:
+			// The pet must prove that the daemon lives. A goroutine of its own
+			// would pet while the rest of the daemon is stuck. So the pet comes from
+			// this loop, the main goroutine, and first takes the lock that each
+			// status call and each worker takes. A deadlock on that lock, or a
+			// daemon that the kernel does not run, stops the pets, and the machine
+			// resets.
+			d.mu.Lock()
+			d.mu.Unlock()
+			dog.Pet()
+		case sig := <-signals:
+			d.log.Log("daemon.stop", "signal "+sig.String())
+			break wait
+		case err := <-serveErr:
+			if !errors.Is(err, http.ErrServerClosed) {
+				d.log.Log("httpd.fail", err.Error())
+				code = 1
+			}
+			break wait
 		}
 	}
+
+	// A stop is clean from here: disarm the timer first, so that a stop that
+	// takes long (the player can take 25 s) does not reset the machine.
+	// supervise-daemon starts a new daemon after a fault, and it opens the
+	// device again.
+	dog.Stop()
 
 	// The order matters. The HTTP server drains first, so that no handler can call
 	// a worker that has already gone. A POST /api/commands/restart-player after the
@@ -1002,6 +1057,8 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 		Update:         d.update.State(),
 		Trusted:        trusted,
 		MDNSNameTaken:  d.announce.NameTaken(),
+
+		HardwareWatchdogError: d.hwdogError,
 	}
 	if d.audio != nil {
 		in.AudioError = d.audio.Error()

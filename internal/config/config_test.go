@@ -78,6 +78,7 @@ enabled = false
 heartbeat_timeout = 45
 restarts_before_reboot = 0
 restart_window = 120
+hardware = "on"
 [[schedule]]
 playlist = "weekday"
 days = ["mon", "fri"]
@@ -120,7 +121,8 @@ persist = true
 					t.Errorf("nightly_restart = %q, want the empty value", cfg.Playback.NightlyRestart)
 				}
 				if cfg.Watchdog.Enabled || cfg.Watchdog.HeartbeatTimeout != 45 ||
-					cfg.Watchdog.RestartsBeforeReboot != 0 || cfg.Watchdog.RestartWindow != 120 {
+					cfg.Watchdog.RestartsBeforeReboot != 0 || cfg.Watchdog.RestartWindow != 120 ||
+					cfg.Watchdog.Hardware != "on" {
 					t.Errorf("watchdog = %+v", cfg.Watchdog)
 				}
 			},

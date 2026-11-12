@@ -118,6 +118,11 @@ type Watchdog struct {
 	RestartsBeforeReboot int `toml:"restarts_before_reboot" json:"restarts_before_reboot"`
 	// RestartWindow is the length of that window, in minutes.
 	RestartWindow int `toml:"restart_window" json:"restart_window"`
+	// Hardware is the hardware watchdog of the machine (/dev/watchdog). When it
+	// is on, the daemon pets it, and the machine resets when the daemon stops
+	// without a clean stop. "auto" is on for the appliance image and off for an
+	// on-box install. See internal/device/hwwatchdog.
+	Hardware string `toml:"hardware" json:"hardware"` // auto | on | off
 }
 
 // Rule is one [[schedule]] table. The first rule that matches wins (D17).
@@ -202,6 +207,17 @@ const (
 // Motions are the words of playback.motion.
 var Motions = []string{MotionAuto, MotionOn, MotionOff}
 
+// The words of watchdog.hardware. internal/device/hwwatchdog uses these
+// constants too.
+const (
+	HardwareAuto = "auto"
+	HardwareOn   = "on"
+	HardwareOff  = "off"
+)
+
+// HardwareWatchdogs are the words of watchdog.hardware.
+var HardwareWatchdogs = []string{HardwareAuto, HardwareOn, HardwareOff}
+
 // Default gives the configuration of a new device. It is the same set of values
 // that the template in the plan shows.
 func Default() Config {
@@ -237,6 +253,7 @@ func Default() Config {
 			HeartbeatTimeout:     30,
 			RestartsBeforeReboot: 4,
 			RestartWindow:        60,
+			Hardware:             HardwareAuto,
 		},
 		Server: Server{
 			PollSeconds: 60,

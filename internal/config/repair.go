@@ -92,6 +92,8 @@ func Repair(cfg Config) (Config, Errors) {
 			out.Watchdog.RestartsBeforeReboot = def.Watchdog.RestartsBeforeReboot
 		case field == "watchdog.restart_window":
 			out.Watchdog.RestartWindow = def.Watchdog.RestartWindow
+		case field == "watchdog.hardware":
+			out.Watchdog.Hardware = def.Watchdog.Hardware
 
 		case strings.HasPrefix(field, "schedule["):
 			if i, ok := ruleIndex(field); ok {

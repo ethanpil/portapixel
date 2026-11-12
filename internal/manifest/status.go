@@ -113,6 +113,10 @@ const (
 	// on the fallback screen, so a person sees the state instead of a box that
 	// reboots for ever (plan 3.3, rung 4).
 	WarnRebootLoop = "reboot-loop"
+	// WarnHardwareWatchdogUnavailable says that watchdog.hardware is on but the
+	// daemon could not open /dev/watchdog: the device is missing, or another
+	// program holds it. The device runs on without the hardware watchdog.
+	WarnHardwareWatchdogUnavailable = "hardware-watchdog-unavailable"
 )
 
 // NowPlaying is what the display shows at this moment.

@@ -88,6 +88,10 @@ func ChangeClass(old, next Config) []Change {
 	add("watchdog.heartbeat_timeout", Live, old.Watchdog.HeartbeatTimeout != next.Watchdog.HeartbeatTimeout)
 	add("watchdog.restarts_before_reboot", Live, old.Watchdog.RestartsBeforeReboot != next.Watchdog.RestartsBeforeReboot)
 	add("watchdog.restart_window", Live, old.Watchdog.RestartWindow != next.Watchdog.RestartWindow)
+	// The daemon opens the hardware watchdog when it starts, so only a restart of
+	// the daemon applies a new value. A reboot is the simple and safe way, as for
+	// web.port.
+	add("watchdog.hardware", Reboot, old.Watchdog.Hardware != next.Watchdog.Hardware)
 
 	// [server]. The sync client reads these values before each poll.
 	add("server.url", Live, old.Server.URL != next.Server.URL)

@@ -67,6 +67,8 @@ internal/device/power     CEC or DPMS, screen schedule, manual override (D31).
 internal/device/syncer    Fleet client: enroll, poll, download, fleet playlists, commands.
 internal/device/mdns      Announce _http._tcp as <name>.local (D20).
 internal/device/health    Status struct for /api/status.
+internal/device/hwwatchdog The hardware watchdog (/dev/watchdog): open, pet, magic
+                          close (watchdog.hardware).
 internal/device/netcfg    Render wpa_supplicant.conf and /etc/network/interfaces.
 internal/device/installer install-to-disk: disk list, GPT clone, media copy, boot bits (D54).
 internal/device/httpd     Routes, handlers, the SSE hub of the install progress. No
@@ -101,6 +103,9 @@ Rules:
 | State dir | `/var/lib/portapixel` | same | `--state` |
 | Run dir | `/run/portapixel` | same | `--run` |
 | Release root | `/opt/portapixel` | same | `--releases` |
+
+The flag `--install-mode` is `image` (the default) or `onbox`. `os/install.sh` writes it
+into `/etc/conf.d/portapixeld` as `PP_INSTALL_MODE`. `watchdog.hardware = "auto"` reads it.
 
 Files in the media root: `portapixel.toml`, `<playlist>/playlist.toml`, `_fleet/media/`,
 `_fleet/<playlist>/playlist.toml`, `_update/`. A directory name that starts with `_` is

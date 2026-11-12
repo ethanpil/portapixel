@@ -193,6 +193,7 @@ func (c Config) Validate() Errors {
 	if c.Watchdog.RestartWindow < 1 || c.Watchdog.RestartWindow > 1440 {
 		add("watchdog.restart_window", "must be from 1 to 1440 minutes")
 	}
+	oneOf("watchdog.hardware", c.Watchdog.Hardware, HardwareWatchdogs...)
 
 	// [[schedule]]
 	for i, r := range c.Schedule {

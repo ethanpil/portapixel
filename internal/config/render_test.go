@@ -38,6 +38,7 @@ func full() Config {
 	cfg.Watchdog.HeartbeatTimeout = 45
 	cfg.Watchdog.RestartsBeforeReboot = 0
 	cfg.Watchdog.RestartWindow = 120
+	cfg.Watchdog.Hardware = "off"
 	cfg.Schedule = []Rule{
 		{Playlist: "weekday", Days: []string{"mon", "tue", "wed", "thu", "fri"}, Start: "08:00", End: "18:00"},
 		{Playlist: "weekend", Start: "09:00", End: "17:00"},

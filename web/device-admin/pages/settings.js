@@ -25,6 +25,12 @@ const MASK = '********';
 /* playback.motion. The device decides "auto" from its hardware. */
 const MOTION = [['auto', 'Automatic'], ['on', 'On'], ['off', 'Off']];
 
+/* watchdog.hardware. The device decides "auto" from the way it was installed. */
+const HARDWARE_WATCHDOG = [
+  ['auto', 'Automatic — on for the PortaPixel image, off on your own Alpine'],
+  ['on', 'On'], ['off', 'Off'],
+];
+
 export function mount(main, ctx) {
   /* The comment-loss warning is shown one time for each visit to this page (D16).
      A person who saves four times in a row does not need it four times, and a
@@ -215,6 +221,7 @@ export function mount(main, ctx) {
   const cHeartbeat = number({ min: '10', max: '600', step: '5' });
   const cRestarts = number({ min: '0', max: '20', step: '1' });
   const cWindow = number({ min: '1', max: '1440', step: '5' });
+  const cHardwareWatchdog = select(HARDWARE_WATCHDOG);
 
   // Server.
   const cPoll = number({ min: '10', max: '3600', step: '5' });
@@ -364,6 +371,8 @@ export function mount(main, ctx) {
             field('watchdog.restarts_before_reboot', 'Reboot after this many restarts', cRestarts),
             field('watchdog.restart_window', 'Counted inside (minutes)', cWindow)),
           h('div', { class: 'pp-help', text: 'When a player restart does not help, the device reboots itself. Set the number of restarts to 0 and it never reboots on its own.' }),
+          field('watchdog.hardware', 'Hardware watchdog', cHardwareWatchdog,
+            'A timer in the hardware resets the machine when the device software hangs for about a minute. Changing it needs a reboot.'),
         ],
       }),
       card({
@@ -445,6 +454,7 @@ export function mount(main, ctx) {
     cHeartbeat.value = String(watchdog.heartbeat_timeout ?? 30);
     cRestarts.value = String(watchdog.restarts_before_reboot ?? 4);
     cWindow.value = String(watchdog.restart_window ?? 60);
+    cHardwareWatchdog.value = watchdog.hardware || 'auto';
 
     cPoll.value = String(cfg.server.poll_seconds ?? 60);
 
@@ -509,6 +519,7 @@ export function mount(main, ctx) {
     next.watchdog.heartbeat_timeout = Number(cHeartbeat.value) || 0;
     next.watchdog.restarts_before_reboot = Number(cRestarts.value) || 0;
     next.watchdog.restart_window = Number(cWindow.value) || 0;
+    next.watchdog.hardware = cHardwareWatchdog.value;
 
     next.server.poll_seconds = Number(cPoll.value) || 0;
 

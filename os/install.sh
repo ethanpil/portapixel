@@ -596,6 +596,14 @@ for s in killprocs mount-ro savecache; do rc_add "$s" shutdown; done
 rc_add zram-init boot
 
 # --------------------------------------------------------- 12. daemon settings
+# The install mode. watchdog.hardware "auto" is on for the image and off for an
+# on-box install: a host that a person owns must not reset because a daemon hangs.
+if [ -n "$ROOT" ]; then
+	INSTALL_MODE=image
+else
+	INSTALL_MODE=onbox
+fi
+
 say "write /etc/conf.d/portapixeld"
 mkdir -p "$ROOT/etc/conf.d"
 cat >"$ROOT/etc/conf.d/portapixeld" <<EOF
@@ -614,6 +622,9 @@ PP_RELEASES="$RELEASE_ROOT"
 # The player account. mpv runs here, never as root (D43). Groups: video and
 # audio. HOME of mpv is \$PP_RUN/player, in RAM.
 PP_KIOSK_USER="kiosk"
+
+# image or onbox. The daemon reads it for watchdog.hardware "auto".
+PP_INSTALL_MODE="$INSTALL_MODE"
 
 # Seconds the new release has to write its health marker before the update
 # rolls back (plan section 15). health-gate.sh reads this too. The marker itself

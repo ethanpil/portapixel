@@ -187,6 +187,21 @@ func TestAudioWarning(t *testing.T) {
 	}
 }
 
+// A hardware watchdog that did not open is a warning with its own code. The
+// device runs on.
+func TestHardwareWatchdogWarning(t *testing.T) {
+	for _, tt := range []struct {
+		error string
+		want  bool
+	}{{"", false}, {"The hardware watchdog is on, but this machine has no /dev/watchdog.", true}} {
+		f := newRoots(t)
+		got := New(f.src).Status(Inputs{Config: config.Default(), ClockSynced: true, HardwareWatchdogError: tt.error})
+		if has := hasCode(got.Warnings, manifest.WarnHardwareWatchdogUnavailable); has != tt.want {
+			t.Errorf("error %q: the warning is %v, want %v: %+v", tt.error, has, tt.want, got.Warnings)
+		}
+	}
+}
+
 // The code of the configuration warning says which fault it is, so the dashboard
 // can tell a repaired value from a hand edit that the daemon refused.
 func TestConfigWarningCode(t *testing.T) {

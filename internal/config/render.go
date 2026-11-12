@@ -84,6 +84,9 @@ func Render(cfg Config) []byte {
 	line(&b, "heartbeat_timeout", strconv.Itoa(cfg.Watchdog.HeartbeatTimeout), "Seconds. 10 to 600.")
 	line(&b, "restarts_before_reboot", strconv.Itoa(cfg.Watchdog.RestartsBeforeReboot), "0 to 20. 0 never reboots.")
 	line(&b, "restart_window", strconv.Itoa(cfg.Watchdog.RestartWindow), "Minutes. 1 to 1440.")
+	line(&b, "hardware", Quote(cfg.Watchdog.Hardware), "auto | on | off. on: the machine resets")
+	comment(&b, "when the daemon hangs. auto: on for the")
+	comment(&b, "image, off for an on-box install.")
 
 	b.WriteString("\n# Playlist schedule rules. The first rule that matches wins. If no rule\n")
 	b.WriteString("# matches, default_playlist plays. A rule with no days matches every day.\n")

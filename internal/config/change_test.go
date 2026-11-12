@@ -80,6 +80,12 @@ func TestChangeClass(t *testing.T) {
 			change:    func(c *Config) { c.Watchdog.RestartWindow = 30 },
 			wantField: "watchdog.restart_window", wantClass: Live,
 		},
+		// The daemon opens /dev/watchdog when it starts.
+		{
+			name:      "hardware watchdog",
+			change:    func(c *Config) { c.Watchdog.Hardware = "off" },
+			wantField: "watchdog.hardware", wantClass: Reboot,
+		},
 
 		{name: "server url", change: func(c *Config) { c.Server.URL = "https://a" }, wantField: "server.url", wantClass: Live},
 		{name: "server token", change: func(c *Config) { c.Server.Token = "t" }, wantField: "server.token", wantClass: Live},
