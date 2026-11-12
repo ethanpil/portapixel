@@ -37,11 +37,14 @@ set t_boot  [expr {120 * $scale}]
 set t_shell [expr {30 * $scale}]
 set t_api   [expr {180 * $scale}]
 
+# i6300esb is a watchdog card that QEMU emulates. With it the image has a
+# /dev/watchdog, so the test can prove watchdog.hardware "auto" (section 5b).
 # $gpu gives the guest a real DRM device, so mpv has a /dev/dri/card* to take.
 # Without it there is no display at all and the player check fails for a reason
 # that has nothing to do with the image. boot-smoke.sh picks the device.
 set cmd "qemu-system-x86_64 $accel $bios -m $mem -nographic \
  $gpu \
+ -device i6300esb -action watchdog=reset \
  -drive file=$image,format=qcow2,if=virtio,discard=unmap,detect-zeroes=unmap \
  -netdev user,id=n0,hostfwd=tcp:127.0.0.1:$port-:80 \
  -device virtio-net-pci,netdev=n0"
@@ -224,13 +227,57 @@ expect {
 	timeout { die "ps gave no answer" }
 }
 
-# --------------------------------------------------------------- 6. shut it down
+# ------------------------------------------- 5b. the hardware watchdog, the priority
+# Each value comes back between "<" and ">" (see the version rule above). The
+# marker is split with quotes when sent, as everywhere in this file. The ops log
+# has tab-separated fields: the event is field 2, the details are field 3.
+proc ask {tag cmd} {
+	global t_shell
+	set timeout $t_shell
+	set split "[string range $tag 0 0]\"\"[string range $tag 1 end]"
+	send "v=\$($cmd); echo $split=\"<\$v>\"\r"
+	expect {
+		-re "$tag=<(\[^>\r\n\]*)>" { return [strip_ansi $expect_out(1,string)] }
+		timeout { die "no answer to: $cmd" }
+	}
+}
+set hwdog [ask HWD {awk -F'\t' '$2 == "hwwatchdog.open" { d = $3 } END { print d }' /var/lib/portapixel/ops.log}]
+send_user "\n==> hwwatchdog.open: $hwdog\n"
+set prio [ask PRI {awk -F'\t' '$2 == "priority.high" { d = $3 } END { print d }' /var/lib/portapixel/ops.log}]
+send_user "\n==> priority.high: $prio\n"
+set mpv_nice [ask MNI {ps -o nice,comm | awk '$2 == "mpv" { print $1; exit }'}]
+send_user "\n==> mpv nice: $mpv_nice\n"
+set mpv_oom [ask MOO {cat /proc/$(pidof mpv | cut -d' ' -f1)/oom_score_adj}]
+send_user "\n==> mpv oom_score_adj: $mpv_oom\n"
+set weight [ask CPW {cat /sys/fs/cgroup/openrc.portapixeld/cpu.weight 2>/dev/null}]
+send_user "\n==> cpu.weight of openrc.portapixeld: $weight\n"
+
+# ----------------------------------------------------- 6. the reset, or a shut down
+# A daemon that the kernel does not run stops the pets, and the watchdog must
+# reset the machine. SIGSTOP freezes the daemon and leaves mpv on the screen,
+# which is the case that the hardware watchdog is for. The pet interval is a
+# third of the timeout, so the reset comes at most one timeout after the stop.
 set spawn_id $qemu_id
-set timeout $t_shell
-send "poweroff\r"
-expect {
-	eof     { }
-	timeout { }
+set reset 0
+if {$hwdog ne ""} {
+	send "kill -STOP \$(pidof portapixeld); echo FRO\"ZEN\"\r"
+	set timeout [expr {150 * $scale}]
+	expect {
+		"FROZEN" { exp_continue }
+		-re {SeaBIOS|BdsDxe|Booting from Hard Disk|Linux version} {
+			set reset 1
+			send_user "\n==> the frozen daemon reset the machine\n"
+		}
+		timeout { }
+		eof     { }
+	}
+} else {
+	set timeout $t_shell
+	send "poweroff\r"
+	expect {
+		eof     { }
+		timeout { }
+	}
 }
 catch {exec kill -TERM [exp_pid -i $qemu_id]}
 
@@ -263,5 +310,27 @@ if {$item eq ""} {
  mpv runs and reported no file, so the playlist did not load or no file
  opened. Read /run/portapixel/player.log on the guest."
 }
-send_user "\nPASS: the image boots, /api/status answers, mpv runs as kiosk and plays $kind $item\n"
+if {$hwdog eq ""} {
+	die "the ops log has no hwwatchdog.open line. QEMU gives the guest an i6300esb,
+ so watchdog.hardware \"auto\" must open /dev/watchdog on the image. Read the
+ hwwatchdog lines of the ops log, and lsmod for i6300esb."
+}
+if {$reset == 0} {
+	die "the daemon was frozen with SIGSTOP and the hardware watchdog did not reset
+ the machine in [expr {150 * $scale}]s ($hwdog)"
+}
+if {![string match "*nice=ok io=ok oom=ok cpu.weight=ok*" $prio]} {
+	die "playback.priority high did not apply in full: priority.high \"$prio\".
+ cpu.weight needs the cgroups service in sysinit and rc_cgroup_mode unified."
+}
+if {$mpv_nice ne "-5"} {
+	die "mpv runs at nice \"$mpv_nice\" and must inherit -5 from the daemon"
+}
+if {$mpv_oom ne "-500"} {
+	die "mpv has oom_score_adj \"$mpv_oom\" and must inherit -500 from the daemon"
+}
+if {$weight ne "1000"} {
+	die "the cpu.weight of openrc.portapixeld is \"$weight\" and must be 1000"
+}
+send_user "\nPASS: the image boots, /api/status answers, mpv runs as kiosk and plays $kind $item,\n      the priority applies, and the hardware watchdog resets a frozen daemon\n"
 exit 0
