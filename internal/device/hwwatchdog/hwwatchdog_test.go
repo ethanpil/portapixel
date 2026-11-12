@@ -157,6 +157,27 @@ func TestUnavailableDeviceIsReported(t *testing.T) {
 	}
 }
 
+// "auto" on a machine with no watchdog driver gives no warning. A busy device
+// still does: the machine has a watchdog, and another program holds it.
+func TestAutoWithNoDeviceGivesNoWarning(t *testing.T) {
+	missing := &fs.PathError{Op: "open", Path: DefaultPath, Err: syscall.ENOENT}
+	busy := &fs.PathError{Op: "open", Path: DefaultPath, Err: syscall.EBUSY}
+	for _, tt := range []struct {
+		err  error
+		warn bool
+	}{{missing, false}, {busy, true}} {
+		log := &fakeLog{}
+		w := Start(Options{Setting: "auto", InstallMode: ModeImage, Log: log,
+			Open: func(string, time.Duration) (Device, error) { return nil, tt.err }})
+		if (w.Error() != "") != tt.warn {
+			t.Errorf("%v: Error = %q, want a warning %v", tt.err, w.Error(), tt.warn)
+		}
+		if !tt.warn && !log.has("hwwatchdog.absent") {
+			t.Errorf("%v: log = %q", tt.err, log.events)
+		}
+	}
+}
+
 // A development machine has no watchdog. That is not a fault.
 func TestUnsupportedSystemGivesNoWarning(t *testing.T) {
 	w := Start(Options{Setting: "on", Open: func(string, time.Duration) (Device, error) {

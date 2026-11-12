@@ -182,7 +182,14 @@ func runCommand(args []string) int {
 	d.installMode = *installMode
 	// The priority (playback.priority). It comes before serve, because serve
 	// starts mpv, and mpv inherits it.
-	d.priorityError = priority.Apply(d.config().Playback.Priority, priority.Host(), d.log).CgroupError
+	pri := priority.Apply(d.config().Playback.Priority, priority.Host(), d.log)
+	// Only an on-box install shows a missing CPU weight in the status. On the
+	// image nothing else competes for the CPU, and a device that took this
+	// release as an update has no cgroups service: a warning there is noise that
+	// no setting can clear. The ops log has the line in both modes.
+	if *installMode == hwwatchdog.ModeOnBox {
+		d.priorityError = pri.CgroupError
+	}
 	return d.serve(*listen)
 }
 

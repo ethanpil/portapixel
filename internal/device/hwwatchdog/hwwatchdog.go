@@ -110,6 +110,11 @@ func Start(o Options) *Watchdog {
 		// A development machine. It has no watchdog, and that is not a fault.
 		w.logf("hwwatchdog.off", "%v", err)
 		return w
+	case o.Setting == config.HardwareAuto && errors.Is(err, fs.ErrNotExist):
+		// "auto" uses the watchdog when the machine has one. A machine with no
+		// driver is not a fault, so the log gets a line and the status no warning.
+		w.logf("hwwatchdog.absent", "%v", err)
+		return w
 	case err != nil:
 		w.err = unavailable(path, err)
 		w.logf("hwwatchdog.unavailable", "%s", w.err)

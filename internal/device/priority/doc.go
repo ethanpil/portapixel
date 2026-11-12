@@ -26,7 +26,7 @@
 //     sets both). The daemon writes the weight only to a cgroup of its own,
 //     never to the root cgroup "/", and only when the cpu controller is on
 //     there. If not, it applies 1 to 3 and reports the status warning
-//     priority-cgroup-unavailable.
+//     priority-cgroup-unavailable (on-box only; the image logs it).
 //
 // "normal" applies nothing. No real-time class: a player that spins in a
 // real-time class can take the whole machine, the SSH login too.

@@ -164,8 +164,12 @@ The CPU weight needs cgroup v2 with a cgroup for each service. `install.sh` adds
 the `cgroups` service to the `sysinit` runlevel and writes
 `rc_cgroup_mode="unified"` into `/etc/rc.conf`. On an on-box install, it writes
 the key only when `/etc/rc.conf` does not set it already. When the daemon has no
-cgroup of its own with the cpu controller, it applies the other three values,
-and the status shows the warning `priority-cgroup-unavailable`.
+cgroup of its own with the cpu controller, it applies the other three values
+and writes `priority.cgroup.fail` to the event log. On an on-box install, the
+status also shows the warning `priority-cgroup-unavailable`. On the image,
+nothing else uses the CPU, so the status shows no warning. A device that was
+flashed before this setting existed and took the update over the network has
+no `cgroups` service; flash the new image to get the CPU weight.
 
 The new value applies when the daemon starts again. The web UI asks for a
 reboot. `rc-service portapixeld restart` is also enough.
@@ -211,8 +215,10 @@ it on, and the service manager starts a new daemon in a few seconds. A daemon
 that hangs for the whole timeout resets the machine.
 
 When the machine has no `/dev/watchdog`, or another program holds it, the
-device runs on without it, and the status shows the warning
-`hardware-watchdog-unavailable`.
+device runs on without it. With `on`, the status then shows the warning
+`hardware-watchdog-unavailable`. With `auto`, a machine with no `/dev/watchdog`
+gives no warning, only the event log line `hwwatchdog.absent`. A device that
+another program holds always gives the warning.
 
 The new value applies when the daemon starts again. The web UI asks for a
 reboot. `rc-service portapixeld restart` is also enough.
