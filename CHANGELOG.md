@@ -4,10 +4,12 @@ Short entries. Newest first. Each entry gives the commit hash when it is known.
 
 ## [Unreleased]
 
+## [0.5.0-rc.2] - 2026-11-12
+
 ### Added
 
-- New setting `watchdog.hardware` (`auto`, `on`, `off`). The daemon pets `/dev/watchdog`, and a clean stop turns it off. `auto` is on for the image and off for an on-box install (new flag `--install-mode`). A missing or busy device gives the warning `hardware-watchdog-unavailable` (a433bf1).
-- New setting `playback.priority` (`high`, `normal`). `high` gives the daemon and mpv nice -5, I/O best-effort 0, `oom_score_adj` -500 and `cpu.weight` 1000 on the cgroup of the service. `install.sh` turns on the `cgroups` service and `rc_cgroup_mode="unified"`. With no cgroup, the warning is `priority-cgroup-unavailable` (7446049).
+- New setting `watchdog.hardware` (`auto`, `on`, `off`). The daemon pets `/dev/watchdog`, and a clean stop turns it off. `auto` is on for the image and off for an on-box install (new flag `--install-mode`). A busy device, or a missing one with `on`, gives the warning `hardware-watchdog-unavailable` (a433bf1, 20ce835).
+- New setting `playback.priority` (`high`, `normal`). `high` gives the daemon and mpv nice -5, I/O best-effort 0, `oom_score_adj` -500 and `cpu.weight` 1000 on the cgroup of the service. `install.sh` turns on the `cgroups` service and `rc_cgroup_mode="unified"`. With no cgroup, an on-box install gets the warning `priority-cgroup-unavailable` (7446049, 20ce835). The boot smoke test proves both settings in QEMU (d367952).
 - A new image holds `portapixel.toml` on PPMEDIA with every setting commented out, so a person can set the server or WiFi before the first boot (6fae7d9 to d637ef6, c0c046c). The status warns of a key that the device does not know, for example a key whose `[table]` line is still commented (0daf6ee, ee81b83).
 
 ## [0.5.0-rc.1] - 2026-10-09
