@@ -107,6 +107,11 @@ minute. If you cut the power anyway, the growth step picks up where it left
 off at the next boot, so nothing is lost. Waiting for it to finish once is
 still the simple path.
 
+**Tip for a PC:** open the BIOS or UEFI setup and set "After Power Loss" to
+"Power On". On a Lenovo, press F1 at power-on to open the setup. Other makers
+call the setting "AC Power Recovery" or "Restore on AC Power Loss". The screen
+then starts again by itself after a power cut.
+
 ## 4. Find the device
 
 A device that has nothing to play shows its name, its address and a QR code on
@@ -199,6 +204,27 @@ The full set of flags:
 
 Run `install.sh` again to update the daemon in place, or use the update
 paths in `docs/updates.md`.
+
+On-box, `install.sh` adds the `cgroups` service and sets
+`rc_cgroup_mode="unified"` in `/etc/rc.conf` only when the file does not set the
+key. A value that you set stays. The hardware watchdog is off on-box unless you
+set `watchdog.hardware` to `on` (`docs/settings.md`).
+
+### Other work on the same machine
+
+The player has a high priority (`playback.priority`), but other work on the
+host still takes the CPU, the disk and the memory. Keep it small:
+
+- Start scripts and cron jobs with `nice -n 19 ionice -c 3`, for example
+  `nice -n 19 ionice -c 3 /usr/local/bin/backup.sh`. They then get only the
+  time that the player does not use.
+- Limit each Docker container with `--cpus` (for example `--cpus 1`) or give it
+  a small share with `--cpu-shares` (for example `--cpu-shares 256`; the
+  default is 1024).
+- Leave about 1 GB of memory free for the player. The priority cannot make
+  memory that is not there. When the memory runs out, the kernel stops a
+  program. With `high`, it stops other programs first, but the picture can
+  still stop.
 
 ## Move a trial install onto an internal disk
 

@@ -128,6 +128,7 @@ the mixer refuses the volume, the status carries the warning
 | `shuffle` | `false` | `true`, `false` | Plays each playlist's items in a new order each time it starts. | live |
 | `nightly_restart` | `"03:30"` | `HH:MM`, or empty to turn it off | The daily restart of the player. It waits for the end of the item on the screen, for 60 seconds at most. | live |
 | `motion` | `"auto"` | `auto`, `on`, `off` | Lets a crossfade from a video move both items. See below. | live |
+| `priority` | `"high"` | `high`, `normal` | Gives the player the CPU and the disk before other programs, and protects it from the OOM killer. See "The player priority" below. | reboot |
 
 The key `transition` takes one of 22 words. `docs/content.md` shows what each
 one does, and how an item or a playlist sets its own.
@@ -145,6 +146,30 @@ the old video stands still while the next item fades in.
 With `auto`, a slow or failed moving crossfade switches motion off until the
 daemon restarts. A new value of `motion` clears this guard.
 
+### The player priority
+
+`priority` decides the share of the machine that the daemon and the player get.
+The daemon sets it on itself when it starts, and mpv inherits it.
+
+- `high` gives nice `-5`, the I/O class best-effort at level 0, and an
+  `oom_score_adj` of `-500`. It also writes `cpu.weight` `1000` (the default
+  is 100) into the cgroup of the service, `/sys/fs/cgroup/openrc.portapixeld`.
+- `normal` changes nothing. The player then has the same share as each other
+  program.
+
+No value gives a real-time class. A player that hangs in a real-time class can
+stop the SSH login too.
+
+The CPU weight needs cgroup v2 with a cgroup for each service. `install.sh` adds
+the `cgroups` service to the `sysinit` runlevel and writes
+`rc_cgroup_mode="unified"` into `/etc/rc.conf`. On an on-box install, it writes
+the key only when `/etc/rc.conf` does not set it already. When the daemon has no
+cgroup of its own with the cpu controller, it applies the other three values,
+and the status shows the warning `priority-cgroup-unavailable`.
+
+The new value applies when the daemon starts again. The web UI asks for a
+reboot. `rc-service portapixeld restart` is also enough.
+
 ## `[watchdog]`
 
 The recovery ladder of the player (D30). The daemon asks mpv for its state
@@ -158,11 +183,38 @@ mean that a restart is not the answer, so the device reboots.
 | `heartbeat_timeout` | `30` | `10` to `600` seconds | The silence, or the standstill of a video, that restarts the player. A video with frames far apart (a slideshow video) may stand still for two of its frame intervals when that is longer. An image that stays longer than its duration plus this time also restarts it. | live |
 | `restarts_before_reboot` | `4` | `0` to `20` | How many player restarts inside `restart_window` reboot the device. `0` means that the device never reboots on its own. | live |
 | `restart_window` | `60` | `1` to `1440` minutes | The length of that window. | live |
+| `hardware` | `"auto"` | `auto`, `on`, `off` | The hardware watchdog of the machine. See below. | reboot |
 
 The daily restart is not here: it is `playback.nightly_restart`, because it is a
 time of day and not a threshold. A restart that a person or the daily job asks
 for never counts toward the reboot step. A display that is not plugged in
 does not count either (D44): the device waits for the display.
+
+### The hardware watchdog
+
+`hardware` controls the timer in the hardware of the machine
+(`/dev/watchdog`). The ladder above watches the player. The hardware timer
+watches the daemon and the kernel: when nothing pets it for the timeout, it
+resets the machine.
+
+- `auto` is on for the PortaPixel image and off for an on-box install.
+  `install.sh` writes the install mode into `/etc/conf.d/portapixeld`.
+- `on` is always on.
+- `off` is always off.
+
+The daemon asks for a timeout of 60 seconds. A driver that refuses it keeps its
+own timeout: a Raspberry Pi permits 15 seconds at most. The daemon pets the
+timer at a third of the timeout. A clean stop, for example
+`rc-service portapixeld stop`, turns the timer off. A daemon that crashes leaves
+it on, and the service manager starts a new daemon in a few seconds. A daemon
+that hangs for the whole timeout resets the machine.
+
+When the machine has no `/dev/watchdog`, or another program holds it, the
+device runs on without it, and the status shows the warning
+`hardware-watchdog-unavailable`.
+
+The new value applies when the daemon starts again. The web UI asks for a
+reboot. `rc-service portapixeld restart` is also enough.
 
 ## `[[schedule]]`
 
