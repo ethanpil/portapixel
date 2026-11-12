@@ -180,6 +180,21 @@ func TestRepairUnits(t *testing.T) {
 			},
 		},
 		{
+			name: "a bad priority stands alone",
+			make: func(c *Config) {
+				c.Playback.Priority = "max"
+				c.Playback.Motion = "off"
+			},
+			check: func(t *testing.T, out Config) {
+				if out.Playback.Priority != Default().Playback.Priority {
+					t.Errorf("priority = %q, want the default", out.Playback.Priority)
+				}
+				if out.Playback.Motion != "off" {
+					t.Errorf("the repair changed another playback value: %+v", out.Playback)
+				}
+			},
+		},
+		{
 			name: "a bad hardware watchdog word keeps the ladder",
 			make: func(c *Config) {
 				c.Watchdog.Hardware = "always"

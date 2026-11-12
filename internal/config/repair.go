@@ -83,6 +83,8 @@ func Repair(cfg Config) (Config, Errors) {
 			out.Playback.NightlyRestart = def.Playback.NightlyRestart
 		case field == "playback.motion":
 			out.Playback.Motion = def.Playback.Motion
+		case field == "playback.priority":
+			out.Playback.Priority = def.Playback.Priority
 
 		// Each watchdog value stands alone. A bad timeout must not cost the reboot
 		// step beside it: half of the ladder is still a ladder.

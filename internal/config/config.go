@@ -95,6 +95,12 @@ type Playback struct {
 	// NightlyRestart is the time of the daily player restart. An empty value
 	// stops it (D30).
 	NightlyRestart string `toml:"nightly_restart" json:"nightly_restart"`
+	// Priority is the share of the machine that the daemon and the player get.
+	// "high" gives the daemon nice -5, the I/O class best-effort 0, an
+	// oom_score_adj of -500 and a cpu.weight of 1000 for its cgroup. mpv
+	// inherits all of them. "normal" changes nothing. See
+	// internal/device/priority.
+	Priority string `toml:"priority" json:"priority"` // high | normal
 }
 
 // Watchdog is the [watchdog] table: the recovery ladder of the player (D30,
@@ -207,6 +213,16 @@ const (
 // Motions are the words of playback.motion.
 var Motions = []string{MotionAuto, MotionOn, MotionOff}
 
+// The words of playback.priority. internal/device/priority uses these
+// constants too.
+const (
+	PriorityHigh   = "high"
+	PriorityNormal = "normal"
+)
+
+// Priorities are the words of playback.priority.
+var Priorities = []string{PriorityHigh, PriorityNormal}
+
 // The words of watchdog.hardware. internal/device/hwwatchdog uses these
 // constants too.
 const (
@@ -247,6 +263,7 @@ func Default() Config {
 			Shuffle:         false,
 			Motion:          MotionAuto,
 			NightlyRestart:  "03:30",
+			Priority:        PriorityHigh,
 		},
 		Watchdog: Watchdog{
 			Enabled:              true,

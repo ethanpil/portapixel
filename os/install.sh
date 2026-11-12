@@ -595,6 +595,29 @@ for s in killprocs mount-ro savecache; do rc_add "$s" shutdown; done
 # one machine that must not miss this.
 rc_add zram-init boot
 
+# cgroup v2, one cgroup for each service (playback.priority). The daemon writes
+# cpu.weight into its own cgroup, /sys/fs/cgroup/openrc.portapixeld. OpenRC 0.63
+# (Alpine 3.23) makes that cgroup only when the cgroups service has mounted
+# cgroup v2 on /sys/fs/cgroup. In "unified" mode that service also turns on every
+# controller of the kernel, the cpu controller too, for the cgroups below it.
+# An unset rc_cgroup_mode is "unified" in OpenRC 0.63. We write it anyway, so a
+# later default cannot change it. A host that has the cgroups service in a
+# runlevel already keeps it there. On-box, rc.conf belongs to the owner of the
+# system: a value that they set stays, and the daemon reports
+# priority-cgroup-unavailable when it gets no cgroup of its own.
+if ! ls "$ROOT"/etc/runlevels/*/cgroups >/dev/null 2>&1; then
+	rc_add cgroups sysinit
+fi
+RC_CONF="$ROOT/etc/rc.conf"
+if [ -f "$RC_CONF" ] && ! grep -q '^[[:space:]]*rc_cgroup_mode=' "$RC_CONF"; then
+	say "set rc_cgroup_mode=unified in /etc/rc.conf"
+	{
+		echo ""
+		echo "# PortaPixel: cgroup v2, a cgroup for each service (playback.priority)."
+		echo 'rc_cgroup_mode="unified"'
+	} >>"$RC_CONF"
+fi
+
 # --------------------------------------------------------- 12. daemon settings
 # The install mode. watchdog.hardware "auto" is on for the image and off for an
 # on-box install: a host that a person owns must not reset because a daemon hangs.

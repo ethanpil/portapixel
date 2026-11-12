@@ -179,6 +179,7 @@ func (c Config) Validate() Errors {
 	}
 	clockTime("playback.nightly_restart", c.Playback.NightlyRestart)
 	oneOf("playback.motion", c.Playback.Motion, Motions...)
+	oneOf("playback.priority", c.Playback.Priority, Priorities...)
 
 	// [watchdog]. The lower bound of the timeout is five polls; under that, a
 	// device on a slow card would restart the player while it still draws. The

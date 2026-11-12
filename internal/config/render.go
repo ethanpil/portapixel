@@ -74,6 +74,9 @@ func Render(cfg Config) []byte {
 	line(&b, "motion", Quote(cfg.Playback.Motion), "auto | on | off. on: in a crossfade from a")
 	comment(&b, "video, both items move. auto: on for a PC")
 	comment(&b, "(x86_64) and a Raspberry Pi 5, off for others.")
+	line(&b, "priority", Quote(cfg.Playback.Priority), "high | normal. high: the player comes first")
+	comment(&b, "for the CPU and the disk. The kernel stops")
+	comment(&b, "other programs first when memory runs out.")
 
 	b.WriteString("\n# The recovery ladder of the player. The daemon asks the player for its state\n")
 	b.WriteString("# every 2 seconds. No answer, or a video that does not move, for\n")

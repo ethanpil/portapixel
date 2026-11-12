@@ -356,6 +356,8 @@ var validateCases = []validateCase{
 		wantField: "watchdog.restart_window",
 	},
 	{name: "a watchdog that is off is good", change: func(c *Config) { c.Watchdog.Enabled = false }},
+	{name: "a normal priority is good", change: func(c *Config) { c.Playback.Priority = "normal" }},
+	{name: "a real-time priority", change: func(c *Config) { c.Playback.Priority = "realtime" }, wantField: "playback.priority"},
 	{name: "a hardware watchdog that is on is good", change: func(c *Config) { c.Watchdog.Hardware = "on" }},
 	{name: "a hardware watchdog that is off is good", change: func(c *Config) { c.Watchdog.Hardware = "off" }},
 	{

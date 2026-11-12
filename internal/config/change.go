@@ -81,6 +81,9 @@ func ChangeClass(old, next Config) []Change {
 	add("playback.nightly_restart", Live, old.Playback.NightlyRestart != next.Playback.NightlyRestart)
 	add("playback.motion", Live, old.Playback.Motion != next.Playback.Motion)
 	add("schedule", Live, !sameRules(old.Schedule, next.Schedule))
+	// The daemon sets the priority of its own process when it starts, and mpv
+	// inherits it. Only a restart of the daemon applies a new value.
+	add("playback.priority", Reboot, old.Playback.Priority != next.Playback.Priority)
 
 	// [watchdog]. The player supervisor reads these four values at each check
 	// through a function, so a new threshold is live (D30).

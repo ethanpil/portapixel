@@ -25,6 +25,9 @@ const MASK = '********';
 /* playback.motion. The device decides "auto" from its hardware. */
 const MOTION = [['auto', 'Automatic'], ['on', 'On'], ['off', 'Off']];
 
+/* playback.priority. */
+const PRIORITY = [['high', 'High — the player comes first'], ['normal', 'Normal — the same as other programs']];
+
 /* watchdog.hardware. The device decides "auto" from the way it was installed. */
 const HARDWARE_WATCHDOG = [
   ['auto', 'Automatic — on for the PortaPixel image, off on your own Alpine'],
@@ -213,6 +216,7 @@ export function mount(main, ctx) {
   const cImageDuration = number({ min: '1', max: '3600', step: '1' });
   const cShuffle = toggle('Shuffle the items', 'A new order each time the playlist starts.');
   const cNightly = clock();
+  const cPriority = select(PRIORITY);
 
   // Watchdog. The device watches the player, and it restarts the player or
   // reboots when the player stops (D30).
@@ -357,6 +361,8 @@ export function mount(main, ctx) {
           h('div', { class: 'pp-fields' },
             field('playback.image_duration', 'Default image time (seconds)', cImageDuration),
             field('playback.nightly_restart', 'Nightly restart', cNightly)),
+          field('playback.priority', 'Player priority', cPriority,
+            'High gives the player the CPU and the disk before other programs on this machine, and the system stops other programs first when memory runs out. Changing it needs a reboot.'),
           cShuffle,
           h('div', { class: 'pp-help', text: 'The nightly restart clears anything a long-running player has collected. Leave it on unless it lands in an hour that the screen is needed.' }),
         ],
@@ -448,6 +454,7 @@ export function mount(main, ctx) {
     cImageDuration.value = String(cfg.playback.image_duration ?? 10);
     cShuffle.input.checked = !!cfg.playback.shuffle;
     cNightly.value = cfg.playback.nightly_restart || '';
+    cPriority.value = cfg.playback.priority || 'high';
 
     const watchdog = cfg.watchdog || {};
     cWatchdog.input.checked = watchdog.enabled !== false;
@@ -511,6 +518,7 @@ export function mount(main, ctx) {
     next.playback.image_duration = Number(cImageDuration.value) || 0;
     next.playback.shuffle = cShuffle.input.checked;
     next.playback.nightly_restart = cNightly.value;
+    next.playback.priority = cPriority.value;
 
     /* A daemon that is older than this page sends no [watchdog] table, and the
        copy above then has no object to write into. */

@@ -94,6 +94,10 @@ type Inputs struct {
 	// watchdog.hardware is on and /dev/watchdog did not open, or "".
 	HardwareWatchdogError string
 
+	// PriorityError is the sentence of internal/device/priority when
+	// playback.priority is high and the CPU weight of the cgroup is not set, or "".
+	PriorityError string
+
 	// RebootLoops is how many times the watchdog ladder rebooted this device in the
 	// last hour, and 0 when that is under the limit. The device then stops every
 	// automatic action and shows the state (plan 3.3, rung 4).
@@ -281,6 +285,9 @@ func (r *Reporter) warnings(in Inputs) []manifest.Warning {
 	}
 	if in.HardwareWatchdogError != "" {
 		add(manifest.WarnHardwareWatchdogUnavailable, in.HardwareWatchdogError+" The device runs on without it.")
+	}
+	if in.PriorityError != "" {
+		add(manifest.WarnPriorityCgroupUnavailable, in.PriorityError)
 	}
 	if in.Update.State == manifest.UpdateRolledBack {
 		add(manifest.WarnUpdateRolledBack, "An update did not come up and the device went back to "+in.Update.Current+". It never tries that release again.")

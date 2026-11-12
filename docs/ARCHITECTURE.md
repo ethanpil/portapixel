@@ -69,6 +69,8 @@ internal/device/mdns      Announce _http._tcp as <name>.local (D20).
 internal/device/health    Status struct for /api/status.
 internal/device/hwwatchdog The hardware watchdog (/dev/watchdog): open, pet, magic
                           close (watchdog.hardware).
+internal/device/priority  nice, I/O priority, oom_score_adj and cgroup cpu.weight of the
+                          daemon, which mpv inherits (playback.priority).
 internal/device/netcfg    Render wpa_supplicant.conf and /etc/network/interfaces.
 internal/device/installer install-to-disk: disk list, GPT clone, media copy, boot bits (D54).
 internal/device/httpd     Routes, handlers, the SSE hub of the install progress. No

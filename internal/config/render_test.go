@@ -34,6 +34,7 @@ func full() Config {
 	cfg.Playback.Shuffle = true
 	cfg.Playback.NightlyRestart = "04:15"
 	cfg.Playback.Motion = "off"
+	cfg.Playback.Priority = "normal"
 	cfg.Watchdog.Enabled = false
 	cfg.Watchdog.HeartbeatTimeout = 45
 	cfg.Watchdog.RestartsBeforeReboot = 0

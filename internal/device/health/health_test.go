@@ -202,6 +202,20 @@ func TestHardwareWatchdogWarning(t *testing.T) {
 	}
 }
 
+// A CPU weight that is not set is a warning with its own code.
+func TestPriorityWarning(t *testing.T) {
+	for _, tt := range []struct {
+		error string
+		want  bool
+	}{{"", false}, {"The player priority is high, but the CPU weight is not set: the daemon is in the root cgroup.", true}} {
+		f := newRoots(t)
+		got := New(f.src).Status(Inputs{Config: config.Default(), ClockSynced: true, PriorityError: tt.error})
+		if has := hasCode(got.Warnings, manifest.WarnPriorityCgroupUnavailable); has != tt.want {
+			t.Errorf("error %q: the warning is %v, want %v: %+v", tt.error, has, tt.want, got.Warnings)
+		}
+	}
+}
+
 // The code of the configuration warning says which fault it is, so the dashboard
 // can tell a repaired value from a hand edit that the daemon refused.
 func TestConfigWarningCode(t *testing.T) {

@@ -73,6 +73,7 @@ transition_ms = 250
 image_duration = 20
 shuffle = true
 nightly_restart = ""
+priority = "normal"
 [watchdog]
 enabled = false
 heartbeat_timeout = 45
@@ -116,6 +117,9 @@ persist = true
 				}
 				if !cfg.Updates.Auto || !cfg.Logging.Persist || !cfg.Playback.Shuffle {
 					t.Error("a true value did not arrive")
+				}
+				if cfg.Playback.Priority != "normal" {
+					t.Errorf("priority = %q, want normal", cfg.Playback.Priority)
 				}
 				if cfg.Playback.NightlyRestart != "" {
 					t.Errorf("nightly_restart = %q, want the empty value", cfg.Playback.NightlyRestart)

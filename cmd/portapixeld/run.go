@@ -36,6 +36,7 @@ import (
 	"github.com/ethanpil/portapixel/internal/device/netcfg"
 	"github.com/ethanpil/portapixel/internal/device/player"
 	"github.com/ethanpil/portapixel/internal/device/power"
+	"github.com/ethanpil/portapixel/internal/device/priority"
 	"github.com/ethanpil/portapixel/internal/device/scheduler"
 	"github.com/ethanpil/portapixel/internal/device/syncer"
 	"github.com/ethanpil/portapixel/internal/fsutil"
@@ -117,6 +118,9 @@ type daemon struct {
 	// hwdogError is the sentence of a hardware watchdog that did not open. serve
 	// sets it before it starts a goroutine, and it does not change after that.
 	hwdogError string
+	// priorityError is the sentence of a CPU weight that was not set. runCommand
+	// sets it before serve, and it does not change after that.
+	priorityError string
 
 	// stateMu holds one change of state.json at a time: the read, the change and
 	// the write are one step. See updateState.
@@ -176,6 +180,9 @@ func runCommand(args []string) int {
 		return fail("%v", err)
 	}
 	d.installMode = *installMode
+	// The priority (playback.priority). It comes before serve, because serve
+	// starts mpv, and mpv inherits it.
+	d.priorityError = priority.Apply(d.config().Playback.Priority, priority.Host(), d.log).CgroupError
 	return d.serve(*listen)
 }
 
@@ -1059,6 +1066,7 @@ func (d *daemon) status(loopback, trusted bool) manifest.Status {
 		MDNSNameTaken:  d.announce.NameTaken(),
 
 		HardwareWatchdogError: d.hwdogError,
+		PriorityError:         d.priorityError,
 	}
 	if d.audio != nil {
 		in.AudioError = d.audio.Error()

@@ -117,6 +117,10 @@ const (
 	// daemon could not open /dev/watchdog: the device is missing, or another
 	// program holds it. The device runs on without the hardware watchdog.
 	WarnHardwareWatchdogUnavailable = "hardware-watchdog-unavailable"
+	// WarnPriorityCgroupUnavailable says that playback.priority is high but the
+	// daemon has no cgroup v2 of its own with the cpu controller, so the CPU
+	// weight is not set. nice, the I/O priority and oom_score_adj still apply.
+	WarnPriorityCgroupUnavailable = "priority-cgroup-unavailable"
 )
 
 // NowPlaying is what the display shows at this moment.

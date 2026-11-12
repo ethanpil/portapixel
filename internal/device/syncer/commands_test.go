@@ -282,6 +282,8 @@ func TestManagedFieldTable(t *testing.T) {
 		"web.port", "web.password", "ssh.enabled", "logging.persist",
 		// The hardware watchdog is a fact of this machine.
 		"watchdog.hardware",
+		// The priority is a fact of this machine and of the other work on it.
+		"playback.priority",
 	}
 	for _, field := range managed {
 		if !ManagedField(field) {
